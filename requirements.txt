@@ -7,3 +7,8 @@ python-dotenv>=1.0.0
 sqlalchemy>=2.0.0
 pandas>=2.0.0
 faker>=19.0.0
+
+# Optional LLM provider dependencies
+# Uncomment the ones you need:
+# langchain-google-genai>=1.0.0  # For Google Gemini support
+# langchain-anthropic>=0.1.0     # For Anthropic Claude support

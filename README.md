@@ -47,8 +47,19 @@ The system consists of four specialized agents:
    
    Edit `.env` with your configuration:
    ```env
+   # LLM Provider Configuration
+   LLM_PROVIDER=openai
+   LLM_MODEL_NAME=gpt-3.5-turbo
+   LLM_TEMPERATURE=0.1
+   
    # OpenAI API Configuration
 OPENAI_API_KEY=REDACTED
+   
+   # Google Gemini API Configuration (if using Gemini)
+   GOOGLE_API_KEY=your_google_api_key_here
+   
+   # Anthropic Claude API Configuration (if using Claude)
+   ANTHROPIC_API_KEY=your_anthropic_api_key_here
    
    # PostgreSQL Database Configuration
    DB_HOST=localhost
@@ -91,6 +102,55 @@ OPENAI_API_KEY=REDACTED
 
 ## Configuration
 
+### Multi-Provider LLM Support
+
+This chatbot supports multiple LLM providers, allowing you to choose the best model for your needs and budget.
+
+#### **Supported Providers:**
+
+1. **OpenAI** (Default)
+   - Models: `gpt-4`, `gpt-4-turbo`, `gpt-3.5-turbo`, `gpt-3.5-turbo-16k`
+OPENAI_API_KEY=REDACTED
+
+2. **Google Gemini**
+   - Models: `gemini-pro`, `gemini-pro-vision`, `gemini-1.5-pro`, `gemini-1.5-flash`
+   - API Key: `GOOGLE_API_KEY`
+   - Requires: `pip install langchain-google-genai`
+
+3. **Anthropic Claude**
+   - Models: `claude-3-opus-20240229`, `claude-3-sonnet-20240229`, `claude-3-haiku-20240307`, `claude-3-5-sonnet-20241022`
+   - API Key: `ANTHROPIC_API_KEY`
+   - Requires: `pip install langchain-anthropic`
+
+#### **Configuration Examples:**
+
+**Using OpenAI (Default):**
+```env
+LLM_PROVIDER=openai
+LLM_MODEL_NAME=gpt-4
+OPENAI_API_KEY=REDACTED
+```
+
+**Using Google Gemini:**
+```env
+LLM_PROVIDER=gemini
+LLM_MODEL_NAME=gemini-1.5-pro
+GOOGLE_API_KEY=your_google_key_here
+```
+
+**Using Anthropic Claude:**
+```env
+LLM_PROVIDER=claude
+LLM_MODEL_NAME=claude-3-sonnet-20240229
+ANTHROPIC_API_KEY=your_anthropic_key_here
+```
+
+#### **Additional Configuration:**
+- `LLM_TEMPERATURE`: Controls randomness (0.0 to 1.0, default: 0.1)
+- `LLM_PROVIDER`: Provider name (openai, gemini, claude, google, anthropic)
+
+The provider and model information is displayed in the Streamlit interface under "Environment Check" so you can verify your configuration.
+
 ### Database Schema
 
 The database schema is defined in `config/schema.json`. You can modify this file to change table structures:
@@ -131,6 +191,7 @@ multi-agent-db-chatbot/
 │   ├── executor_agent.py        # Database execution agent
 │   ├── formatter_agent.py       # Response formatting agent
 │   ├── chatbot.py              # Main chatbot orchestrator
+│   ├── llm_provider.py          # Multi-provider LLM factory
 │   └── README.md               # Agent architecture documentation
 ├── config/
 │   ├── db_config.py             # Database configuration management
@@ -141,9 +202,17 @@ multi-agent-db-chatbot/
 ├── tools/
 │   ├── database_tools.py         # Database query tools
 │   └── schema_tools.py          # Schema inspection tools
+├── tests/
+│   ├── __init__.py              # Tests package initialization
+│   ├── run_tests.py             # Test runner script
+│   ├── test_db_connection.py    # Database connection tests
+│   ├── test_model_config.py     # LLM model configuration tests
+│   ├── test_multi_provider.py   # Multi-provider LLM support tests
+│   └── test_config.ini          # Test configuration
 ├── app.py                       # Streamlit application
 ├── requirements.txt             # Python dependencies
 ├── env.example                  # Environment variables template
+├── MULTI_PROVIDER_SETUP.md      # Multi-provider setup guide
 └── README.md                    # This file
 ```
 
@@ -226,6 +295,54 @@ See `agents/README.md` for detailed documentation.
 2. Add them to the appropriate agent
 3. Update the agent's system prompt to use the new tools
 
+## Testing
+
+The project includes a comprehensive test suite located in the `tests/` directory.
+
+### Running Tests
+
+**Run all tests:**
+```bash
+python tests/run_tests.py
+```
+
+**Run specific test suites:**
+```bash
+# Database connection tests
+python tests/run_tests.py db
+
+# LLM model configuration tests  
+python tests/run_tests.py model
+
+# Multi-provider LLM support tests
+python tests/run_tests.py provider
+```
+
+**Run individual test files:**
+```bash
+python tests/test_db_connection.py
+python tests/test_model_config.py
+python tests/test_multi_provider.py
+```
+
+### Test Structure
+
+```
+tests/
+├── __init__.py                 # Tests package initialization
+├── run_tests.py               # Test runner script
+├── test_db_connection.py      # Database connection and setup tests
+├── test_model_config.py       # LLM model configuration tests
+└── test_multi_provider.py     # Multi-provider LLM support tests
+```
+
+### Test Coverage
+
+- **Database Tests**: Connection, table creation, query execution
+- **Model Configuration**: Provider switching, model validation
+- **Multi-Provider Support**: OpenAI, Gemini, Claude integration
+- **Environment Validation**: API key validation, configuration checks
+
 ## Troubleshooting
 
 ### Common Issues
@@ -234,11 +351,13 @@ See `agents/README.md` for detailed documentation.
    - Check PostgreSQL is running
    - Verify connection parameters in `.env`
    - Ensure database exists
+   - Run: `python tests/test_db_connection.py`
 
-2. **OpenAI API Error**
-   - Verify API key is correct
+2. **LLM Provider Errors**
+   - Verify API key is correct for your chosen provider
    - Check API quota and billing
    - Ensure internet connectivity
+   - Run: `python tests/test_multi_provider.py`
 
 3. **Schema Errors**
    - Validate JSON syntax in `config/schema.json`

@@ -5,7 +5,12 @@ Run this script to test your PostgreSQL connection
 """
 
 import os
+import sys
 from dotenv import load_dotenv
+
+# Add the project root to the path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from database.db_setup import get_db_manager
 
 def test_connection():
@@ -75,4 +80,5 @@ def test_connection():
         return False
 
 if __name__ == "__main__":
-    test_connection()
+    success = test_connection()
+    sys.exit(0 if success else 1)

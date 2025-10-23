@@ -328,11 +328,32 @@ def main():
         # Environment Variables Check
         st.markdown("## Environment Check")
         
+        # Check API keys based on provider
+        provider = os.getenv("LLM_PROVIDER", "openai").lower()
+        
+        if provider in ['openai']:
 OPENAI_API_KEY=REDACTED
-        if openai_key:
-            st.success("✅ OpenAI API Key: Set")
-        else:
-            st.error("❌ OpenAI API Key: Not set")
+            if api_key:
+                st.success("✅ OpenAI API Key: Set")
+            else:
+                st.error("❌ OpenAI API Key: Not set")
+        elif provider in ['gemini', 'google']:
+            api_key = os.getenv("GOOGLE_API_KEY")
+            if api_key:
+                st.success("✅ Google API Key: Set")
+            else:
+                st.error("❌ Google API Key: Not set")
+        elif provider in ['claude', 'anthropic']:
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            if api_key:
+                st.success("✅ Anthropic API Key: Set")
+            else:
+                st.error("❌ Anthropic API Key: Not set")
+        
+        llm_provider = os.getenv("LLM_PROVIDER", "openai")
+        llm_model = os.getenv("LLM_MODEL_NAME", "gpt-3.5-turbo")
+        st.info(f"🤖 LLM Provider: {llm_provider.title()}")
+        st.info(f"🧠 LLM Model: {llm_model}")
         
         db_host = os.getenv("DB_HOST")
         if db_host:

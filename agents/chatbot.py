@@ -1,5 +1,4 @@
 from typing import Dict, Any, List, Optional, TypedDict
-from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 import os
 
@@ -8,17 +7,15 @@ from agents.query_agent import QueryUnderstandingAgent
 from agents.sql_agent import SQLGeneratorAgent
 from agents.executor_agent import DatabaseExecutorAgent
 from agents.formatter_agent import ResponseFormatterAgent
+from agents.llm_provider import get_llm_instance
 
 
 class MultiAgentChatbot:
     """Main chatbot class that orchestrates the multi-agent system"""
     
-openai_api_key="REDACTED"
-        self.llm = ChatOpenAI(
-            model="gpt-3.5-turbo",
-openai_api_key="REDACTED"
-            temperature=0.1
-        )
+    def __init__(self, llm, provider_name: str = "Unknown"):
+        self.llm = llm
+        self.provider_name = provider_name
         
         # Initialize agents
         self.query_agent = QueryUnderstandingAgent(self.llm)
@@ -81,9 +78,9 @@ openai_api_key="REDACTED"
 
 
 def create_chatbot() -> MultiAgentChatbot:
-    """Create a new chatbot instance"""
-OPENAI_API_KEY=REDACTED
-openai_api_key="REDACTED"
-OPENAI_API_KEY=REDACTED
-    
-openai_api_key="REDACTED"
+    """Create a new chatbot instance using the configured LLM provider"""
+    try:
+        llm, provider_name = get_llm_instance()
+        return MultiAgentChatbot(llm, provider_name)
+    except Exception as e:
+        raise ValueError(f"Failed to create chatbot: {str(e)}")
