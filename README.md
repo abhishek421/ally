@@ -7,10 +7,10 @@ A sophisticated chatbot system built with Streamlit and LangGraph that allows us
 - 🤖 **Multi-Agent Architecture**: Uses LangGraph to orchestrate specialized agents
 - 🗄️ **PostgreSQL Integration**: Secure database connectivity with query validation
 - 🔧 **Configurable Schema**: Easy-to-modify database schema via JSON configuration
-- 📊 **Sample Data Generation**: Realistic sample data for testing and demos
+- 📊 **CSV Data Upload**: Upload your own data via CSV files with automatic schema mapping
 - 💬 **Natural Language Interface**: Ask questions in plain English
 - 🛡️ **Safe Query Execution**: Only SELECT queries allowed, with validation
-- 🎨 **Modern UI**: Clean Streamlit interface with real-time chat
+- 🎨 **Modern UI**: Clean Streamlit interface with real-time chat and file upload
 
 ## Architecture
 
@@ -92,13 +92,16 @@ OPENAI_API_KEY=REDACTED
 
 3. **Connect to database** using the sidebar button
 
-4. **Load sample data** (optional) for testing
+4. **Upload your CSV data**:
+   - **Companies CSV**: Upload with columns: Customer Id, First Name, Last Name, Company, City, Country, Phone 1, Phone 2, Email, Subscription Date, Website
+   - **People CSV**: Upload with columns: User Id, First Name, Last Name, Sex, Email, Phone, Date of birth, Job Title
 
 5. **Start chatting!** Ask questions like:
-   - "What are the top 5 newly added companies?"
-   - "How many people work in the Engineering department?"
-   - "Which companies are in the Technology industry?"
-   - "What is the average salary by role?"
+   - "What are the top 5 companies by subscription date?"
+   - "How many people are there in each country?"
+   - "Which companies are in Chile?"
+   - "What are the different job titles?"
+   - "Show me all people born after 1990"
 
 ## Configuration
 
@@ -153,7 +156,21 @@ The provider and model information is displayed in the Streamlit interface under
 
 ### Database Schema
 
-The database schema is defined in `config/schema.json`. You can modify this file to change table structures:
+The database schema is defined in `config/schema.json`. The current schema supports CSV data upload with the following structure:
+
+**Companies Table:**
+- `id` (Primary Key, Auto-increment)
+- `customer_id`, `first_name`, `last_name`, `company`, `city`, `country`
+- `phone_1`, `phone_2`, `email`, `subscription_date`, `website`
+- `created_at`, `updated_at` (Auto-generated timestamps)
+
+**People Table:**
+- `id` (Primary Key, Auto-increment)
+- `user_id`, `first_name`, `last_name`, `sex`, `email`, `phone`
+- `date_of_birth`, `job_title`
+- `created_at`, `updated_at` (Auto-generated timestamps)
+
+You can modify the schema in `config/schema.json` to match your specific data structure:
 
 ```json
 {
@@ -161,9 +178,8 @@ The database schema is defined in `config/schema.json`. You can modify this file
     "companies": {
       "columns": {
         "id": {"type": "INTEGER", "primary_key": true, "auto_increment": true},
-        "name": {"type": "VARCHAR(255)", "nullable": false},
-        "industry": {"type": "VARCHAR(100)", "nullable": true},
-        "location": {"type": "VARCHAR(255)", "nullable": true},
+        "customer_id": {"type": "VARCHAR(255)", "nullable": true},
+        "company": {"type": "VARCHAR(255)", "nullable": true},
         "created_at": {"type": "TIMESTAMP", "default": "CURRENT_TIMESTAMP"}
       }
     }
@@ -171,13 +187,27 @@ The database schema is defined in `config/schema.json`. You can modify this file
 }
 ```
 
-### Sample Data
+### CSV Data Upload
 
-Sample data is generated using the Faker library. You can customize the data generation in `database/sample_data.py`:
+The system automatically processes CSV files and maps them to the database schema:
 
-- Modify company industries and locations
-- Adjust people roles and departments
-- Change salary ranges and other attributes
+1. **Automatic Column Mapping**: CSV headers are automatically mapped to database columns
+2. **Date Parsing**: Dates are automatically parsed and converted to proper database format
+3. **Data Validation**: Invalid data is handled gracefully with error reporting
+4. **Timestamp Management**: `created_at` and `updated_at` fields are automatically populated
+
+### CSV Upload Workflow
+
+1. **Connect to Database**: Use the "Connect to Database" button in the sidebar
+2. **Reset Schema** (if needed): Click "Reset Database Schema" to update table structure
+3. **Upload Companies CSV**: Select your companies CSV file and click "Upload Companies Data"
+4. **Upload People CSV**: Select your people CSV file and click "Upload People Data"
+5. **Verify Upload**: Check the data statistics to confirm successful upload
+6. **Start Querying**: Use natural language to ask questions about your data
+
+**Supported CSV Formats:**
+- **Companies**: Customer Id, First Name, Last Name, Company, City, Country, Phone 1, Phone 2, Email, Subscription Date, Website
+- **People**: User Id, First Name, Last Name, Sex, Email, Phone, Date of birth, Job Title
 
 ## Project Structure
 
@@ -198,7 +228,8 @@ multi-agent-db-chatbot/
 │   └── schema.json              # Database schema definition
 ├── database/
 │   ├── db_setup.py              # Database connection and management
-│   └── sample_data.py           # Sample data generation
+│   ├── csv_processor.py         # CSV file processing and data insertion
+│   └── sample_data.py           # Legacy sample data generation (deprecated)
 ├── tools/
 │   ├── database_tools.py         # Database query tools
 │   └── schema_tools.py          # Schema inspection tools
@@ -276,8 +307,9 @@ schema_info = config.get_all_schema_info()
 ### Adding New Tables
 
 1. Update `config/schema.json` with your new table definition
-2. Modify `database/sample_data.py` to generate sample data for the new table
-3. Restart the application
+2. Modify `database/csv_processor.py` to handle CSV processing for the new table
+3. Update the UI in `app.py` to include upload functionality for the new table
+4. Restart the application
 
 ### Adding New Agents
 
@@ -364,10 +396,11 @@ tests/
    - Check table and column names
    - Ensure foreign key relationships are correct
 
-4. **Sample Data Issues**
-   - Clear existing data before reloading
-   - Check foreign key constraints
-   - Verify data generation logic
+4. **CSV Upload Issues**
+   - Ensure CSV files have the correct column headers
+   - Check that database schema matches CSV structure
+   - Use "Reset Database Schema" button if schema is outdated
+   - Verify CSV file format and encoding (UTF-8 recommended)
 
 ### Debug Mode
 
