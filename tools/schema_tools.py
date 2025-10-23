@@ -182,43 +182,37 @@ class QuerySuggestionsTool(BaseTool):
         suggestions = []
         
         if "top" in intent_lower and "companies" in intent_lower:
-            if "newly" in intent_lower or "recent" in intent_lower:
-                suggestions.append("SELECT * FROM companies ORDER BY created_at DESC LIMIT 5;")
+            if "subscription" in intent_lower or "recent" in intent_lower:
+                suggestions.append("SELECT * FROM companies ORDER BY subscription_date DESC LIMIT 5;")
             else:
-                suggestions.append("SELECT * FROM companies ORDER BY employee_count DESC LIMIT 5;")
+                suggestions.append("SELECT * FROM companies ORDER BY created_at DESC LIMIT 5;")
         
         elif "count" in intent_lower and "people" in intent_lower:
-            if "department" in intent_lower:
-                suggestions.append("SELECT department, COUNT(*) as count FROM people GROUP BY department;")
+            if "country" in intent_lower:
+                suggestions.append("SELECT country, COUNT(*) as count FROM companies GROUP BY country;")
             else:
                 suggestions.append("SELECT COUNT(*) as total_people FROM people;")
         
-        elif "industry" in intent_lower and "companies" in intent_lower:
-            suggestions.append("SELECT industry, COUNT(*) as count FROM companies GROUP BY industry;")
+        elif "country" in intent_lower and "companies" in intent_lower:
+            suggestions.append("SELECT country, COUNT(*) as count FROM companies GROUP BY country;")
         
-        elif "salary" in intent_lower:
-            if "average" in intent_lower:
-                suggestions.append("SELECT role, AVG(salary) as avg_salary FROM people GROUP BY role;")
-            else:
-                suggestions.append("SELECT role, salary FROM people ORDER BY salary DESC;")
+        elif "job" in intent_lower or "title" in intent_lower:
+            suggestions.append("SELECT job_title, COUNT(*) as count FROM people GROUP BY job_title;")
         
-        elif "hired" in intent_lower or "hire" in intent_lower:
-            suggestions.append("SELECT * FROM people WHERE hire_date >= CURRENT_DATE - INTERVAL '1 year';")
+        elif "born" in intent_lower or "birth" in intent_lower:
+            suggestions.append("SELECT * FROM people WHERE date_of_birth >= '1990-01-01';")
         
-        elif "employees" in intent_lower and "most" in intent_lower:
-            suggestions.append("SELECT name, employee_count FROM companies ORDER BY employee_count DESC LIMIT 1;")
-        
-        elif "departments" in intent_lower:
-            suggestions.append("SELECT DISTINCT department FROM people WHERE department IS NOT NULL;")
+        elif "cities" in intent_lower:
+            suggestions.append("SELECT DISTINCT city FROM companies WHERE city IS NOT NULL;")
         
         elif "manager" in intent_lower:
-            suggestions.append("SELECT * FROM people WHERE role LIKE '%Manager%';")
+            suggestions.append("SELECT * FROM people WHERE job_title LIKE '%Manager%';")
         
-        elif "founded" in intent_lower and "2020" in intent_lower:
-            suggestions.append("SELECT * FROM companies WHERE founded_year > 2020;")
+        elif "subscription" in intent_lower and "2020" in intent_lower:
+            suggestions.append("SELECT * FROM companies WHERE subscription_date >= '2020-01-01';")
         
-        elif "total" in intent_lower and "employees" in intent_lower:
-            suggestions.append("SELECT SUM(employee_count) as total_employees FROM companies;")
+        elif "total" in intent_lower and "people" in intent_lower:
+            suggestions.append("SELECT COUNT(*) as total_people FROM people;")
         
         else:
             # Generic suggestions
@@ -234,7 +228,7 @@ class QuerySuggestionsTool(BaseTool):
                 if suggestion:  # Skip empty suggestions
                     result += f"{i}. {suggestion}\n"
         else:
-            result = f"No specific suggestions for intent '{intent}'. Try asking about companies, people, departments, or salaries."
+            result = f"No specific suggestions for intent '{intent}'. Try asking about companies, people, countries, job titles, or subscription dates."
         
         return result
     

@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from agents.chatbot import create_chatbot
 from database.db_setup import get_db_manager
 from database.sample_data import get_sample_data_generator
+from database.csv_processor import get_csv_processor
 from config.db_config import DatabaseConfig
 import json
 
@@ -104,16 +105,63 @@ def connect_to_database():
 
 
 def load_sample_data():
-    """Load sample data into the database"""
+    """Load sample data into the database - Legacy method"""
+    st.warning("Sample data generation is no longer supported. Please use CSV upload instead.")
+    return False
+
+
+def upload_csv_data(uploaded_file, table_type):
+    """Upload CSV data to database"""
     try:
-        sample_generator = get_sample_data_generator()
-        if sample_generator.seed_database():
-            st.session_state.sample_data_loaded = True
+        csv_processor = get_csv_processor()
+        
+        # Read the uploaded file
+        csv_content = uploaded_file.read().decode('utf-8')
+        
+        if table_type == "companies":
+            success = csv_processor.process_companies_csv(csv_content)
+        elif table_type == "people":
+            success = csv_processor.process_people_csv(csv_content)
+        else:
+            st.error("Invalid table type")
+            return False
+        
+        if success:
+            st.success(f"✅ Successfully uploaded {table_type} data!")
             return True
         else:
+            st.error(f"❌ Failed to upload {table_type} data")
             return False
+            
     except Exception as e:
-        st.error(f"Failed to load sample data: {str(e)}")
+        st.error(f"Failed to upload CSV: {str(e)}")
+        return False
+
+
+def reset_database_schema():
+    """Reset database schema to match the new CSV structure"""
+    try:
+        db_manager = get_db_manager()
+        
+        # Connect to database
+        if not db_manager.connect():
+            st.error("Failed to connect to database")
+            return False
+        
+        # Drop existing tables
+        if not db_manager.drop_tables():
+            st.error("Failed to drop existing tables")
+            return False
+        
+        # Create new tables with updated schema
+        if not db_manager.create_tables():
+            st.error("Failed to create new tables")
+            return False
+        
+        return True
+        
+    except Exception as e:
+        st.error(f"Failed to reset database schema: {str(e)}")
         return False
 
 
@@ -163,29 +211,80 @@ def main():
         if st.session_state.db_connected:
             st.success("Database Status: Connected")
             
-            # Sample Data Section
-            st.markdown("### Sample Data")
+            # CSV Upload Section
+            st.markdown("### CSV Data Upload")
             
-            if st.button("Load Sample Data", key="load_sample"):
-                with st.spinner("Loading sample data..."):
-                    if load_sample_data():
-                        st.success("✅ Sample data loaded successfully!")
-                    else:
-                        st.error("❌ Failed to load sample data")
+            # Check if database needs schema reset
+            try:
+                db_manager = get_db_manager()
+                if db_manager.check_table_exists("companies"):
+                    # Check if new schema exists by trying to query new columns
+                    result = db_manager.execute_query("SELECT customer_id FROM companies LIMIT 1")
+                    if result is None:
+                        st.warning("⚠️ **Database schema needs to be updated!** Click 'Reset Database Schema' below before uploading CSV files.")
+            except:
+                # If we can't query customer_id, it means old schema is still there
+                st.warning("⚠️ **Database schema needs to be updated!** Click 'Reset Database Schema' below before uploading CSV files.")
             
-            if st.button("Clear Sample Data", key="clear_sample"):
-                with st.spinner("Clearing sample data..."):
-                    sample_generator = get_sample_data_generator()
-                    if sample_generator.clear_sample_data():
-                        st.success("✅ Sample data cleared!")
-                        st.session_state.sample_data_loaded = False
-                    else:
-                        st.error("❌ Failed to clear sample data")
+            # Companies CSV Upload
+            st.markdown("**Upload Companies CSV:**")
+            companies_file = st.file_uploader(
+                "Choose companies CSV file",
+                type=['csv'],
+                key="companies_csv",
+                help="Upload CSV with columns: Customer Id, First Name, Last Name, Company, City, Country, Phone 1, Phone 2, Email, Subscription Date, Website"
+            )
             
-            if st.session_state.sample_data_loaded:
-                st.success("Sample Data: Loaded")
-            else:
-                st.warning("Sample Data: Not loaded")
+            if companies_file is not None:
+                if st.button("Upload Companies Data", key="upload_companies"):
+                    with st.spinner("Uploading companies data..."):
+                        if upload_csv_data(companies_file, "companies"):
+                            st.session_state.sample_data_loaded = True
+            
+            # People CSV Upload
+            st.markdown("**Upload People CSV:**")
+            people_file = st.file_uploader(
+                "Choose people CSV file",
+                type=['csv'],
+                key="people_csv",
+                help="Upload CSV with columns: User Id, First Name, Last Name, Sex, Email, Phone, Date of birth, Job Title"
+            )
+            
+            if people_file is not None:
+                if st.button("Upload People Data", key="upload_people"):
+                    with st.spinner("Uploading people data..."):
+                        if upload_csv_data(people_file, "people"):
+                            st.session_state.sample_data_loaded = True
+            
+            # Database Management Buttons
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("Clear All Data", key="clear_data"):
+                    with st.spinner("Clearing all data..."):
+                        csv_processor = get_csv_processor()
+                        if csv_processor.clear_all_data():
+                            st.success("✅ All data cleared!")
+                            st.session_state.sample_data_loaded = False
+                        else:
+                            st.error("❌ Failed to clear data")
+            
+            with col2:
+                if st.button("Reset Database Schema", key="reset_schema"):
+                    with st.spinner("Resetting database schema..."):
+                        if reset_database_schema():
+                            st.success("✅ Database schema reset successfully!")
+                            st.session_state.sample_data_loaded = False
+                        else:
+                            st.error("❌ Failed to reset database schema")
+            
+            # Data Status
+            try:
+                csv_processor = get_csv_processor()
+                stats = csv_processor.get_table_stats()
+                st.info(f"**Data Status:** Companies: {stats['companies']}, People: {stats['people']}")
+            except Exception as e:
+                st.warning("Could not get data statistics")
         
         else:
             st.error("Database Status: Not connected")
@@ -206,10 +305,11 @@ def main():
             st.markdown("### Database Statistics")
             try:
                 db_manager = get_db_manager()
-                for table_name in ["companies", "people"]:
-                    if db_manager.check_table_exists(table_name):
-                        row_count = db_manager.get_table_row_count(table_name)
-                        st.metric(f"{table_name.title()} Table", f"{row_count} rows")
+                csv_processor = get_csv_processor()
+                stats = csv_processor.get_table_stats()
+                
+                st.metric("Companies Table", f"{stats['companies']} rows")
+                st.metric("People Table", f"{stats['people']} rows")
             except Exception as e:
                 st.error(f"Failed to get statistics: {str(e)}")
         
@@ -218,16 +318,16 @@ def main():
         st.markdown("Click on any query below to use it:")
         
         sample_queries = [
-            "What are the top 5 newly added companies?",
-            "How many people work in the Engineering department?",
-            "Which companies are in the Technology industry?",
-            "What is the average salary by role?",
-            "Show me all people hired in the last year",
-            "Which company has the most employees?",
-            "What are the different departments in our database?",
-            "Find all people with 'Manager' in their role",
-            "Which companies were founded after 2020?",
-            "What is the total number of employees across all companies?"
+            "What are the top 5 companies by subscription date?",
+            "How many people are there in each country?",
+            "Which companies are in Chile?",
+            "What are the different job titles?",
+            "Show me all people born after 1990",
+            "Which company has the most recent subscription?",
+            "What are the different cities in our database?",
+            "Find all people with 'Manager' in their job title",
+            "Which companies were subscribed after 2020?",
+            "What is the total number of people in our database?"
         ]
         
         for query in sample_queries:

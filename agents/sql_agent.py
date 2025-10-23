@@ -19,11 +19,11 @@ Your tasks:
 5. Use proper JOINs when needed for relationships
 
 Available tables:
-- companies: id, name, industry, location, website, employee_count, founded_year, created_at, updated_at
-- people: id, name, email, role, department, company_id, hire_date, salary, created_at, updated_at
+- companies: id, customer_id, first_name, last_name, company, city, country, phone_1, phone_2, email, subscription_date, website, created_at, updated_at
+- people: id, user_id, first_name, last_name, sex, email, phone, date_of_birth, job_title, created_at, updated_at
 
 Relationships:
-- people.company_id -> companies.id
+- No direct foreign key relationships between tables
 
 Guidelines:
 - Always use SELECT statements only
