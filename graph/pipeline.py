@@ -4,6 +4,7 @@ LangGraph pipeline orchestration for AI Analyst RAG
 from typing import TypedDict, Annotated
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
+from agents.query_optimizer import QueryOptimizerAgent
 
 
 class AgentState(TypedDict):
@@ -20,6 +21,7 @@ class AnalystRAGPipeline:
     def __init__(self):
         self.graph = self._build_graph()
         self.memory = MemorySaver()
+        self.query_optimizer = QueryOptimizerAgent()
     
     def _build_graph(self) -> StateGraph:
         """Build the LangGraph pipeline with three agents"""
@@ -40,9 +42,8 @@ class AnalystRAGPipeline:
     
     def _query_optimizer_node(self, state: AgentState) -> AgentState:
         """QueryOptimizerAgent: Converts user query to defined query"""
-        # TODO: Implement query optimization logic
-        optimized = f"Optimized version of: {state['user_query']}"
-        return {"optimized_query": optimized}
+        optimized_query = self.query_optimizer.optimize(state['user_query'])
+        return {"optimized_query": optimized_query}
     
     def _data_extractor_node(self, state: AgentState) -> AgentState:
         """DataExtractorAgent: Extracts data using multiple tools"""
