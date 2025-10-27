@@ -1,2 +1,4 @@
-# Tests module
+"""
+Tests module for AI Analyst RAG Pipeline
+"""
 

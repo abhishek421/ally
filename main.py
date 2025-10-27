@@ -10,17 +10,23 @@ def main():
     # Create the pipeline
     pipeline = AnalystRAGPipeline()
     
-    # Example query
-    user_query = "With how many companies we have closed deal previous year?"
+    # Example queries to test
+    example_queries = [
+        "what was the last mail from {id: 123, name: 'palen', email: 'palen.exe@gmail.com'}",
+        "With how many companies we have closed deal previous year?"
+    ]
     
-    print(f"Processing query: {user_query}\n")
-    
-    # Run the pipeline
-    result = pipeline.run(user_query)
-    
-    # Display the result
-    print("Pipeline Result:")
-    print(result)
+    for user_query in example_queries:
+        print(f"\n{'='*60}")
+        print(f"Original Query: {user_query}")
+        print('='*60)
+        
+        # Run the pipeline
+        result = pipeline.run(user_query)
+        
+        # Display the result
+        print("\nPipeline Result:")
+        print(result)
 
 
 def interactive_mode():

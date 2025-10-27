@@ -102,5 +102,28 @@ pip install -r requirements.txt
 ### Configuration
 Update `config/settings.py` with your database connections and API keys.
 
+## Testing
+
+### Run Unit Tests
+```bash
+python tests/test_query_optimizer.py
+```
+
+### Run Integration Tests
+```bash
+python tests/test_pipeline_integration.py
+```
+
+### Run All Tests
+```bash
+# Run unit tests
+python tests/test_query_optimizer.py
+
+# Run integration tests
+python tests/test_pipeline_integration.py
+```
+
 ## Development Status
-🚧 **In Progress** - Core structure created, agents need implementation.
+✅ **QueryOptimizerAgent** - Implemented with pattern-based optimization  
+🚧 **DataExtractorAgent** - Needs implementation  
+🚧 **ResponseFormatterAgent** - Needs implementation
