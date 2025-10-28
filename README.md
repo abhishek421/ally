@@ -100,7 +100,20 @@ pip install -r requirements.txt
 ```
 
 ### Configuration
-Update `config/settings.py` with your database connections and API keys.
+
+Create a `.env` file in the project root with your API credentials:
+
+```bash
+# OpenAI API Configuration
+OPENAI_API_KEY=REDACTED
+
+# Model Configuration
+MODEL_NAME=gpt-4
+```
+
+**Important:** The `.env` file is already in `.gitignore` to keep your credentials secure.
+
+The application will automatically load these values at runtime. If no `.env` file is found, it will use empty defaults (which will cause errors when making API calls).
 
 ## Testing
 

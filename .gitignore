@@ -1,0 +1,54 @@
+# -------------------------------------
+# OS Files
+# -------------------------------------
+.DS_Store
+Thumbs.db
+
+# -------------------------------------
+# Python
+# -------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+.eggs/
+*.so
+*.db
+*.sqlite3
+
+# Virtual environments
+env/
+venv/
+ENV/
+.venv/
+env.bak/
+
+# Build and Distribution
+build/
+dist/
+*.egg
+*.manifest
+*.spec
+
+# Byte-compiled / cache
+*.log
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Environment variables file (SECURITY)
+.env
+
+# -------------------------------------
+# VS Code & PyCharm
+# -------------------------------------
+.vscode/
+.idea/
+
+# Local testing / dev files
+*.bak
+*.tmp
+*.swp
+*.swo

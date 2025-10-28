@@ -1,8 +1,13 @@
 # Application settings and configuration
+import os
+from dotenv import load_dotenv
 
-# LLM Configuration
+# Load variables from a .env file if present
+load_dotenv()
+
+# LLM Configuration (from environment; falls back to defaults if unset)
 OPENAI_API_KEY=REDACTED
-MODEL_NAME = "gpt-4"  # or "gpt-3.5-turbo"
+MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4")  # or "gpt-3.5-turbo"
 
 # Query Optimization Configuration
 QUERY_OPTIMIZATION_TEMPLATE = """
