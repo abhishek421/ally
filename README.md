@@ -34,6 +34,15 @@ A RAG (Retrieval Augmented Generation) pipeline using LangGraph with three speci
 ## Folder Structure
 ```
 AI-Analyst-RAG/
+├── adapters/         # LLM Provider Adapters
+│   ├── llm_provider.py
+│   ├── provider_factory.py
+│   ├── llm_providers/
+│   │   ├── openai_provider.py
+│   │   ├── anthropic_provider.py
+│   │   ├── gemini_provider.py
+│   │   └── __init__.py
+│   └── __init__.py
 ├── agents/           # Agent implementations
 │   ├── query_optimizer.py
 │   ├── data_extractor.py
@@ -42,6 +51,9 @@ AI-Analyst-RAG/
 │   ├── base_tool.py
 │   ├── companies_tool.py
 │   └── emails_tool.py
+├── prompts/          # Prompt templates
+│   ├── query_optimizer_prompt.py
+│   └── __init__.py
 ├── graph/            # LangGraph pipeline orchestration
 │   └── pipeline.py   # Main pipeline definition
 ├── models/           # Data models
@@ -100,7 +112,79 @@ pip install -r requirements.txt
 ```
 
 ### Configuration
-Update `config/settings.py` with your database connections and API keys.
+
+#### Environment Variables
+Create a `.env` file in the project root with your API credentials.
+
+**Basic Configuration (all agents use same provider):**
+```bash
+# OpenAI API Configuration
+OPENAI_API_KEY=REDACTED_OPENAI_API_KEY
+MODEL_NAME=gpt-4
+```
+
+**Advanced Configuration (per-agent configuration):**
+```bash
+# QueryOptimizerAgent - Use OpenAI GPT-4
+QUERY_OPTIMIZER_PROVIDER=openai
+QUERY_OPTIMIZER_MODEL=gpt-4
+QUERY_OPTIMIZER_API_KEY=sk-your-openai-key
+
+# DataExtractorAgent - Use Anthropic Claude
+DATA_EXTRACTOR_PROVIDER=anthropic
+DATA_EXTRACTOR_MODEL=claude-3-opus
+ANTHROPIC_API_KEY=sk-ant-your-key
+
+# Or use Google Gemini
+# DATA_EXTRACTOR_PROVIDER=gemini
+# DATA_EXTRACTOR_MODEL=gemini-pro
+# GOOGLE_API_KEY=your-google-api-key
+
+# ResponseFormatterAgent - Use cheaper model
+RESPONSE_FORMATTER_PROVIDER=openai
+RESPONSE_FORMATTER_MODEL=gpt-3.5-turbo
+```
+
+**Important:** The `.env` file is already in `.gitignore` to keep your credentials secure.
+
+The application will automatically load these values at runtime. If no `.env` file is found, it will use empty defaults (which will cause errors when making API calls).
+
+#### Prompt Templates
+All prompt templates are stored in the `prompts/` directory as Python modules:
+- `prompts/query_optimizer_prompt.py` - Query optimization prompt template
+- `prompts/__init__.py` - Exports all prompt templates
+
+You can easily modify or add new prompts by editing the `.py` files in this directory.
+
+#### LLM Provider Adapters
+The system supports multiple LLM providers through a unified adapter interface:
+
+**Available Providers:**
+- **OpenAI** (`adapters/openai_provider.py`) - Supports GPT-3.5, GPT-4
+- **Anthropic** (`adapters/anthropic_provider.py`) - Supports Claude models (Opus, Sonnet, Haiku)
+- **Google Gemini** (`adapters/gemini_provider.py`) - Supports Gemini Pro, Gemini Ultra
+
+**How It Works:**
+```python
+# Each agent can use any provider
+from adapters import LLMProviderFactory
+
+# Create a provider from config
+config = {
+    'provider': 'openai',
+    'model': 'gpt-4',
+    'api_key': 'sk-...'
+}
+provider = LLMProviderFactory.create(config)
+
+# Use in agent
+agent = QueryOptimizerAgent(llm_provider=provider)
+```
+
+**Adding New Providers:**
+1. Create a new provider class in `adapters/` that extends `BaseLLMProvider`
+2. Implement the `chat()` method
+3. Register it in `provider_factory.py`
 
 ## Testing
 
