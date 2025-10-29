@@ -1,37 +1,130 @@
-# AI Analyst RAG - CRM Analysis Pipeline
+# AI Analyst Service - Intelligent CRM Query System
 
-## Overview
-A RAG (Retrieval Augmented Generation) pipeline using LangGraph with three specialized agents for intelligent query processing and data extraction from CRM databases.
+## 📋 Overview
+A production-ready AI-powered query system that enables natural language interaction with CRM data using LangGraph, semantic routing, and dynamic configuration management. This system transforms complex CRM queries into structured data responses through intelligent agent orchestration.
 
-## How It Works
+## 🏗️ Architecture Overview
 
-### The Pipeline Flow
-1. **User Query** → "With how many companies we have closed deal previous year?"
-2. **QueryOptimizerAgent** → Converts to structured query with clear intent
-3. **DataExtractorAgent** → Searches databases/tables using multiple tools
-4. **ResponseFormatterAgent** → Formats response in structured JSON
-5. **Final Response** → Returns well-formatted results
+### High-Level System Design
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Next.js Frontend                      │
+│                     (TypeScript / React)                     │
+└───────────────────────────┬─────────────────────────────────┘
+                            │ REST/GraphQL API
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   Python AI Service (FastAPI)                │
+│                                                              │
+│  ┌────────────────────────────────────────────────────┐    │
+│  │              Semantic Query Router                  │    │
+│  │         (Classify query complexity/type)            │    │
+│  └────────────┬───────────────────────────────────────┘    │
+│               │                                              │
+│    ┏━━━━━━━━━━┻━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━┓       │
+│    ▼                      ▼                          ▼       │
+│  ┌──────────┐      ┌─────────────┐         ┌──────────────┐│
+│  │  Direct  │      │  Standard   │         │   Complex    ││
+│  │   Path   │      │    Path     │         │     Path     ││
+│  └────┬─────┘      └──────┬──────┘         └──────┬───────┘│
+│       │                   │                        │        │
+│       │          ┌────────▼────────┐               │        │
+│       │          │ QueryOptimizer  │               │        │
+│       │          │     Agent       │    ┌──────────▼──────┐│
+│       │          └────────┬────────┘    │ QueryDecomposer ││
+│       │                   │             │     Agent       ││
+│       │          ┌────────▼────────┐    └────────┬────────┘│
+│       │          │ DataExtractor   │             │         │
+│       └──────────►     Agent       │◄────────────┘         │
+│                  └────────┬────────┘                        │
+│                           │                                 │
+│                  ┌────────▼────────┐                        │
+│                  │ResponseFormatter│                        │
+│                  │     Agent       │                        │
+│                  └────────┬────────┘                        │
+│                           │                                 │
+│  ┌────────────────────────────────────────────────────┐    │
+│  │              LangGraph Orchestration                │    │
+│  │  • State Management  • Conditional Routing          │    │
+│  │  • Checkpointing     • Error Recovery               │    │
+│  └────────────────────────────────────────────────────┘    │
+│                                                              │
+│  ┌────────────────────────────────────────────────────┐    │
+│  │                  Tools Layer                        │    │
+│  │  workspace_tool │ company_tool │ people_tool        │    │
+│  │  deals_tool     │ email_tool   │ analytics_tool     │    │
+│  └────────────────────────────────────────────────────┘    │
+└───────────────────────┬──────────────────────────────────────┘
+                        │
+        ┌───────────────┼───────────────┐
+        ▼               ▼               ▼
+   ┌─────────┐    ┌──────────┐    ┌─────────┐
+   │PostgreSQL│    │ DynamoDB │    │  Redis  │
+   │  (CRM)   │    │ (Emails) │    │ (Cache) │
+   └──────────┘    └──────────┘    └─────────┘
+```
 
-## Architecture
+### Core Components
 
-### Agents
-1. **QueryOptimizerAgent** (`agents/query_optimizer.py`)
-   - Converts user queries to more defined and structured queries
-   - Example: "what was the last mail from Sam?" → Structured query with filters
+#### 1. **Semantic Query Router**
+- **Purpose**: Classify incoming queries to optimize routing
+- **Routes**:
+  - **Direct Path**: Simple CRUD operations (no LLM needed)
+  - **Standard Path**: Typical queries requiring optimization
+  - **Complex Path**: Multi-step reasoning, aggregations, comparisons
+- **Performance**: <50ms classification time
 
-2. **DataExtractorAgent** (`agents/data_extractor.py`)
-   - Uses multiple tools to search different DB, tables, and data storages
-   - Tools: companies_tool, emails_tool, etc.
+#### 2. **LangGraph Agent Workflow**
 
-3. **ResponseFormatterAgent** (`agents/response_formatter.py`)
-   - Formats responses in proper JSON format
-   - Ensures consistent output structure
+##### Agent: QueryOptimizer
+- **Model**: Claude 3.5 Haiku / Gemini 2.0 Flash
+- **Responsibility**: 
+  - Parse natural language into structured intent
+  - Identify required data entities and fields
+  - Resolve ambiguities in user queries
+  - Generate optimized query parameters
+- **Output**: Structured query object with tool selection
 
-### Pipeline
-- **Main Pipeline** (`graph/pipeline.py`): Orchestrates the three agents using LangGraph
-- **Entry Point** (`main.py`): Run the pipeline with queries
+##### Agent: DataExtractor
+- **Responsibility**:
+  - Execute database queries via tools
+  - Handle workspace/tenant isolation
+  - Apply role-based access control
+  - Aggregate data from multiple sources
+  - Handle pagination and large datasets
+- **Tools**:
+  - `workspace_tool`: Workspace metadata and settings
+  - `company_tool`: Company CRUD operations
+  - `people_tool`: People/contacts queries
+  - `deals_tool`: Deal pipeline operations
+  - `email_tool`: Email sync data (DynamoDB)
+  - `analytics_tool`: Aggregations and metrics
 
-## Folder Structure
+##### Agent: ResponseFormatter
+- **Model**: Claude 3.5 Haiku
+- **Responsibility**:
+  - Format raw data into user-friendly responses
+  - Apply business logic for display
+  - Generate insights and summaries
+  - Structure data for frontend consumption
+- **Output**: JSON response ready for frontend rendering
+
+##### Agent: QueryDecomposer (Complex Path)
+- **Responsibility**:
+  - Break complex queries into sub-queries
+  - Orchestrate multi-step data retrieval
+  - Perform comparisons and analysis
+  - Synthesize results from multiple sources
+
+#### 3. **Tools Layer**
+All tools implement:
+- Workspace isolation
+- Permission checking
+- Error handling with structured responses
+- Query caching for performance
+- Audit logging
+
+## 📁 Current Project Structure
 ```
 AI-Analyst-RAG/
 ├── adapters/         # LLM Provider Adapters
@@ -65,45 +158,108 @@ AI-Analyst-RAG/
 └── README.md         # This file
 ```
 
-## Usage
+## 🚧 Implementation Status
 
-### Run with a single query (default)
+### ✅ Completed
+- [x] Basic project structure setup
+- [x] LangGraph pipeline framework
+- [x] Agent skeleton files
+- [x] Tool skeleton files
+- [x] Documentation roadmap
+
+### 🚧 In Progress
+- [ ] Agent implementations (QueryOptimizer, DataExtractor, ResponseFormatter)
+- [ ] Tool implementations (BaseTool, CompaniesTool, EmailsTool)
+- [ ] Configuration system
+- [ ] Database models and connections
+
+### 📋 Planned (Phase 1-7)
+- [ ] Semantic Query Router
+- [ ] Dynamic Configuration System
+- [ ] Database integration (PostgreSQL, DynamoDB, Redis)
+- [ ] Authentication and RBAC
+- [ ] Admin API endpoints
+- [ ] Observability and monitoring
+- [ ] Production deployment
+
+## 🚀 Quick Start
+
+### Prerequisites
+- Python 3.11+
+- PostgreSQL database
+- Redis instance
+- Anthropic API key (for Claude models)
+
+### Installation
 ```bash
-python main.py
+# Clone the repository
+git clone <repository-url>
+cd analyst-ai
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Setup environment variables
+cp .env.example .env
+# Edit .env with your configuration
 ```
 
-### Interactive Mode
-Edit `main.py` and switch to interactive mode:
-```python
-# Comment out main() and uncomment interactive_mode()
-if __name__ == "__main__":
-    # main()
-    interactive_mode()
-```
-
-Then run:
+### Basic Usage
 ```bash
+# Run with a single query
 python main.py
-```
-You'll get a chatbot-like interface to continuously query the pipeline.
 
-### Use in your code
-```python
-from graph.pipeline import AnalystRAGPipeline
-
-# Create pipeline
-pipeline = AnalystRAGPipeline()
-
-# Run with a query
-result = pipeline.run("With how many companies we have closed deal previous year?")
-print(result)
+# Interactive mode
+python main.py --interactive
 ```
 
-## Example Query
+### Example Query
 **Input:** "With how many companies we have closed deal previous year?"
 
 **Output:** JSON formatted response with extracted data from your CRM databases.
 
+## 🛠️ Development
+
+### Current Implementation Status
+The project is currently in **Phase 1** (Foundation) with basic structure in place. Key components need implementation:
+
+1. **Agent Implementations** - Core logic for QueryOptimizer, DataExtractor, ResponseFormatter
+2. **Tool Implementations** - Database query tools with workspace isolation
+3. **Configuration System** - Dynamic config management
+4. **Database Integration** - PostgreSQL, DynamoDB, Redis connections
+
+### Next Steps
+1. Implement agent logic in `agents/` directory
+2. Build tool classes in `tools/` directory  
+3. Setup database models and connections
+4. Implement semantic query router
+5. Add dynamic configuration system
+
+## 📊 Technology Stack
+
+| Component | Technology | Purpose |
+|-----------|-----------|---------|
+| **Runtime** | Python 3.11+ | Backend language |
+| **AI Orchestration** | LangGraph | Agent workflows |
+| **LLM** | Claude 3.5 Haiku | Primary AI model |
+| **Database** | PostgreSQL | Primary data store |
+| **NoSQL** | DynamoDB | Email sync data |
+| **Cache** | Redis | Configuration & query cache |
+| **API Framework** | FastAPI | REST API (planned) |
+
+## 📚 Documentation
+
+- **[Technical Roadmap](docs/AI_ANALYST_SERVICE_ROADMAP.md)** - Complete implementation guide
+- **[Architecture Overview](#architecture-overview)** - System design and components
+- **[Project Structure](#current-project-structure)** - File organization
+
+## 🤝 Contributing
+
+This project follows the implementation phases outlined in the roadmap. Current focus is on Phase 1-2: Foundation and Tools Layer.
+
+## 📄 License
+
+[Add your license information here]
 ## Setup
 
 ### Install Dependencies

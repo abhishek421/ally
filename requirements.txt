@@ -11,6 +11,23 @@ openai>=1.0.0
 anthropic>=0.34.0
 google-generativeai>=0.3.0
 
+# API Framework
+fastapi>=0.100.0
+uvicorn>=0.23.0
+pydantic>=2.0.0
+
+# Database
+prisma>=0.11.0
+psycopg2-binary>=2.9.0
+boto3>=1.28.0  # For DynamoDB
+redis>=5.0.0
+
+# HTTP Client
+httpx>=0.24.0
+
+# Optional: Embeddings for semantic routing
+sentence-transformers>=2.2.0
+
 # Utilities
 python-dotenv>=1.0.0
 pydantic>=2.0.0,<3.0.0

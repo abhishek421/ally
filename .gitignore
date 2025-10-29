@@ -2,6 +2,11 @@
 # OS Files
 # -------------------------------------
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 
 # -------------------------------------
@@ -9,6 +14,7 @@ Thumbs.db
 # -------------------------------------
 __pycache__/
 *.py[cod]
+*$py.class
 *.pyo
 *.pyd
 *.pdb
@@ -17,6 +23,7 @@ __pycache__/
 *.so
 *.db
 *.sqlite3
+*.sqlite
 
 # Virtual environments
 env/
@@ -24,6 +31,11 @@ venv/
 ENV/
 .venv/
 env.bak/
+venv.bak/
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
 # Build and Distribution
 build/
@@ -31,24 +43,173 @@ dist/
 *.egg
 *.manifest
 *.spec
+pip-log.txt
+pip-delete-this-directory.txt
 
 # Byte-compiled / cache
 *.log
+*.log.*
+logs/
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
 
 # Environment variables file (SECURITY)
 .env
+.env.*
+
+# Python testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
 
 # -------------------------------------
-# VS Code & PyCharm
+# AI/ML Specific
 # -------------------------------------
+# Model files and checkpoints
+*.pkl
+*.pickle
+*.joblib
+*.h5
+*.hdf5
+*.pb
+*.onnx
+*.tflite
+models/
+checkpoints/
+weights/
+
+# Vector databases and embeddings
+*.faiss
+*.index
+embeddings/
+vectors/
+
+# LangChain cache
+.langchain/
+
+# -------------------------------------
+# Database Files
+# -------------------------------------
+# Prisma
+prisma/migrations/
+prisma/dev.db
+prisma/dev.db-journal
+
+# Redis
+dump.rdb
+redis-data/
+
+# DynamoDB Local
+.dynamodb/
+
+# -------------------------------------
+# IDE & Editors
+# -------------------------------------
+# VS Code
 .vscode/
-.idea/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
 
-# Local testing / dev files
-*.bak
-*.tmp
+# PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
 *.swp
 *.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Cursor
+.cursor/
+
+# -------------------------------------
+# Node.js (if using any JS tools)
+# -------------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+package-lock.json
+yarn.lock
+
+# -------------------------------------
+# Docker
+# -------------------------------------
+.dockerignore
+docker-compose.override.yml
+.docker/
+
+# -------------------------------------
+# Logs and Temporary Files
+# -------------------------------------
+*.log
+*.log.*
+logs/
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.backup
+*.orig
+
+# -------------------------------------
+# Documentation builds
+# -------------------------------------
+docs/_build/
+site/
+_site/
+
+# -------------------------------------
+# API Keys and Secrets
+# -------------------------------------
+secrets/
+.secrets/
+*.key
+*.pem
+*.p12
+*.pfx
+config/secrets.json
+config/local.json
+
+# -------------------------------------
+# Local development
+# -------------------------------------
+local/
+dev/
+scratch/
+playground/
+test-data/
+sample-data/
+
+# -------------------------------------
+# Monitoring and Analytics
+# -------------------------------------
+.monitoring/
+.analytics/
