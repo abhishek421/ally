@@ -3,7 +3,7 @@ from tools.base_tool import BaseTool, QueryType, ToolResult
 from database.prisma_client import prisma_client
 from typing import Dict, List, Any, Optional
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 class GroupSearchParams(BaseModel):
@@ -297,8 +297,7 @@ class GroupTool(BaseTool):
             )
             
             # Get recent groups (last 30 days)
-            thirty_days_ago = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            thirty_days_ago = thirty_days_ago.replace(day=thirty_days_ago.day - 30)
+            thirty_days_ago = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=30)
             
             recent_groups = await client.group.count(
                 where={

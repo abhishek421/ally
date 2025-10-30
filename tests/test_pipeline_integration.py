@@ -1,5 +1,5 @@
 """
-Integration Tests for AI Analyst RAG Pipeline
+Integration Tests for AI Analyst Pipeline
 Tests the complete pipeline flow with all agents
 """
 import sys
@@ -159,7 +159,7 @@ def test_complete_flow():
 def run_all_integration_tests():
     """Run all integration tests"""
     print("\n" + "="*60)
-    print("AI Analyst RAG Pipeline - Integration Tests")
+    print("AI Analyst Pipeline - Integration Tests")
     print("="*60)
     
     try:

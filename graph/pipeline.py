@@ -1,5 +1,5 @@
 """
-LangGraph pipeline orchestration for AI Analyst RAG
+LangGraph pipeline orchestration for AI Analyst
 """
 from typing import TypedDict, Annotated
 from langgraph.graph import StateGraph, END
@@ -10,12 +10,14 @@ from agents.query_optimizer import QueryOptimizerAgent
 class AgentState(TypedDict):
     """State that flows between agents"""
     user_query: str
+    workspace_id: str
+    user_id: str
     optimized_query: str
     extracted_data: dict
     final_response: dict
 
 
-class AnalystRAGPipeline:
+class AnalystPipeline:
     """Main pipeline orchestrating the three agents"""
     
     def __init__(self):
@@ -47,8 +49,14 @@ class AnalystRAGPipeline:
     
     def _data_extractor_node(self, state: AgentState) -> AgentState:
         """DataExtractorAgent: Extracts data using multiple tools"""
-        # TODO: Implement data extraction logic with tools
-        extracted = {"data": "extracted data", "query": state['optimized_query']}
+        from agents.data_extractor import DataExtractorAgent
+        
+        data_extractor = DataExtractorAgent()
+        extracted = data_extractor.extract(
+            optimized_query=state['optimized_query'],
+            workspace_id=state['workspace_id'],
+            user_id=state['user_id']
+        )
         return {"extracted_data": extracted}
     
     def _response_formatter_node(self, state: AgentState) -> AgentState:
@@ -61,10 +69,12 @@ class AnalystRAGPipeline:
         }
         return {"final_response": formatted}
     
-    def run(self, user_query: str) -> dict:
-        """Run the pipeline with a user query"""
+    def run(self, user_query: str, workspace_id: str, user_id: str) -> dict:
+        """Run the pipeline with a user query, workspace_id, and user_id"""
         initial_state = {
             "user_query": user_query,
+            "workspace_id": workspace_id,
+            "user_id": user_id,
             "optimized_query": "",
             "extracted_data": {},
             "final_response": {}
@@ -76,5 +86,5 @@ class AnalystRAGPipeline:
 # Main entry point
 def create_pipeline():
     """Factory function to create and return the pipeline"""
-    return AnalystRAGPipeline()
+    return AnalystPipeline()
 

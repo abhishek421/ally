@@ -1,196 +1,259 @@
 # AI Analyst Service - Intelligent CRM Query System
 
 ## 📋 Overview
-A production-ready AI-powered query system that enables natural language interaction with CRM data using LangGraph, semantic routing, and dynamic configuration management. This system transforms complex CRM queries into structured data responses through intelligent agent orchestration.
+
+A production-ready AI-powered query system that enables natural language interaction with CRM data using LangGraph and dynamic configuration management. This system transforms complex CRM queries into structured data responses through intelligent agent orchestration.
 
 ## 🏗️ Architecture Overview
 
 ### High-Level System Design
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        Next.js Frontend                      │
-│                     (TypeScript / React)                     │
+│                        User Query                           │
+│                  (Natural Language)                          │
 └───────────────────────────┬─────────────────────────────────┘
-                            │ REST/GraphQL API
+                            │
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                   Python AI Service (FastAPI)                │
+│                  LangGraph Pipeline                         │
 │                                                              │
 │  ┌────────────────────────────────────────────────────┐    │
-│  │              Semantic Query Router                  │    │
-│  │         (Classify query complexity/type)            │    │
+│  │         QueryOptimizerAgent                       │    │
+│  │  • Converts natural language to structured query  │    │
+│  │  • Resolves relative dates (this month, last year)│    │
+│  │  • Extracts entities and intent                    │    │
 │  └────────────┬───────────────────────────────────────┘    │
 │               │                                              │
-│    ┏━━━━━━━━━━┻━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━┓       │
-│    ▼                      ▼                          ▼       │
-│  ┌──────────┐      ┌─────────────┐         ┌──────────────┐│
-│  │  Direct  │      │  Standard   │         │   Complex    ││
-│  │   Path   │      │    Path     │         │     Path     ││
-│  └────┬─────┘      └──────┬──────┘         └──────┬───────┘│
-│       │                   │                        │        │
-│       │          ┌────────▼────────┐               │        │
-│       │          │ QueryOptimizer  │               │        │
-│       │          │     Agent       │    ┌──────────▼──────┐│
-│       │          └────────┬────────┘    │ QueryDecomposer ││
-│       │                   │             │     Agent       ││
-│       │          ┌────────▼────────┐    └────────┬────────┘│
-│       │          │ DataExtractor   │             │         │
-│       └──────────►     Agent       │◄────────────┘         │
-│                  └────────┬────────┘                        │
-│                           │                                 │
-│                  ┌────────▼────────┐                        │
-│                  │ResponseFormatter│                        │
-│                  │     Agent       │                        │
-│                  └────────┬────────┘                        │
-│                           │                                 │
+│               ▼                                              │
 │  ┌────────────────────────────────────────────────────┐    │
-│  │              LangGraph Orchestration                │    │
-│  │  • State Management  • Conditional Routing          │    │
-│  │  • Checkpointing     • Error Recovery               │    │
-│  └────────────────────────────────────────────────────┘    │
-│                                                              │
+│  │         DataExtractorAgent                         │    │
+│  │  • Orchestrates multiple tools                     │    │
+│  │  • Handles workspace isolation                    │    │
+│  │  • Aggregates data from multiple sources          │    │
+│  └────────────┬───────────────────────────────────────┘    │
+│               │                                              │
+│               ▼                                              │
 │  ┌────────────────────────────────────────────────────┐    │
-│  │                  Tools Layer                        │    │
-│  │  workspace_tool │ company_tool │ people_tool        │    │
-│  │  deals_tool     │ email_tool   │ analytics_tool     │    │
-│  └────────────────────────────────────────────────────┘    │
-└───────────────────────┬──────────────────────────────────────┘
-                        │
-        ┌───────────────┼───────────────┐
-        ▼               ▼               ▼
-   ┌─────────┐    ┌──────────┐    ┌─────────┐
-   │PostgreSQL│    │ DynamoDB │    │  Redis  │
-   │  (CRM)   │    │ (Emails) │    │ (Cache) │
-   └──────────┘    └──────────┘    └─────────┘
+│  │         ResponseFormatterAgent                      │    │
+│  │  • Formats raw data into JSON                      │    │
+│  │  • Applies business logic                         │    │
+│  │  • Generates user-friendly responses              │    │
+│  └────────────┬───────────────────────────────────────┘    │
+│               │                                              │
+│               ▼                                              │
+│           Final Response (JSON)                               │
+└──────────────────────────────────────────────────────────────┘
+                            │
+        ┌───────────────────┼───────────────────┐
+        ▼                   ▼                   ▼
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│   Tools      │    │ LLM Providers │    │  Databases   │
+│              │    │              │    │              │
+│ • Company    │    │ • OpenAI     │    │ • PostgreSQL │
+│ • People     │    │ • Anthropic  │    │ • DynamoDB   │
+│ • Email      │    │ • Gemini     │    │ • Redis      │
+│ • Workspace  │    │              │    │              │
+│ • Interaction│    │              │    │              │
+│ • Group      │    │              │    │              │
+└──────────────┘    └──────────────┘    └──────────────┘
 ```
 
 ### Core Components
 
-#### 1. **Semantic Query Router**
-- **Purpose**: Classify incoming queries to optimize routing
-- **Routes**:
-  - **Direct Path**: Simple CRUD operations (no LLM needed)
-  - **Standard Path**: Typical queries requiring optimization
-  - **Complex Path**: Multi-step reasoning, aggregations, comparisons
-- **Performance**: <50ms classification time
+#### 1. **LangGraph Pipeline** (`graph/pipeline.py`)
+- **State Management**: Uses TypedDict for type-safe state flow
+- **Agent Orchestration**: Sequential flow through three agents
+- **Checkpointing**: Memory-based checkpointing for state persistence
+- **Nodes**: QueryOptimizer → DataExtractor → ResponseFormatter
 
-#### 2. **LangGraph Agent Workflow**
+#### 2. **Agents** (`agents/`)
 
-##### Agent: QueryOptimizer
-- **Model**: Claude 3.5 Haiku / Gemini 2.0 Flash
+##### QueryOptimizerAgent (`agents/query_optimizer.py`)
+- **Status**: ✅ Fully Implemented
+- **Model Support**: Configurable per agent (OpenAI, Anthropic, Gemini)
 - **Responsibility**: 
-  - Parse natural language into structured intent
-  - Identify required data entities and fields
-  - Resolve ambiguities in user queries
-  - Generate optimized query parameters
-- **Output**: Structured query object with tool selection
+  - Parses natural language into structured intent
+  - Replaces relative time references with exact dates
+  - Extracts key entities (persons, companies, dates)
+  - Generates optimized query parameters
+- **Output**: Structured query object ready for data extraction
 
-##### Agent: DataExtractor
+##### DataExtractorAgent (`agents/data_extractor.py`)
+- **Status**: 🚧 Placeholder (Needs Implementation)
 - **Responsibility**:
   - Execute database queries via tools
   - Handle workspace/tenant isolation
   - Apply role-based access control
   - Aggregate data from multiple sources
   - Handle pagination and large datasets
-- **Tools**:
-  - `workspace_tool`: Workspace metadata and settings
-  - `company_tool`: Company CRUD operations
-  - `people_tool`: People/contacts queries
-  - `deals_tool`: Deal pipeline operations
-  - `email_tool`: Email sync data (DynamoDB)
-  - `analytics_tool`: Aggregations and metrics
 
-##### Agent: ResponseFormatter
-- **Model**: Claude 3.5 Haiku
+##### ResponseFormatterAgent (`agents/response_formatter.py`)
+- **Status**: 🚧 Placeholder (Needs Implementation)
 - **Responsibility**:
   - Format raw data into user-friendly responses
   - Apply business logic for display
   - Generate insights and summaries
   - Structure data for frontend consumption
-- **Output**: JSON response ready for frontend rendering
 
-##### Agent: QueryDecomposer (Complex Path)
-- **Responsibility**:
-  - Break complex queries into sub-queries
-  - Orchestrate multi-step data retrieval
-  - Perform comparisons and analysis
-  - Synthesize results from multiple sources
+#### 3. **Tools Layer** (`tools/`)
 
-#### 3. **Tools Layer**
-All tools implement:
+All tools inherit from `BaseTool` and implement:
 - Workspace isolation
 - Permission checking
 - Error handling with structured responses
-- Query caching for performance
+- Query caching via Redis
 - Audit logging
 
-## 📁 Current Project Structure
+##### Available Tools
+
+| Tool | File | Status | Operations |
+|------|------|--------|------------|
+| **CompanyTool** | `tools/company_tool.py` | ✅ Implemented | Search, GetById, List, Create, Update, Analytics |
+| **EmailTool** | `tools/emails_tool.py` | ✅ Implemented | Search, GetById, List, Analytics |
+| **PeopleTool** | `tools/people_tool.py` | ✅ Implemented | Search, GetById, List, Analytics |
+| **WorkspaceTool** | `tools/workspace_tool.py` | ✅ Implemented | GetById, List |
+| **InteractionTool** | `tools/interaction_tool.py` | 🚧 Placeholder | - |
+| **GroupTool** | `tools/group_tool.py` | 🚧 Placeholder | - |
+
+##### BaseTool (`tools/base_tool.py`)
+- Abstract base class for all tools
+- Provides caching, error handling, logging
+- Standardized `ToolResult` format
+- Query type enumeration (SEARCH, GET_BY_ID, LIST, CREATE, UPDATE, DELETE, ANALYTICS)
+
+##### ToolFactory (`tools/tool_factory.py`)
+- Factory pattern for creating tool instances
+- Tool registry for dynamic tool discovery
+- Tool metadata and capabilities introspection
+
+#### 3. **LLM Provider Adapters** (`adapters/`)
+
+Pluggable architecture supporting multiple LLM providers:
+
+| Provider | File | Status | Models Supported |
+|----------|------|--------|------------------|
+| **OpenAI** | `adapters/llm_providers/openai_provider.py` | ✅ Implemented | GPT-3.5, GPT-4, GPT-4 Turbo |
+| **Anthropic** | `adapters/llm_providers/anthropic_provider.py` | ✅ Implemented | Claude Opus, Sonnet, Haiku |
+| **Gemini** | `adapters/llm_providers/gemini_provider.py` | ✅ Implemented | Gemini Pro, Gemini Ultra |
+
+**Features**:
+- Unified interface via `LLMProvider` abstract class
+- Per-agent provider configuration
+- Factory pattern for provider creation
+- Consistent error handling and logging
+
+#### 4. **Database Clients** (`database/`)
+
+| Client | File | Purpose | Status |
+|--------|------|----------|--------|
+| **PrismaClient** | `database/prisma_client.py` | PostgreSQL connection management | ✅ Implemented |
+| **DynamoDBClient** | `database/dynamodb_client.py` | DynamoDB for email sync data | ✅ Implemented |
+| **RedisClient** | `database/redis_client.py` | Caching and configuration storage | ✅ Implemented |
+
+#### 5. **Configuration** (`config/`)
+
+- **Settings** (`config/settings.py`): 
+  - Per-agent LLM configuration
+  - Environment variable management
+  - Query optimization templates
+  - Date context generation
+
+- **Prompts** (`prompts/`):
+  - Query optimizer prompt templates
+  - Modular prompt system
+
+## 📁 Project Structure
+
 ```
-AI-Analyst-RAG/
-├── adapters/         # LLM Provider Adapters
-│   ├── llm_provider.py
-│   ├── provider_factory.py
-│   ├── llm_providers/
-│   │   ├── openai_provider.py
-│   │   ├── anthropic_provider.py
-│   │   ├── gemini_provider.py
-│   │   └── __init__.py
+analyst-ai/
+├── adapters/                    # LLM Provider Adapters
+│   ├── __init__.py
+│   ├── llm_provider.py         # Abstract base class
+│   ├── provider_factory.py     # Factory for creating providers
+│   └── llm_providers/
+│       ├── __init__.py
+│       ├── openai_provider.py
+│       ├── anthropic_provider.py
+│       └── gemini_provider.py
+│
+├── agents/                      # Agent Implementations
+│   ├── __init__.py
+│   ├── query_optimizer.py      # ✅ Fully implemented
+│   ├── data_extractor.py      # 🚧 Placeholder
+│   └── response_formatter.py  # 🚧 Placeholder
+│
+├── tools/                       # Data Extraction Tools
+│   ├── __init__.py
+│   ├── base_tool.py            # ✅ Base class with caching
+│   ├── tool_factory.py         # ✅ Tool factory
+│   ├── company_tool.py         # ✅ Implemented
+│   ├── emails_tool.py          # ✅ Implemented
+│   ├── people_tool.py          # ✅ Implemented
+│   ├── workspace_tool.py        # ✅ Implemented
+│   ├── interaction_tool.py      # 🚧 Placeholder
+│   ├── group_tool.py           # 🚧 Placeholder
+│   └── companies_tool.py       # Legacy (use company_tool.py)
+│
+├── graph/                       # LangGraph Pipeline
+│   ├── __init__.py
+│   └── pipeline.py             # ✅ Main pipeline orchestration
+│
+├── database/                     # Database Clients
+│   ├── __init__.py
+│   ├── prisma_client.py        # ✅ PostgreSQL client
+│   ├── dynamodb_client.py      # ✅ DynamoDB client
+│   └── redis_client.py        # ✅ Redis client
+│
+├── config/                       # Configuration
+│   ├── __init__.py
+│   └── settings.py             # ✅ App settings & LLM config
+│
+├── prompts/                      # Prompt Templates
+│   ├── __init__.py
+│   └── query_optimizer_prompt.py  # ✅ Query optimization prompts
+│
+├── models/                       # Data Models
 │   └── __init__.py
-├── agents/           # Agent implementations
-│   ├── query_optimizer.py
-│   ├── data_extractor.py
-│   └── response_formatter.py
-├── tools/            # Data extraction tools
-│   ├── base_tool.py
-│   ├── companies_tool.py
-│   └── emails_tool.py
-├── prompts/          # Prompt templates
-│   ├── query_optimizer_prompt.py
+│
+├── utils/                        # Utility Functions
 │   └── __init__.py
-├── graph/            # LangGraph pipeline orchestration
-│   └── pipeline.py   # Main pipeline definition
-├── models/           # Data models
-├── config/           # Configuration files
-├── database/         # Database connections
-├── utils/            # Utility functions
-├── tests/            # Test files
-├── main.py           # Entry point
-└── README.md         # This file
+│
+├── tests/                        # Test Suite
+│   ├── __init__.py
+│   ├── test_query_optimizer.py
+│   └── test_pipeline_integration.py
+│
+├── docs/                         # Documentation
+│   ├── AI_ANALYST_SERVICE_ROADMAP.md
+│   ├── TOOLS_ARCHITECTURE_PLAN.md
+│   ├── TOOLS_IMPLEMENTATION.md
+│   ├── adapter-architecture.md
+│   └── schema documentation files
+│
+├── examples/                     # Example Usage
+│   └── tool_usage_example.py
+│
+├── main.py                       # Entry point
+├── requirements.txt              # Dependencies
+└── README.md                     # This file
 ```
-
-## 🚧 Implementation Status
-
-### ✅ Completed
-- [x] Basic project structure setup
-- [x] LangGraph pipeline framework
-- [x] Agent skeleton files
-- [x] Tool skeleton files
-- [x] Documentation roadmap
-
-### 🚧 In Progress
-- [ ] Agent implementations (QueryOptimizer, DataExtractor, ResponseFormatter)
-- [ ] Tool implementations (BaseTool, CompaniesTool, EmailsTool)
-- [ ] Configuration system
-- [ ] Database models and connections
-
-### 📋 Planned (Phase 1-7)
-- [ ] Semantic Query Router
-- [ ] Dynamic Configuration System
-- [ ] Database integration (PostgreSQL, DynamoDB, Redis)
-- [ ] Authentication and RBAC
-- [ ] Admin API endpoints
-- [ ] Observability and monitoring
-- [ ] Production deployment
 
 ## 🚀 Quick Start
 
 ### Prerequisites
+
 - Python 3.11+
-- PostgreSQL database
+- PostgreSQL database (with Prisma schema)
+- DynamoDB table (`EmailSync`)
 - Redis instance
-- Anthropic API key (for Claude models)
+- API keys for at least one LLM provider:
+  - OpenAI API key (for GPT models)
+  - Anthropic API key (for Claude models)
+  - Google API key (for Gemini models)
 
 ### Installation
+
 ```bash
 # Clone the repository
 git clone <repository-url>
@@ -204,73 +267,11 @@ cp .env.example .env
 # Edit .env with your configuration
 ```
 
-### Basic Usage
-```bash
-# Run with a single query
-python main.py
-
-# Interactive mode
-python main.py --interactive
-```
-
-### Example Query
-**Input:** "With how many companies we have closed deal previous year?"
-
-**Output:** JSON formatted response with extracted data from your CRM databases.
-
-## 🛠️ Development
-
-### Current Implementation Status
-The project is currently in **Phase 1** (Foundation) with basic structure in place. Key components need implementation:
-
-1. **Agent Implementations** - Core logic for QueryOptimizer, DataExtractor, ResponseFormatter
-2. **Tool Implementations** - Database query tools with workspace isolation
-3. **Configuration System** - Dynamic config management
-4. **Database Integration** - PostgreSQL, DynamoDB, Redis connections
-
-### Next Steps
-1. Implement agent logic in `agents/` directory
-2. Build tool classes in `tools/` directory  
-3. Setup database models and connections
-4. Implement semantic query router
-5. Add dynamic configuration system
-
-## 📊 Technology Stack
-
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| **Runtime** | Python 3.11+ | Backend language |
-| **AI Orchestration** | LangGraph | Agent workflows |
-| **LLM** | Claude 3.5 Haiku | Primary AI model |
-| **Database** | PostgreSQL | Primary data store |
-| **NoSQL** | DynamoDB | Email sync data |
-| **Cache** | Redis | Configuration & query cache |
-| **API Framework** | FastAPI | REST API (planned) |
-
-## 📚 Documentation
-
-- **[Technical Roadmap](docs/AI_ANALYST_SERVICE_ROADMAP.md)** - Complete implementation guide
-- **[Architecture Overview](#architecture-overview)** - System design and components
-- **[Project Structure](#current-project-structure)** - File organization
-
-## 🤝 Contributing
-
-This project follows the implementation phases outlined in the roadmap. Current focus is on Phase 1-2: Foundation and Tools Layer.
-
-## 📄 License
-
-[Add your license information here]
-## Setup
-
-### Install Dependencies
-```bash
-pip install -r requirements.txt
-```
-
 ### Configuration
 
 #### Environment Variables
-Create a `.env` file in the project root with your API credentials.
+
+Create a `.env` file in the project root:
 
 **Basic Configuration (all agents use same provider):**
 ```bash
@@ -288,7 +289,7 @@ QUERY_OPTIMIZER_API_KEY=sk-your-openai-key
 
 # DataExtractorAgent - Use Anthropic Claude
 DATA_EXTRACTOR_PROVIDER=anthropic
-DATA_EXTRACTOR_MODEL=claude-3-opus
+DATA_EXTRACTOR_MODEL=claude-3-opus-20240229
 ANTHROPIC_API_KEY=sk-ant-your-key
 
 # Or use Google Gemini
@@ -301,60 +302,153 @@ RESPONSE_FORMATTER_PROVIDER=openai
 RESPONSE_FORMATTER_MODEL=gpt-3.5-turbo
 ```
 
-**Important:** The `.env` file is already in `.gitignore` to keep your credentials secure.
+**Database Configuration:**
+```bash
+# PostgreSQL (Prisma automatically reads DATABASE_URL)
+DATABASE_URL=postgresql://user:password@localhost:5432/dbname
 
-The application will automatically load these values at runtime. If no `.env` file is found, it will use empty defaults (which will cause errors when making API calls).
+# DynamoDB (uses AWS credentials from ~/.aws/credentials or environment)
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=REDACTED
+AWS_SECRET_ACCESS_KEY=REDACTED
 
-#### Prompt Templates
-All prompt templates are stored in the `prompts/` directory as Python modules:
-- `prompts/query_optimizer_prompt.py` - Query optimization prompt template
-- `prompts/__init__.py` - Exports all prompt templates
-
-You can easily modify or add new prompts by editing the `.py` files in this directory.
-
-#### LLM Provider Adapters
-The system supports multiple LLM providers through a unified adapter interface:
-
-**Available Providers:**
-- **OpenAI** (`adapters/openai_provider.py`) - Supports GPT-3.5, GPT-4
-- **Anthropic** (`adapters/anthropic_provider.py`) - Supports Claude models (Opus, Sonnet, Haiku)
-- **Google Gemini** (`adapters/gemini_provider.py`) - Supports Gemini Pro, Gemini Ultra
-
-**How It Works:**
-```python
-# Each agent can use any provider
-from adapters import LLMProviderFactory
-
-# Create a provider from config
-config = {
-    'provider': 'openai',
-    'model': 'gpt-4',
-    'api_key': 'sk-...'
-}
-provider = LLMProviderFactory.create(config)
-
-# Use in agent
-agent = QueryOptimizerAgent(llm_provider=provider)
+# Redis
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_DB=0
 ```
 
-**Adding New Providers:**
-1. Create a new provider class in `adapters/` that extends `BaseLLMProvider`
-2. Implement the `chat()` method
-3. Register it in `provider_factory.py`
+### Basic Usage
 
-## Testing
+```bash
+# Run with example queries
+python main.py
+
+# Interactive mode (uncomment in main.py)
+# python main.py --interactive
+```
+
+### Example Query
+
+**Input:** "With how many companies we have closed deal previous year?"
+
+**Pipeline Flow:**
+1. **QueryOptimizerAgent**: Converts to "The user is asking you to fetch and analyze all closed deals from 2023 and return structured information"
+2. **DataExtractorAgent**: Uses CompanyTool to query database for companies with closed deals in 2023
+3. **ResponseFormatterAgent**: Formats results into JSON response
+
+**Output:** JSON formatted response with extracted data from CRM databases.
+
+## 🛠️ Development
+
+### Current Implementation Status
+
+#### ✅ Completed Components
+- [x] LangGraph pipeline framework
+- [x] QueryOptimizerAgent with LLM integration
+- [x] BaseTool with caching and error handling
+- [x] CompanyTool, EmailTool, PeopleTool, WorkspaceTool
+- [x] LLM provider adapters (OpenAI, Anthropic, Gemini)
+- [x] Database clients (Prisma, DynamoDB, Redis)
+- [x] Configuration system with per-agent LLM config
+- [x] Tool factory pattern
+- [x] Testing framework setup
+
+#### 🚧 In Progress / Needs Implementation
+- [ ] DataExtractorAgent implementation
+- [ ] ResponseFormatterAgent implementation
+- [ ] InteractionTool implementation
+- [ ] GroupTool implementation
+- [ ] Workspace isolation and RBAC validation
+- [ ] FastAPI REST API endpoints
+- [ ] Comprehensive test coverage
+
+### Adding a New Tool
+
+1. Create a new tool class inheriting from `BaseTool`:
+
+```python
+# tools/your_tool.py
+from tools.base_tool import BaseTool, QueryType, ToolResult
+from typing import List
+
+class YourTool(BaseTool):
+    def get_supported_operations(self) -> List[QueryType]:
+        return [QueryType.SEARCH, QueryType.GET_BY_ID]
+    
+    async def execute(self, query_type: QueryType, **kwargs) -> ToolResult:
+        # Implement your tool logic
+        pass
+```
+
+2. Register it in `ToolFactory`:
+
+```python
+# tools/tool_factory.py
+from tools.your_tool import YourTool
+
+_tool_registry = {
+    # ... existing tools ...
+    'your_tool': YourTool,
+}
+```
+
+### Adding a New LLM Provider
+
+1. Create provider class inheriting from `LLMProvider`:
+
+```python
+# adapters/llm_providers/your_provider.py
+from adapters.llm_provider import LLMProvider
+
+class YourProvider(LLMProvider):
+    def _initialize_client(self):
+        # Initialize your client
+        pass
+    
+    def chat(self, messages, **kwargs) -> str:
+        # Implement chat method
+        pass
+```
+
+2. Register in `LLMProviderFactory`:
+
+```python
+# adapters/provider_factory.py
+from adapters.llm_providers.your_provider import YourProvider
+
+_providers = {
+    # ... existing providers ...
+    'your_provider': YourProvider,
+}
+```
+
+## 🧪 Testing
+
+### Quick Start Testing
+
+For beginners, start with the comprehensive testing guide:
+
+```bash
+# Run health check first
+python scripts/health_check.py
+
+# Then follow the step-by-step guide
+# See: docs/TESTING_GUIDE.md
+```
 
 ### Run Unit Tests
-```bash
-python tests/test_query_optimizer.py
-```
 
-### Run Integration Tests
 ```bash
+# Test QueryOptimizerAgent
+python tests/test_query_optimizer.py
+
+# Test Pipeline Integration
 python tests/test_pipeline_integration.py
 ```
 
 ### Run All Tests
+
 ```bash
 # Run unit tests
 python tests/test_query_optimizer.py
@@ -363,7 +457,69 @@ python tests/test_query_optimizer.py
 python tests/test_pipeline_integration.py
 ```
 
-## Development Status
-✅ **QueryOptimizerAgent** - Implemented with pattern-based optimization  
-🚧 **DataExtractorAgent** - Needs implementation  
-🚧 **ResponseFormatterAgent** - Needs implementation
+### Testing Documentation
+
+- **[Complete Testing Guide](docs/TESTING_GUIDE.md)** - Detailed step-by-step testing instructions for beginners
+- **[Quick Start Guide](docs/QUICK_START.md)** - 5-minute quick start guide
+- **[Health Check Script](scripts/health_check.py)** - Automated system health verification
+
+## 📊 Technology Stack
+
+| Component | Technology | Purpose |
+|-----------|-----------|---------|
+| **Runtime** | Python 3.11+ | Backend language |
+| **AI Orchestration** | LangGraph | Agent workflows & state management |
+| **LLM Providers** | OpenAI, Anthropic, Gemini | AI model access |
+| **Database (SQL)** | PostgreSQL + Prisma | Primary CRM data store |
+| **Database (NoSQL)** | DynamoDB | Email sync data |
+| **Cache** | Redis | Query caching & configuration |
+| **Schema Validation** | Pydantic | Data validation |
+
+## 📚 Documentation
+
+### Getting Started
+- **[Testing Guide](docs/TESTING_GUIDE.md)** - Complete step-by-step testing instructions for beginners
+- **[Quick Start](docs/QUICK_START.md)** - 5-minute quick start guide
+
+### Architecture & Implementation
+- **[Technical Roadmap](docs/AI_ANALYST_SERVICE_ROADMAP.md)** - Complete implementation guide
+- **[Tools Architecture](docs/TOOLS_ARCHITECTURE_PLAN.md)** - Tool design patterns
+- **[Tools Implementation](docs/TOOLS_IMPLEMENTATION.md)** - Tool implementation guide
+- **[Adapter Architecture](docs/adapter-architecture.md)** - LLM provider adapter design
+- **[Schema Documentation](docs/)** - Database schema documentation (company, people, email, etc.)
+
+## 🔧 Key Features
+
+### Multi-Provider LLM Support
+- Unified interface for multiple LLM providers
+- Per-agent provider configuration
+- Easy to add new providers
+
+### Flexible Tool System
+- Factory pattern for tool creation
+- Standardized tool interface
+- Built-in caching and error handling
+- Workspace isolation support
+
+### Robust Pipeline
+- Type-safe state management
+- Checkpointing for state persistence
+- Sequential agent workflow
+- Error recovery mechanisms
+
+### Database Integration
+- PostgreSQL via Prisma ORM
+- DynamoDB for email data
+- Redis for caching
+- Connection pooling and health checks
+
+## 🤝 Contributing
+
+This project follows the implementation phases outlined in the roadmap. Current focus is on:
+- Implementing DataExtractorAgent
+- Implementing ResponseFormatterAgent
+- Adding remaining tools (InteractionTool, GroupTool)
+
+## 📄 License
+
+[Add your license information here]

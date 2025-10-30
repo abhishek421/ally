@@ -1,0 +1,43 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-py"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Global LLM Configuration
+// Stores the default provider and model that all agents will use unless overridden
+model GlobalLLMConfig {
+  id          String   @id @default(cuid())
+  provider    String   // "openai", "anthropic", "gemini"
+  model       String   // "gpt-4", "claude-3-opus", "gemini-pro", etc.
+  enabled     Boolean  @default(true)
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([provider, model])
+  @@index([enabled])
+}
+
+// Agent-specific LLM Configuration
+// Stores per-agent overrides. If provider/model is null, agent inherits from GlobalLLMConfig
+model AgentLLMConfig {
+  id          String   @id @default(cuid())
+  agentName   String   @unique // "query_optimizer", "data_extractor", "response_formatter"
+  provider    String?  // null = use global
+  model       String?  // null = use global
+  enabled     Boolean  @default(true)
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([agentName, enabled])
+  @@index([enabled])
+}
+

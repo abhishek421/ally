@@ -3,7 +3,7 @@ from tools.base_tool import BaseTool, QueryType, ToolResult
 from database.prisma_client import prisma_client
 from typing import Dict, List, Any, Optional
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 class CompanySearchParams(BaseModel):
@@ -23,9 +23,10 @@ class CompanyTool(BaseTool):
             QueryType.SEARCH,
             QueryType.GET_BY_ID,
             QueryType.LIST,
-            QueryType.CREATE,
-            QueryType.UPDATE,
-            QueryType.ANALYTICS
+            QueryType.ANALYTICS,
+            # TODO: Write operations not yet implemented
+            # QueryType.CREATE,
+            # QueryType.UPDATE,
         ]
     
     async def execute(self, query_type: QueryType, **kwargs) -> ToolResult:
@@ -219,8 +220,7 @@ class CompanyTool(BaseTool):
             )
             
             # Get recent companies (last 30 days)
-            thirty_days_ago = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            thirty_days_ago = thirty_days_ago.replace(day=thirty_days_ago.day - 30)
+            thirty_days_ago = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=30)
             
             recent_companies = await client.company.count(
                 where={
