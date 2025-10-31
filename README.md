@@ -1,25 +1,59 @@
-# AI Analyst Service - Intelligent CRM Query System
+# AI Analyst Service
 
-## 📋 Overview
+A production-ready, intelligent CRM query system that transforms natural language questions into structured data responses. Built with FastAPI and LangGraph, it orchestrates multiple AI agents to understand queries, extract data from various sources (PostgreSQL, DynamoDB, Redis), and format results through a simple REST API.
 
-The **AI Analyst Service** is a production-ready, intelligent CRM query system that transforms natural language questions into structured data responses. Built with FastAPI and LangGraph, it orchestrates multiple AI agents to understand queries, extract data from various sources (PostgreSQL, DynamoDB, Redis), and format results—all through a simple REST API.
+## Table of Contents
 
-**What it does:**
-- Accepts natural language queries like "Show me companies with closed deals from last year"
-- Automatically resolves relative dates and extracts intent
-- Queries multiple databases and data sources in parallel
-- Returns formatted JSON responses with execution metadata
+- [Overview](#overview)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Components](#components)
+- [Installation](#installation)
+- [Docker Deployment](#docker-deployment)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [API Documentation](#api-documentation)
+- [Project Structure](#project-structure)
+- [Technology Stack](#technology-stack)
+- [Development](#development)
+- [Testing](#testing)
+- [License](#license)
 
-**Key Capabilities:**
-- 🤖 Multi-agent AI pipeline using LangGraph
-- 🔌 Multi-provider LLM support (OpenAI, Anthropic, Gemini)
-- 🚀 Production-ready FastAPI REST API with JWT auth
-- 🗄️ Multi-database integration (PostgreSQL, DynamoDB, Redis)
-- 🏢 Multi-tenant workspace isolation
-- ⚡ Redis-powered caching for performance
-- 📊 Comprehensive health checks and monitoring
+## Overview
 
-## 🏗️ Architecture Overview
+The AI Analyst Service provides a natural language interface to query CRM data across multiple databases. Users can ask questions like:
+
+- "Show me companies with closed deals from last year"
+- "List all emails from contacts in Q4"
+- "How many people interacted with us last month?"
+
+The system automatically:
+- Parses natural language queries into structured intent
+- Resolves relative dates and time references
+- Queries multiple databases in parallel
+- Formats responses with both human-readable markdown and raw data
+
+## Features
+
+### Core Capabilities
+
+- **Multi-Agent AI Pipeline**: Orchestrated workflow using LangGraph with three specialized agents
+- **Multi-Provider LLM Support**: Seamlessly switch between OpenAI, Anthropic, and Google Gemini
+- **RESTful API**: Production-ready FastAPI with comprehensive validation and error handling
+- **Multi-Database Integration**: Unified access to PostgreSQL, DynamoDB, and Redis
+- **Multi-Tenant Architecture**: Workspace-based isolation for data security
+- **Intelligent Caching**: Redis-powered query result caching for optimal performance
+- **Comprehensive Monitoring**: Health checks and readiness endpoints for production deployments
+
+### System Features
+
+- **Per-Agent LLM Configuration**: Use different models for different pipeline stages (cost optimization)
+- **Type-Safe State Management**: TypedDict-based state flow with LangGraph checkpointing
+- **Factory Pattern Architecture**: Extensible tool and provider system
+- **Async Operations**: Non-blocking I/O for optimal performance
+- **Error Recovery**: Graceful degradation with structured error responses
+
+## Architecture
 
 ### High-Level System Design
 
@@ -34,31 +68,33 @@ The **AI Analyst Service** is a production-ready, intelligent CRM query system t
 │                  LangGraph Pipeline                         │
 │                                                              │
 │  ┌────────────────────────────────────────────────────┐    │
-│  │         QueryOptimizerAgent                       │    │
-│  │  • Converts natural language to structured query  │    │
-│  │  • Resolves relative dates (this month, last year)│    │
-│  │  • Extracts entities and intent                    │    │
+│  │      QueryOptimizerAgent                           │    │
+│  │  • Natural language parsing                        │    │
+│  │  • Date/time resolution                           │    │
+│  │  • Entity extraction                              │    │
+│  │  • Intent structuring                             │    │
 │  └────────────┬───────────────────────────────────────┘    │
 │               │                                              │
 │               ▼                                              │
 │  ┌────────────────────────────────────────────────────┐    │
-│  │         DataExtractorAgent                         │    │
-│  │  • Orchestrates multiple tools                     │    │
-│  │  • Handles workspace isolation                    │    │
-│  │  • Aggregates data from multiple sources          │    │
+│  │      DataExtractorAgent                            │    │
+│  │  • Tool orchestration                              │    │
+│  │  • LLM-powered query planning                     │    │
+│  │  • Parallel data extraction                       │    │
+│  │  • Workspace isolation                            │    │
 │  └────────────┬───────────────────────────────────────┘    │
 │               │                                              │
 │               ▼                                              │
 │  ┌────────────────────────────────────────────────────┐    │
-│  │         ResponseFormatterAgent                      │    │
-│  │  • Formats raw data into markdown response        │    │
-│  │  • Generates professional, structured output      │    │
-│  │  • Includes both formatted text and raw data      │    │
+│  │      ResponseFormatterAgent                        │    │
+│  │  • Markdown formatting                            │    │
+│  │  • Business analyst persona                      │    │
+│  │  • Structured output generation                   │    │
 │  └────────────┬───────────────────────────────────────┘    │
 │               │                                              │
 │               ▼                                              │
 │   Final Response (Markdown + Raw Data + Metadata)           │
-└──────────────────────────��───────────────────────────────────┘
+└──────────────────────────┬───────────────────────────────────┘
                             │
         ┌───────────────────┼───────────────────┐
         ▼                   ▼                   ▼
@@ -74,332 +110,206 @@ The **AI Analyst Service** is a production-ready, intelligent CRM query system t
 └──────────────┘    └──────────────┘    └──────────────┘
 ```
 
-### Core Components
+### Data Flow
 
-#### 1. **LangGraph Pipeline** (`graph/pipeline.py`)
-- **State Management**: Uses TypedDict for type-safe state flow
-- **Agent Orchestration**: Sequential flow through three agents
-- **Checkpointing**: Memory-based checkpointing for state persistence
-- **Nodes**: QueryOptimizer → DataExtractor → ResponseFormatter
+1. **Query Input**: User submits natural language query via REST API
+2. **Query Optimization**: QueryOptimizerAgent structures and enhances the query
+3. **Data Extraction**: DataExtractorAgent uses LLM to plan and execute tool calls
+4. **Response Formatting**: ResponseFormatterAgent formats results with business context
+5. **Response Output**: Returns formatted markdown, raw data, and execution metadata
 
-#### 2. **Agents** (`agents/`)
+## Components
 
-##### QueryOptimizerAgent (`agents/query_optimizer.py`)
-- **Status**: ✅ Fully Implemented
-- **Model Support**: Configurable per agent (OpenAI, Anthropic, Gemini)
-- **Responsibility**: 
-  - Parses natural language into structured intent
-  - Replaces relative time references with exact dates
-  - Extracts key entities (persons, companies, dates)
+### Agents
+
+The system uses three specialized AI agents orchestrated by LangGraph:
+
+#### 1. QueryOptimizerAgent (`agents/query_optimizer.py`)
+
+**Purpose**: Transforms natural language queries into structured, actionable queries.
+
+**Responsibilities**:
+- Parses user intent from natural language
+- Resolves relative time references (e.g., "last year" → "2023-01-01 to 2023-12-31")
+- Extracts entities (companies, people, dates, etc.)
   - Generates optimized query parameters
-- **Output**: Structured query object ready for data extraction
+- Normalizes ambiguous queries
 
-##### DataExtractorAgent (`agents/data_extractor.py`)
-- **Status**: ✅ Implemented
-- **Model Support**: Configurable per agent (OpenAI, Anthropic, Gemini)
-- **Responsibility**:
+**Input**: Natural language user query  
+**Output**: Structured, optimized query string
+
+#### 2. DataExtractorAgent (`agents/data_extractor.py`)
+
+**Purpose**: Orchestrates data extraction from multiple sources using specialized tools.
+
+**Responsibilities**:
   - Parses optimized queries into structured tool calls using LLM
-  - Executes database queries via tools asynchronously
+- Coordinates multiple tools for parallel data extraction
   - Handles workspace/tenant isolation
   - Applies role-based access control
   - Aggregates data from multiple sources
   - Returns tool-grouped results with metadata
 
-##### ResponseFormatterAgent (`agents/response_formatter.py`)
-- **Status**: ✅ Fully Implemented
-- **Model Support**: Configurable per agent (OpenAI, Anthropic, Gemini)
-- **Responsibility**:
+**Input**: Optimized query from QueryOptimizerAgent  
+**Output**: Extracted data grouped by tool with execution metadata
+
+#### 3. ResponseFormatterAgent (`agents/response_formatter.py`)
+
+**Purpose**: Formats raw extracted data into professional, human-readable responses.
+
+**Responsibilities**:
   - Formats raw data into professional markdown responses
-  - Generates user-friendly, structured output with headers, tables, and lists
-  - Provides both formatted markdown and raw data in response
-  - Includes metadata (processing time, data sources count, response length)
+- Applies business analyst persona for contextual insights
+- Generates structured output with headers, tables, and lists
+- Provides both formatted markdown and raw data
+- Includes metadata (processing time, data sources, response length)
   - Handles errors gracefully with fallback responses
-  - Uses LLM to craft contextual, insightful responses based on extracted data
 
-#### 3. **Tools Layer** (`tools/`)
+**Input**: Optimized query + extracted data  
+**Output**: Formatted markdown response with raw data and metadata
 
-All tools inherit from `BaseTool` and implement:
-- Workspace isolation
-- Permission checking
-- Error handling with structured responses
-- Query caching via Redis
-- Audit logging
+### Tools
 
-##### Available Tools
+Tools are specialized data access components that abstract database operations. All tools inherit from `BaseTool` and implement workspace isolation, permission checking, error handling, query caching, and audit logging.
 
-| Tool | File | Status | Operations |
-|------|------|--------|------------|
-| **CompanyTool** | `tools/company_tool.py` | ✅ Implemented | Search, GetById, List, Create, Update, Analytics |
-| **EmailTool** | `tools/emails_tool.py` | ✅ Implemented | Search, GetById, List, Analytics |
-| **PeopleTool** | `tools/people_tool.py` | ✅ Implemented | Search, GetById, List, Analytics |
-| **WorkspaceTool** | `tools/workspace_tool.py` | ✅ Implemented | GetById, List |
-| **InteractionTool** | `tools/interaction_tool.py` | 🚧 Placeholder | - |
-| **GroupTool** | `tools/group_tool.py` | 🚧 Placeholder | - |
+#### Available Tools
 
-##### BaseTool (`tools/base_tool.py`)
-- Abstract base class for all tools
-- Provides caching, error handling, logging
-- Standardized `ToolResult` format
-- Query type enumeration (SEARCH, GET_BY_ID, LIST, CREATE, UPDATE, DELETE, ANALYTICS)
+| Tool | Module | Supported Operations | Description |
+|------|--------|---------------------|-------------|
+| **CompanyTool** | `tools/company_tool.py` | Search, GetById, List, Analytics | Company data operations including search, retrieval, and analytics |
+| **PeopleTool** | `tools/people_tool.py` | Search, GetById, List, Analytics | People/contact management operations |
+| **EmailTool** | `tools/emails_tool.py` | Search, GetById, List, Analytics | Email data retrieval and search operations |
+| **WorkspaceTool** | `tools/workspace_tool.py` | GetById, List | Workspace information retrieval |
+| **InteractionTool** | `tools/interaction_tool.py` | Search, GetById, List | CRM interaction tracking operations |
+| **GroupTool** | `tools/group_tool.py` | Search, GetById, List | Contact group management operations |
 
-##### ToolFactory (`tools/tool_factory.py`)
-- Factory pattern for creating tool instances
-- Tool registry for dynamic tool discovery
-- Tool metadata and capabilities introspection
+#### Tool Operations
 
-#### 3. **LLM Provider Adapters** (`adapters/`)
+All tools support the following query types (defined in `QueryType` enum):
 
-Pluggable architecture supporting multiple LLM providers:
+- **SEARCH**: Search operations with filters and parameters
+- **GET_BY_ID**: Retrieve specific records by ID
+- **LIST**: Paginated listing operations
+- **ANALYTICS**: Aggregated analytics and reporting operations
 
-| Provider | File | Status | Models Supported |
-|----------|------|--------|------------------|
-| **OpenAI** | `adapters/llm_providers/openai_provider.py` | ✅ Implemented | GPT-3.5, GPT-4, GPT-4 Turbo |
-| **Anthropic** | `adapters/llm_providers/anthropic_provider.py` | ✅ Implemented | Claude Opus, Sonnet, Haiku |
-| **Gemini** | `adapters/llm_providers/gemini_provider.py` | ✅ Implemented | Gemini Pro, Gemini Ultra |
+#### BaseTool Features
 
-**Features**:
-- Unified interface via `LLMProvider` abstract class
-- Per-agent provider configuration
-- Factory pattern for provider creation
-- Consistent error handling and logging
+- **Workspace Isolation**: Automatic workspace/tenant data separation
+- **Permission Checking**: Role-based access control validation
+- **Query Caching**: Redis-powered result caching (5-minute default TTL)
+- **Error Handling**: Structured error responses with execution metadata
+- **Audit Logging**: Comprehensive operation logging
 
-#### 4. **Database Clients** (`database/`)
+#### ToolFactory (`tools/tool_factory.py`)
 
-| Client | File | Purpose | Status |
-|--------|------|----------|--------|
-| **PrismaClient** | `database/prisma_client.py` | PostgreSQL connection management | ✅ Implemented |
-| **DynamoDBClient** | `database/dynamodb_client.py` | DynamoDB for email sync data | ✅ Implemented |
-| **RedisClient** | `database/redis_client.py` | Caching and configuration storage | ✅ Implemented |
+Factory pattern implementation for tool creation and management:
 
-#### 5. **Configuration** (`config/`)
+- Dynamic tool instance creation
+- Tool registry for discovery
+- Tool metadata introspection
+- Runtime tool registration/unregistration
 
-- **Settings** (`config/settings.py`): 
-  - Per-agent LLM configuration
-  - Environment variable management
-  - Query optimization templates
-  - Date context generation
+### LLM Provider Adapters
 
-- **Prompts** (`prompts/`):
-  - Query optimizer prompt templates
-  - Modular prompt system
+Pluggable architecture supporting multiple LLM providers with a unified interface.
 
-#### 6. **FastAPI REST API** (`api/`)
+#### Supported Providers
 
-Production-ready REST API with comprehensive error handling and validation.
+| Provider | Module | Models Supported |
+|----------|--------|------------------|
+| **OpenAI** | `adapters/llm_providers/openai_provider.py` | GPT-3.5, GPT-4, GPT-4 Turbo |
+| **Anthropic** | `adapters/llm_providers/anthropic_provider.py` | Claude Opus, Claude Sonnet, Claude Haiku |
+| **Gemini** | `adapters/llm_providers/gemini_provider.py` | Gemini Pro, Gemini Ultra |
 
-**Endpoints:**
+#### Features
+
+- **Unified Interface**: `LLMProvider` abstract base class
+- **Per-Agent Configuration**: Different models for different agents
+- **Factory Pattern**: `LLMProviderFactory` for dynamic provider creation
+- **Consistent Error Handling**: Standardized error responses across providers
+
+### Database Clients
+
+Multi-database architecture with specialized clients:
+
+#### PrismaClient (`database/prisma_client.py`)
+
+- **Database**: PostgreSQL
+- **Purpose**: Primary CRM data store
+- **Features**: Type-safe ORM, connection pooling, transaction support
+
+#### DynamoDBClient (`database/dynamodb_client.py`)
+
+- **Database**: AWS DynamoDB
+- **Purpose**: Email sync data and high-throughput operations
+- **Features**: AWS SDK integration, batch operations
+
+#### RedisClient (`database/redis_client.py`)
+
+- **Database**: Redis
+- **Purpose**: Query result caching and configuration storage
+- **Features**: TTL-based caching, connection pooling
+
+### Configuration System
+
+#### Settings (`config/settings.py`)
+
+- Per-agent LLM configuration
+- Environment variable management
+- Query optimization templates
+- Date context generation
+
+#### LLM Configuration
+
+Supports both global and per-agent LLM configuration:
+
+- **Global Configuration**: Single provider/model for all agents
+- **Per-Agent Configuration**: Different models for optimizer, extractor, and formatter
+- **Environment-Based**: Configuration via environment variables
+
+### REST API (`api/`)
+
+Production-ready FastAPI REST API with comprehensive features.
+
+#### Endpoints
 
 | Endpoint | Method | Description | Auth Required |
 |----------|--------|-------------|---------------|
-| `/api/v1/query` | POST | Process natural language query | Yes (JWT) |
+| `/api/v1/query` | POST | Process natural language query | Yes (Headers) |
 | `/health` | GET | Basic health check | No |
 | `/ready` | GET | Readiness check with service status | No |
+| `/admin` | GET | Admin panel interface | No |
+| `/docs` | GET | Interactive API documentation (Swagger) | No |
 
-**Request/Response Schemas** (`api/v1/schemas.py`):
-- `QueryRequest`: Validates query (1-2000 chars), workspace_id, user_id
-- `QueryResponse`: Success flag, query, result data, execution_time_ms
-- `HealthResponse`: Status and timestamp
-- `ReadyResponse`: Overall status and service health checks
+#### Authentication
 
-**Features:**
-- **Header-based Authentication**: Simplified auth using `X-Workspace-ID` and `X-User-ID` headers (JWT auth commented out for development)
-- **Request Validation**: Pydantic schemas with detailed error messages
-- **Error Handling**: Structured error responses with codes and details
-- **CORS Support**: Configurable cross-origin requests
-- **Logging**: Comprehensive request/response logging with request IDs
-- **Lifespan Management**: Startup/shutdown hooks for resource management
+Currently uses header-based authentication:
+- `X-Workspace-ID`: Workspace identifier
+- `X-User-ID`: User identifier
 
-**Example Query Request:**
-```bash
-curl -X POST "http://localhost:8000/api/v1/query" \
-  -H "Content-Type: application/json" \
-  -H "X-Workspace-ID: ws-123" \
-  -H "X-User-ID: user-456" \
-  -d '{
-    "query": "Show me companies with closed deals from last year"
-  }'
-```
+JWT authentication with AWS Cognito is available but commented out for development.
 
-**Note**: See [API_USAGE.md](API_USAGE.md) for comprehensive API documentation and examples.
+#### Request/Response Schemas
 
-**Example Response:**
-```json
-{
-  "success": true,
-  "query": "Show me companies with closed deals from last year",
-  "result": {
-    "companies": [...],
-    "count": 42,
-    "metadata": {...}
-  },
-  "execution_time_ms": 1250,
-  "workspace_id": "ws-123",
-  "user_id": "user-456"
-}
-```
+- **QueryRequest**: Validates query (1-2000 chars), workspace_id, user_id
+- **QueryResponse**: Success flag, query, result data, execution_time_ms
+- **HealthResponse**: Status and timestamp
+- **ReadyResponse**: Overall status and service health checks
 
-## 📁 Project Structure
-
-```
-analyst-ai/
-├── adapters/                    # LLM Provider Adapters
-│   ├── __init__.py
-│   ├── llm_provider.py         # Abstract base class
-│   ├── provider_factory.py     # Factory for creating providers
-│   └── llm_providers/
-│       ├── __init__.py
-│       ├── openai_provider.py
-│       ├── anthropic_provider.py
-│       └── gemini_provider.py
-│
-├── agents/                      # Agent Implementations
-│   ├── __init__.py
-│   ├── query_optimizer.py      # ✅ Fully implemented
-│   ├── data_extractor.py       # ✅ Implemented
-│   └── response_formatter.py   # ✅ Basic implementation
-│
-├── tools/                       # Data Extraction Tools
-│   ├── __init__.py
-│   ├── base_tool.py            # ✅ Base class with caching
-│   ├── tool_factory.py         # ✅ Tool factory
-│   ├── company_tool.py         # ✅ Implemented
-│   ├── emails_tool.py          # ✅ Implemented
-│   ├── people_tool.py          # ✅ Implemented
-│   ├── workspace_tool.py        # ✅ Implemented
-│   ├── interaction_tool.py      # 🚧 Placeholder
-│   ├── group_tool.py           # 🚧 Placeholder
-│   └── companies_tool.py       # Legacy (use company_tool.py)
-│
-├── api/                         # FastAPI REST API
-│   ├── __init__.py
-│   ├── dependencies.py          # ✅ Dependency injection
-│   ├── v1/
-│   │   ├── __init__.py
-│   │   ├── query.py            # ✅ Query endpoint
-│   │   ├── health.py           # ✅ Health endpoints
-│   │   └── schemas.py          # ✅ Pydantic schemas
-│   └── auth/
-│       ├── __init__.py
-│       └── cognito.py          # ✅ JWT validation
-│
-├── graph/                       # LangGraph Pipeline
-│   ├── __init__.py
-│   └── pipeline.py             # ✅ Main pipeline orchestration
-│
-├── database/                     # Database Clients
-│   ├── __init__.py
-│   ├── prisma_client.py        # ✅ PostgreSQL client
-│   ├── dynamodb_client.py      # ✅ DynamoDB client
-│   └── redis_client.py        # ✅ Redis client
-│
-├── config/                       # Configuration
-│   ├── __init__.py
-│   └── settings.py             # ✅ App settings & LLM config
-│
-├── prompts/                      # Prompt Templates
-│   ├── __init__.py
-│   └── query_optimizer_prompt.py  # ✅ Query optimization prompts
-│
-├── scripts/                      # Utility Scripts
-│   └── health_check.py          # ✅ System health check
-│
-├── models/                       # Data Models
-│   └── __init__.py
-│
-├── utils/                        # Utility Functions
-│   └── __init__.py
-│
-├── tests/                        # Test Suite
-│   ├── __init__.py
-���   ├── test_query_optimizer.py
-│   └── test_pipeline_integration.py
-│
-├── docs/                         # Documentation
-│   ├── AI_ANALYST_SERVICE_ROADMAP.md
-│   ├── TOOLS_ARCHITECTURE_PLAN.md
-│   ├── TOOLS_IMPLEMENTATION.md
-│   ├── adapter-architecture.md
-│   └── schema documentation files
-│
-├── examples/                     # Example Usage
-│   └── tool_usage_example.py
-│
-├── main.py                       # Entry point
-├── requirements.txt              # Dependencies
-└── README.md                     # This file
-```
-
-## 🚀 Quick Start
+## Installation
 
 ### Prerequisites
 
 - Python 3.11+
-- PostgreSQL database (with Prisma schema)
-- DynamoDB table (`EmailSync`) - Optional
-- Redis instance - Optional but recommended
+- PostgreSQL database (with Prisma schema applied)
+- Redis instance (optional but recommended)
 - API keys for at least one LLM provider:
   - OpenAI API key (for GPT models)
   - Anthropic API key (for Claude models)
   - Google API key (for Gemini models)
+- DynamoDB table (`EmailSync`) - Optional
 
-### 🐳 Quick Start with Docker (Recommended)
-
-The easiest way to run the application with all dependencies:
-
-```bash
-# 1. Clone the repository
-git clone <repository-url>
-cd analyst-ai
-
-# 2. Configure environment
-cp .env.example .env
-# Edit .env with your API keys (DATABASE_URL will be set by docker-compose)
-
-# 3. Start all services (PostgreSQL, Redis, and the app)
-docker-compose up -d
-
-# 4. Check service health
-docker-compose logs -f app
-
-# 5. Test the API
-curl http://localhost:8000/health
-# Visit http://localhost:8000/docs for interactive API documentation
-
-# 6. Stop all services
-docker-compose down
-```
-
-**What Docker Compose provides:**
-- PostgreSQL database (port 5432)
-- Redis cache (port 6379)
-- FastAPI application (port 8000)
-- Automatic service orchestration and health checks
-- Persistent data volumes
-
-### 🚀 Quick Start (Local Python Installation)
-
-```bash
-# 1. Clone and install
-git clone <repository-url>
-cd analyst-ai
-pip install -r requirements.txt
-
-# 2. Configure environment
-cp .env.example .env
-# Edit .env with your API keys and database URLs
-
-# 3. Verify setup
-python scripts/health_check.py
-
-# 4. Start the server
-python main.py
-
-# 5. Test the API
-curl http://localhost:8000/health
-# Visit http://localhost:8000/docs for interactive API documentation
-```
-
-### Installation
+### Local Installation
 
 ```bash
 # Clone the repository
@@ -409,137 +319,85 @@ cd analyst-ai
 # Install dependencies
 pip install -r requirements.txt
 
-# Setup environment variables
+# Generate Prisma client
+python -m prisma generate
+
+# Configure environment
 cp .env.example .env
-# Edit .env with your configuration
+# Edit .env with your API keys and database URLs
+
+# Verify setup
+python scripts/health_check.py
+
+# Start the server
+python main.py
 ```
 
-### Configuration
+The server will start on `http://localhost:8000` with API documentation available at `http://localhost:8000/docs`.
 
-#### Environment Variables
+## Docker Deployment
+
+### Quick Start with Docker Compose
+
+The easiest way to run the application with all dependencies:
+
+```bash
+# 1. Clone the repository
+git clone <repository-url>
+cd analyst-ai
+
+# 2. Create environment file
+cp .env.example .env
+# Edit .env with your API keys (DATABASE_URL will be set by docker-compose)
+
+# 3. Start all services (Redis and the app)
+docker-compose up -d
+
+# 4. Check service health
+docker-compose logs -f app
+
+# 5. Test the API
+curl http://localhost:8000/health
+
+# 6. Access API documentation
+# Visit http://localhost:8000/docs for interactive API documentation
+
+# 7. Stop all services
+docker-compose down
+```
+
+### Docker Compose Services
+
+The `docker-compose.yml` includes:
+
+1. **Redis Service**
+   - Image: `redis:7-alpine`
+   - Port: `6380` (external) → `6379` (container)
+   - Volume: `redis_data` (persistent)
+   - Health checks enabled
+   - AOF persistence enabled
+
+2. **FastAPI Application**
+   - Built from local `Dockerfile`
+   - Port: `8000`
+   - Auto-connects to Redis
+   - Health checks enabled
+   - Hot-reload enabled for development (volume mount)
+   - Prisma client generated during build
+
+### Docker Compose Environment Variables
 
 Create a `.env` file in the project root:
 
-**Basic Configuration (all agents use same provider):**
 ```bash
-# Global provider and model
-GLOBAL_LLM_PROVIDER=openai
-GLOBAL_LLM_MODEL=gpt-4
-
-# Provider API key (choose the one matching your provider)
-OPENAI_API_KEY=REDACTED
-# ANTHROPIC_API_KEY=sk-ant-your-api-key
-# GOOGLE_API_KEY=your-google-api-key
-```
-
-**Advanced Configuration (per-agent configuration):**
-```bash
-# QueryOptimizerAgent - Use OpenAI GPT-4
-QUERY_OPTIMIZER_PROVIDER=openai
-QUERY_OPTIMIZER_MODEL=gpt-4
-QUERY_OPTIMIZER_API_KEY=sk-your-openai-key
-
-# DataExtractorAgent - Use Anthropic Claude
-DATA_EXTRACTOR_PROVIDER=anthropic
-DATA_EXTRACTOR_MODEL=claude-3-opus-20240229
-ANTHROPIC_API_KEY=sk-ant-your-key
-
-# Or use Google Gemini
-# DATA_EXTRACTOR_PROVIDER=gemini
-# DATA_EXTRACTOR_MODEL=gemini-pro
-# GOOGLE_API_KEY=your-google-api-key
-
-# ResponseFormatterAgent - Use cheaper model
-RESPONSE_FORMATTER_PROVIDER=openai
-RESPONSE_FORMATTER_MODEL=gpt-3.5-turbo
-```
-
-**Database Configuration:**
-```bash
-# PostgreSQL (Prisma automatically reads DATABASE_URL)
-DATABASE_URL=postgresql://user:password@localhost:5432/dbname
-
-# DynamoDB (uses AWS credentials from ~/.aws/credentials or environment)
-AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=REDACTED
-AWS_SECRET_ACCESS_KEY=REDACTED
-
-# Redis
-REDIS_HOST=localhost
-REDIS_PORT=6379
+# Redis Configuration
 REDIS_DB=0
-```
+REDIS_EXTERNAL_PORT=6380
 
-## 🐳 Docker Deployment
-
-### Docker Compose (Recommended)
-
-The easiest way to deploy the application with all its dependencies:
-
-```bash
-# Start all services in detached mode
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# View logs for specific service
-docker-compose logs -f app
-docker-compose logs -f postgres
-docker-compose logs -f redis
-
-# Check service status
-docker-compose ps
-
-# Stop all services
-docker-compose down
-
-# Stop and remove volumes (WARNING: deletes all data)
-docker-compose down -v
-```
-
-### Docker Compose Configuration
-
-The [docker-compose.yml](docker-compose.yml) includes:
-
-1. **PostgreSQL Service**
-   - Image: postgres:15-alpine
-   - Port: 5432
-   - Volume: postgres_data (persistent)
-   - Health checks enabled
-
-2. **Redis Service**
-   - Image: redis:7-alpine
-   - Port: 6379
-   - Volume: redis_data (persistent)
-   - AOF persistence enabled
-
-3. **FastAPI Application**
-   - Built from local Dockerfile
-   - Port: 8000
-   - Auto-connects to PostgreSQL and Redis
-   - Health checks enabled
-   - Hot-reload enabled for development
-
-### Environment Variables for Docker
-
-Create a `.env` file in the project root with these variables:
-
-```bash
-# Database credentials (used by docker-compose)
-POSTGRES_USER=analyst_user
-POSTGRES_PASSWORD=analyst_password
-POSTGRES_DB=analyst_ai
-POSTGRES_PORT=5432
-
-# Redis configuration
-REDIS_PORT=6379
-REDIS_DB=0
-
-# Application port
+# Application Port
 APP_PORT=8000
 
-# LLM Provider API Keys (REQUIRED)
+# LLM Provider API Keys (REQUIRED - at least one)
 OPENAI_API_KEY=REDACTED
 OPENAI_API_KEY=REDACTED
 GOOGLE_API_KEY=your-google-api-key
@@ -548,19 +406,45 @@ GOOGLE_API_KEY=your-google-api-key
 GLOBAL_LLM_PROVIDER=openai
 GLOBAL_LLM_MODEL=gpt-4
 
-# AWS Configuration (Optional)
+# Per-Agent Configuration (optional - overrides global)
+QUERY_OPTIMIZER_PROVIDER=openai
+QUERY_OPTIMIZER_MODEL=gpt-4
+DATA_EXTRACTOR_PROVIDER=anthropic
+DATA_EXTRACTOR_MODEL=claude-3-opus-20240229
+RESPONSE_FORMATTER_PROVIDER=openai
+RESPONSE_FORMATTER_MODEL=gpt-3.5-turbo
+
+# AWS Configuration (Optional - for DynamoDB)
 AWS_REGION=us-east-1
 AWS_ACCESS_KEY_ID=REDACTED
 AWS_SECRET_ACCESS_KEY=REDACTED
 AWS_COGNITO_USER_POOL_ID=your-pool-id
 
+# Database Configuration
+# Note: DATABASE_URL is set in docker-compose.yml to connect to host PostgreSQL
+# For Docker-based PostgreSQL, uncomment the postgres service in docker-compose.yml
+
 # Application Configuration
 LOG_LEVEL=INFO
 ```
 
-### Building and Running with Docker Standalone
+### Production Deployment
 
-If you prefer to run just the application container:
+For production, use the production override file:
+
+```bash
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+The production configuration includes:
+- Resource limits and reservations
+- Removed hot-reload volume
+- Production-grade logging levels
+- Optimized PostgreSQL and Redis settings
+
+### Standalone Docker
+
+To build and run just the application container:
 
 ```bash
 # Build the Docker image
@@ -576,176 +460,225 @@ docker run -d \
 
 # View logs
 docker logs -f analyst-ai-app
-
-# Stop the container
-docker stop analyst-ai-app
-
-# Remove the container
-docker rm analyst-ai-app
 ```
 
-### Production Docker Configuration
+## Configuration
 
-For production deployments, consider these modifications:
+### Environment Variables
 
-1. **Remove hot-reload volume mount** in docker-compose.yml:
-```yaml
-# Comment out this line in the app service:
-# - .:/app
-```
+#### Basic Configuration (Global LLM)
 
-2. **Use production-grade PostgreSQL**:
-   - Set strong passwords
-   - Configure connection pooling
-   - Set up backups
-
-3. **Add resource limits**:
-```yaml
-services:
-  app:
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 4G
-        reservations:
-          cpus: '1'
-          memory: 2G
-```
-
-4. **Use secrets management**:
-   - Use Docker secrets or environment secret managers
-   - Never commit `.env` file to version control
-
-5. **Set up reverse proxy**:
-   - Use Nginx or Traefik for SSL/TLS termination
-   - Configure rate limiting and load balancing
-
-### Kubernetes Deployment
-
-For Kubernetes deployments, you'll need:
-
-1. **ConfigMap** for non-sensitive configuration
-2. **Secret** for API keys and passwords
-3. **Deployment** for the application
-4. **Service** to expose the application
-5. **PersistentVolumeClaim** for PostgreSQL and Redis
-6. **Ingress** for external access
-
-Example Kubernetes deployment structure:
-```
-k8s/
-├── configmap.yaml
-├── secrets.yaml
-├── deployment.yaml
-├── service.yaml
-├── postgres-statefulset.yaml
-├── redis-statefulset.yaml
-└── ingress.yaml
-```
-
-### Running the Application
-
-#### Option 1: FastAPI Server Mode (Recommended for Production)
+All agents use the same provider and model:
 
 ```bash
-# Start the FastAPI server
-python main.py
-
-# Server will start on http://localhost:8000
-# API documentation available at http://localhost:8000/docs
-# Alternative docs at http://localhost:8000/redoc
+GLOBAL_LLM_PROVIDER=openai
+GLOBAL_LLM_MODEL=gpt-4
+OPENAI_API_KEY=REDACTED
 ```
 
-The FastAPI server provides:
-- RESTful API endpoints with JWT authentication
-- Interactive API documentation (Swagger UI)
-- Health check endpoints
-- Structured error handling
-- Request/response validation
+#### Advanced Configuration (Per-Agent)
 
-**Testing the API:**
+Use different models for different agents:
+
 ```bash
-# Health check (no auth required)
-curl http://localhost:8000/health
+# QueryOptimizerAgent - Use OpenAI GPT-4
+QUERY_OPTIMIZER_PROVIDER=openai
+QUERY_OPTIMIZER_MODEL=gpt-4
+OPENAI_API_KEY=REDACTED
 
-# Readiness check (no auth required)
-curl http://localhost:8000/ready
+# DataExtractorAgent - Use Anthropic Claude
+DATA_EXTRACTOR_PROVIDER=anthropic
+DATA_EXTRACTOR_MODEL=claude-3-opus-20240229
+ANTHROPIC_API_KEY=sk-ant-your-key
 
-# Process a query (header-based auth)
+# ResponseFormatterAgent - Use cheaper model
+RESPONSE_FORMATTER_PROVIDER=openai
+RESPONSE_FORMATTER_MODEL=gpt-3.5-turbo
+```
+
+#### Database Configuration
+
+```bash
+# PostgreSQL (Prisma automatically reads DATABASE_URL)
+DATABASE_URL=postgresql://user:password@localhost:5432/dbname
+
+# DynamoDB (uses AWS credentials from ~/.aws/credentials or environment)
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=REDACTED
+AWS_SECRET_ACCESS_KEY=REDACTED
+
+# Redis
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_DB=0
+```
+
+## Usage
+
+### API Usage
+
+#### Process a Query
+
+```bash
 curl -X POST "http://localhost:8000/api/v1/query" \
   -H "Content-Type: application/json" \
   -H "X-Workspace-ID: ws-123" \
   -H "X-User-ID: user-456" \
   -d '{
-    "query": "Show me companies with closed deals"
+    "query": "Show me companies with closed deals from last year"
   }'
 ```
 
-**For detailed API usage, examples in multiple languages, and more, see [API_USAGE.md](API_USAGE.md)**
+#### Example Response
 
-#### Option 2: CLI Mode (For Testing and Development)
-
-```bash
-# Run with example queries
-python main.py cli
-
-# Interactive mode (uncomment in main.py)
-# python main.py cli  # then uncomment interactive_mode() call
+```json
+{
+  "success": true,
+  "query": "Show me companies with closed deals from last year",
+  "result": {
+    "formatted_response": "# Companies with Closed Deals in 2023\n\n...",
+    "raw_data": {
+      "companies": [...],
+      "metadata": {...}
+    },
+    "execution_metadata": {
+      "processing_time_ms": 1250,
+      "data_sources_count": 1,
+      "response_length": 1234
+    }
+  },
+  "execution_time_ms": 1250,
+  "workspace_id": "ws-123",
+  "user_id": "user-456"
+}
 ```
 
-CLI mode allows you to:
-- Test queries directly from command line
-- Debug the pipeline without API overhead
-- Run batch query examples
-- Interactive query mode for experimentation
+### CLI Mode (Development)
 
-### Example Query Flow
+For testing and development:
 
-**Input:** "With how many companies we have closed deal previous year?"
+```bash
+python main.py cli
+```
 
-**Pipeline Flow:**
-1. **QueryOptimizerAgent**: Converts to "The user is asking you to fetch and analyze all closed deals from 2023 and return structured information"
-2. **DataExtractorAgent**: Uses CompanyTool to query database for companies with closed deals in 2023
-3. **ResponseFormatterAgent**: Formats results into JSON response
+This runs example queries without the API layer.
 
-**Output:** JSON formatted response with extracted data from CRM databases.
+## API Documentation
 
-## 🛠️ Development
+Interactive API documentation is available at:
 
-### Current Implementation Status
+- **Swagger UI**: `http://localhost:8000/docs`
+- **ReDoc**: `http://localhost:8000/redoc`
 
-#### ✅ Completed Components
-- [x] LangGraph pipeline framework with state management
-- [x] QueryOptimizerAgent (fully implemented with LLM integration)
-- [x] DataExtractorAgent (LLM-powered tool orchestration)
-- [x] ResponseFormatterAgent (basic implementation)
-- [x] BaseTool with caching and error handling
-- [x] CompanyTool, EmailTool, PeopleTool, WorkspaceTool
-- [x] LLM provider adapters (OpenAI, Anthropic, Gemini)
-- [x] Provider factory for dynamic LLM selection
-- [x] Database clients (Prisma, DynamoDB, Redis)
-- [x] Configuration system with per-agent LLM config
-- [x] Tool factory pattern with registry
-- [x] FastAPI REST API with JWT authentication
-- [x] Query endpoint with request validation
-- [x] Health check endpoints
-- [x] Pydantic schemas for request/response validation
-- [x] Error handling and logging
-- [x] CORS middleware configuration
-- [x] Testing framework setup
-- [x] Health check script
+The API automatically generates OpenAPI schemas from FastAPI route definitions.
 
-#### 🚧 In Progress / Needs Implementation
-- [ ] InteractionTool implementation
-- [ ] GroupTool implementation
-- [ ] Enhanced ResponseFormatter with business logic
-- [ ] Workspace isolation validation (RBAC)
-- [ ] Comprehensive integration tests
-- [ ] Performance optimization and caching strategies
-- [ ] API rate limiting and throttling
-- [ ] Detailed API documentation
-- [ ] Deployment configuration (Docker, K8s)
+## Project Structure
+
+```
+analyst-ai/
+├── adapters/                    # LLM Provider Adapters
+│   ├── __init__.py
+│   ├── llm_provider.py         # Abstract base class
+│   ├── provider_factory.py     # Factory for creating providers
+│   └── llm_providers/
+│       ├── __init__.py
+│       ├── openai_provider.py
+│       ├── anthropic_provider.py
+│       └── gemini_provider.py
+│
+├── agents/                      # Agent Implementations
+│   ├── __init__.py
+│   ├── query_optimizer.py      # Query optimization agent
+│   ├── data_extractor.py       # Data extraction agent
+│   └── response_formatter.py   # Response formatting agent
+│
+├── tools/                       # Data Extraction Tools
+│   ├── __init__.py
+│   ├── base_tool.py            # Base class with caching
+│   ├── tool_factory.py         # Tool factory
+│   ├── company_tool.py         # Company operations
+│   ├── emails_tool.py          # Email operations
+│   ├── people_tool.py          # People/contact operations
+│   ├── workspace_tool.py        # Workspace operations
+│   ├── interaction_tool.py     # Interaction tracking
+│   └── group_tool.py           # Group management
+│
+├── api/                         # FastAPI REST API
+│   ├── __init__.py
+│   ├── dependencies.py         # Dependency injection
+│   ├── auth/
+│   │   ├── __init__.py
+│   │   └── cognito.py          # JWT validation
+│   └── v1/
+│       ├── __init__.py
+│       ├── query.py            # Query endpoint
+│       ├── health.py           # Health endpoints
+│       ├── admin.py            # Admin endpoints
+│       └── schemas.py          # Pydantic schemas
+│
+├── graph/                       # LangGraph Pipeline
+│   ├── __init__.py
+│   └── pipeline.py             # Main pipeline orchestration
+│
+├── database/                     # Database Clients
+│   ├── __init__.py
+│   ├── prisma_client.py        # PostgreSQL client
+│   ├── dynamodb_client.py      # DynamoDB client
+│   └── redis_client.py         # Redis client
+│
+├── config/                       # Configuration
+│   ├── __init__.py
+│   ├── settings.py             # App settings & LLM config
+│   └── models/
+│       ├── __init__.py
+│       └── llm_config.py      # LLM configuration models
+│
+├── prompts/                      # Prompt Templates
+│   ├── __init__.py
+│   ├── business_analyst_persona.py
+│   ├── query_optimizer_prompt.py
+│   ├── data_extractor_prompt.py
+│   └── response_formatter_prompt.py
+│
+├── scripts/                      # Utility Scripts
+│   ├── health_check.py          # System health check
+│   └── seed_llm_config.py      # LLM config seeding
+│
+├── tests/                        # Test Suite
+│   ├── __init__.py
+│   └── test_pipeline_integration.py
+│
+├── docs/                         # Documentation
+│   ├── archive/
+│   └── schemas/                 # Schema documentation
+│
+├── static/                       # Static Files
+│   └── admin.html               # Admin panel
+│
+├── main.py                       # Entry point
+├── requirements.txt              # Dependencies
+├── Dockerfile                    # Docker image definition
+├── docker-compose.yml            # Docker Compose configuration
+└── README.md                     # This file
+```
+
+## Technology Stack
+
+| Component | Technology | Purpose |
+|-----------|-----------|---------|
+| **Runtime** | Python 3.11+ | Backend language |
+| **Web Framework** | FastAPI | REST API with async support |
+| **Server** | Uvicorn | ASGI server for FastAPI |
+| **AI Orchestration** | LangGraph | Agent workflows & state management |
+| **LLM Providers** | OpenAI, Anthropic, Gemini | Multi-provider AI model access |
+| **Database (SQL)** | PostgreSQL + Prisma ORM | Primary CRM data store |
+| **Database (NoSQL)** | DynamoDB (AWS) | Email sync data |
+| **Cache** | Redis | Query caching & configuration |
+| **Data Validation** | Pydantic v2 | Request/response validation |
+| **Authentication** | JWT + AWS Cognito | Token-based auth |
+| **API Documentation** | OpenAPI (Swagger) | Auto-generated API docs |
+
+## Development
 
 ### Adding a New Tool
 
@@ -807,149 +740,42 @@ _providers = {
 }
 ```
 
-## 🧪 Testing
+### Development Guidelines
 
-### Quick Start Testing
-
-For beginners, start with the comprehensive testing guide:
-
-```bash
-# Run health check first
-python scripts/health_check.py
-
-# Then follow the step-by-step guide
-# See: docs/TESTING_GUIDE.md
-```
-
-### Run Unit Tests
-
-```bash
-# Test QueryOptimizerAgent
-python tests/test_query_optimizer.py
-
-# Test Pipeline Integration
-python tests/test_pipeline_integration.py
-```
-
-### Run All Tests
-
-```bash
-# Run unit tests
-python tests/test_query_optimizer.py
-
-# Run integration tests
-python tests/test_pipeline_integration.py
-```
-
-### Testing Documentation
-
-- **[Complete Testing Guide](docs/TESTING_GUIDE.md)** - Detailed step-by-step testing instructions for beginners
-- **[Quick Start Guide](docs/QUICK_START.md)** - 5-minute quick start guide
-- **[Health Check Script](scripts/health_check.py)** - Automated system health verification
-
-## 📊 Technology Stack
-
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| **Runtime** | Python 3.11+ | Backend language |
-| **Web Framework** | FastAPI | REST API with async support |
-| **Server** | Uvicorn | ASGI server for FastAPI |
-| **AI Orchestration** | LangGraph | Agent workflows & state management |
-| **LLM Providers** | OpenAI, Anthropic, Gemini | Multi-provider AI model access |
-| **Database (SQL)** | PostgreSQL + Prisma ORM | Primary CRM data store |
-| **Database (NoSQL)** | DynamoDB (AWS) | Email sync data |
-| **Cache** | Redis | Query caching & configuration |
-| **Data Validation** | Pydantic v2 | Request/response validation |
-| **Authentication** | JWT + AWS Cognito | Token-based auth |
-| **API Documentation** | OpenAPI (Swagger) | Auto-generated API docs |
-
-## 📚 Documentation
-
-### Getting Started
-- **[Testing Guide](docs/TESTING_GUIDE.md)** - Complete step-by-step testing instructions for beginners
-- **[Quick Start](docs/QUICK_START.md)** - 5-minute quick start guide
-
-### Architecture & Implementation
-- **[Technical Roadmap](docs/AI_ANALYST_SERVICE_ROADMAP.md)** - Complete implementation guide
-- **[Tools Architecture](docs/TOOLS_ARCHITECTURE_PLAN.md)** - Tool design patterns
-- **[Tools Implementation](docs/TOOLS_IMPLEMENTATION.md)** - Tool implementation guide
-- **[Adapter Architecture](docs/adapter-architecture.md)** - LLM provider adapter design
-- **[Schema Documentation](docs/)** - Database schema documentation (company, people, email, etc.)
-
-## 🔧 Key Features
-
-### 1. Multi-Provider LLM Support
-- **Unified Interface**: Single API for OpenAI, Anthropic, and Google Gemini
-- **Per-Agent Configuration**: Different models for different pipeline stages
-- **Cost Optimization**: Use cheaper models where appropriate
-- **Easy Extension**: Add new providers via factory pattern
-- **Fallback Support**: Graceful degradation if primary provider fails
-
-### 2. Production-Ready REST API
-- **FastAPI Framework**: High-performance async API
-- **JWT Authentication**: Secure AWS Cognito integration
-- **Request Validation**: Comprehensive Pydantic schemas
-- **Error Handling**: Structured error responses with codes
-- **API Documentation**: Auto-generated OpenAPI/Swagger docs
-- **Health Checks**: Liveness and readiness endpoints
-- **CORS Support**: Configurable cross-origin requests
-- **Request Tracing**: UUID-based request tracking
-
-### 3. Flexible Tool System
-- **Factory Pattern**: Dynamic tool creation and registration
-- **Standardized Interface**: Consistent API across all tools
-- **Built-in Caching**: Redis-powered query result caching
-- **Workspace Isolation**: Multi-tenant data separation
-- **Async Execution**: Non-blocking tool operations
-- **Error Recovery**: Graceful handling of tool failures
-
-### 4. Intelligent Agent Pipeline
-- **LangGraph Orchestration**: State-based workflow management
-- **Type-Safe State**: TypedDict for compile-time safety
-- **Checkpointing**: State persistence for recovery
-- **Sequential Flow**: Ordered agent execution
-- **Context Preservation**: State flows through all agents
-- **Error Recovery**: Graceful degradation on failures
-
-### 5. Multi-Database Architecture
-- **PostgreSQL**: Primary CRM data via Prisma ORM
-- **DynamoDB**: Email sync data with AWS integration
-- **Redis**: Query caching and configuration storage
-- **Connection Pooling**: Efficient resource management
-- **Health Monitoring**: Database connectivity checks
-- **Transaction Support**: ACID compliance where needed
-
-## 🤝 Contributing
-
-This project follows the implementation phases outlined in the [technical roadmap](docs/AI_ANALYST_SERVICE_ROADMAP.md).
-
-**Current Development Focus:**
-- Enhancing ResponseFormatterAgent with advanced formatting logic
-- Implementing InteractionTool for CRM interaction tracking
-- Implementing GroupTool for contact group management
-- Adding comprehensive integration tests
-- Performance optimization and load testing
-- Deployment configuration (Docker, Kubernetes)
-
-**How to Contribute:**
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Follow the existing code patterns and architecture
-4. Add tests for new functionality
-5. Ensure all tests pass (`python -m pytest`)
-6. Update documentation as needed
-7. Submit a pull request
-
-**Development Guidelines:**
 - Follow PEP 8 style guide for Python code
 - Use type hints for all function signatures
 - Write docstrings for public methods and classes
 - Add unit tests for new features
-- Update the README and relevant docs
 - Use async/await for I/O operations
 - Leverage the factory patterns for tools and providers
 
-## 📄 License
+## Testing
+
+### Health Check
+
+```bash
+python scripts/health_check.py
+```
+
+### Integration Tests
+
+```bash
+python tests/test_pipeline_integration.py
+```
+
+### API Testing
+
+Use the interactive documentation at `http://localhost:8000/docs` or use curl:
+
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# Readiness check
+curl http://localhost:8000/ready
+```
+
+## License
 
 [Add your license information here]
 
