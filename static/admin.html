@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Analyst - Admin Panel</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            background: white;
+            padding: 20px 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 5px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .tab {
+            padding: 12px 24px;
+            background: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            color: #666;
+            transition: all 0.3s;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .tab:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+        }
+
+        .tab.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .panel {
+            display: none;
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .panel.active {
+            display: block;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #333;
+            font-size: 14px;
+        }
+
+        input, select, textarea {
+            width: 100%;
+            padding: 10px 14px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+            font-family: inherit;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        textarea {
+            min-height: 120px;
+            font-family: 'Monaco', 'Courier New', monospace;
+        }
+
+        .button {
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .button:active {
+            transform: translateY(0);
+        }
+
+        .button.secondary {
+            background: #6c757d;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .result-container {
+            margin-top: 20px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            border: 2px solid #e0e0e0;
+        }
+
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .result-title {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .result-status {
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .result-status.success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .result-status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        pre {
+            background: #282c34;
+            color: #abb2bf;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .table-container {
+            overflow-x: auto;
+            margin-top: 20px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #333;
+            position: sticky;
+            top: 0;
+        }
+
+        tr:hover {
+            background: #f8f9fa;
+        }
+
+        .pagination {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-top: 20px;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            color: #667eea;
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .filter-section {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .filter-group {
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .info-box {
+            background: #e7f3ff;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+
+        .info-box h3 {
+            margin-bottom: 10px;
+            color: #1976D2;
+            font-size: 16px;
+        }
+
+        .info-box p {
+            color: #555;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔧 AI Analyst Admin Panel</h1>
+            <p class="subtitle">Testing & Debugging Dashboard</p>
+        </header>
+
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('tool-tester')">🛠️ Tool Tester</button>
+            <button class="tab" onclick="switchTab('database')">💾 Database Viewer</button>
+            <button class="tab" onclick="switchTab('stats')">📊 Statistics</button>
+        </div>
+
+        <!-- Tool Tester Panel -->
+        <div id="tool-tester" class="panel active">
+            <div class="info-box">
+                <h3>Tool Testing</h3>
+                <p>Test individual tools with custom parameters. Select a tool, query type, and provide the necessary parameters to see the results.</p>
+            </div>
+
+            <div class="form-group">
+                <label>Tool</label>
+                <select id="tool-name" onchange="updateToolInfo()">
+                    <option value="company">Company Tool</option>
+                    <option value="people">People Tool</option>
+                    <option value="email">Email Tool</option>
+                    <option value="interaction">Interaction Tool</option>
+                    <option value="group">Group Tool</option>
+                    <option value="workspace">Workspace Tool</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Query Type</label>
+                <select id="query-type">
+                    <option value="search">Search</option>
+                    <option value="get_by_id">Get by ID</option>
+                    <option value="list">List</option>
+                    <option value="aggregate">Aggregate</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Workspace ID</label>
+                <input type="text" id="workspace-id" placeholder="e.g., 57129cd6-35d8-427a-8f87-c32beb2dadda">
+            </div>
+
+            <div class="form-group">
+                <label>User ID</label>
+                <input type="text" id="user-id" placeholder="e.g., 8d0c1f2f-a71c-4009-9942-3d8d9ae48816">
+            </div>
+
+            <div class="form-group">
+                <label>Parameters (JSON)</label>
+                <textarea id="tool-params" placeholder='{"name": "example"}'>{}</textarea>
+            </div>
+
+            <button class="button" onclick="testTool()">▶️ Run Test</button>
+
+            <div class="loading" id="tool-loading">
+                <div class="spinner"></div>
+                <p>Testing tool...</p>
+            </div>
+
+            <div id="tool-result"></div>
+        </div>
+
+        <!-- Database Viewer Panel -->
+        <div id="database" class="panel">
+            <div class="info-box">
+                <h3>Database Viewer</h3>
+                <p>Browse and inspect records from your database tables. Filter by workspace and paginate through results.</p>
+            </div>
+
+            <div class="filter-section">
+                <div class="filter-group">
+                    <label>Table</label>
+                    <select id="db-table" onchange="loadDatabaseRecords()">
+                        <option value="workspace">Workspace</option>
+                        <option value="company">Company</option>
+                        <option value="people">People</option>
+                        <option value="interaction">Interaction</option>
+                        <option value="group">Group</option>
+                        <option value="user">User</option>
+                        <option value="workspaceMember">Workspace Member</option>
+                    </select>
+                </div>
+
+                <div class="filter-group">
+                    <label>Workspace ID (Filter)</label>
+                    <input type="text" id="db-workspace-id" placeholder="Optional workspace filter">
+                </div>
+
+                <div class="filter-group">
+                    <label>Limit</label>
+                    <input type="number" id="db-limit" value="10" min="1" max="100">
+                </div>
+            </div>
+
+            <button class="button" onclick="loadDatabaseRecords()">🔄 Refresh</button>
+
+            <div class="loading" id="db-loading">
+                <div class="spinner"></div>
+                <p>Loading records...</p>
+            </div>
+
+            <div id="db-result"></div>
+        </div>
+
+        <!-- Statistics Panel -->
+        <div id="stats" class="panel">
+            <div class="info-box">
+                <h3>Database Statistics</h3>
+                <p>View record counts across all database tables. Optionally filter by workspace to see workspace-specific stats.</p>
+            </div>
+
+            <div class="form-group">
+                <label>Workspace ID (Optional Filter)</label>
+                <input type="text" id="stats-workspace-id" placeholder="Leave empty for all workspaces">
+            </div>
+
+            <button class="button" onclick="loadStats()">📊 Load Statistics</button>
+
+            <div class="loading" id="stats-loading">
+                <div class="spinner"></div>
+                <p>Loading statistics...</p>
+            </div>
+
+            <div id="stats-result"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000/api/v1/admin';
+
+        function switchTab(tabName) {
+            // Update tab buttons
+            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+            event.target.classList.add('active');
+
+            // Update panels
+            document.querySelectorAll('.panel').forEach(panel => panel.classList.remove('active'));
+            document.getElementById(tabName).classList.add('active');
+        }
+
+        function updateToolInfo() {
+            const tool = document.getElementById('tool-name').value;
+            const queryType = document.getElementById('query-type');
+
+            // Update available query types based on tool
+            const toolOperations = {
+                'company': ['search', 'get_by_id', 'list', 'aggregate'],
+                'people': ['search', 'get_by_id', 'list', 'aggregate'],
+                'email': ['search', 'get_by_id', 'list'],
+                'interaction': ['search', 'get_by_id', 'list', 'aggregate'],
+                'group': ['search', 'get_by_id', 'list'],
+                'workspace': ['get_by_id', 'list']
+            };
+
+            const operations = toolOperations[tool] || [];
+            queryType.innerHTML = operations.map(op =>
+                `<option value="${op}">${op.replace('_', ' ').toUpperCase()}</option>`
+            ).join('');
+        }
+
+        async function testTool() {
+            const toolName = document.getElementById('tool-name').value;
+            const queryType = document.getElementById('query-type').value;
+            const workspaceId = document.getElementById('workspace-id').value;
+            const userId = document.getElementById('user-id').value;
+            const paramsText = document.getElementById('tool-params').value;
+
+            // Validation
+            if (!workspaceId || !userId) {
+                alert('Please provide both Workspace ID and User ID');
+                return;
+            }
+
+            let params = {};
+            try {
+                params = JSON.parse(paramsText);
+            } catch (e) {
+                alert('Invalid JSON in parameters field');
+                return;
+            }
+
+            const loading = document.getElementById('tool-loading');
+            const resultDiv = document.getElementById('tool-result');
+
+            loading.classList.add('active');
+            resultDiv.innerHTML = '';
+
+            try {
+                const response = await fetch(`${API_BASE}/test-tool`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        tool_name: toolName,
+                        query_type: queryType,
+                        workspace_id: workspaceId,
+                        user_id: userId,
+                        params: params
+                    })
+                });
+
+                const data = await response.json();
+
+                resultDiv.innerHTML = `
+                    <div class="result-container">
+                        <div class="result-header">
+                            <span class="result-title">Test Result</span>
+                            <span class="result-status ${data.success ? 'success' : 'error'}">
+                                ${data.success ? '✓ Success' : '✗ Error'}
+                            </span>
+                        </div>
+                        ${data.execution_time_ms ? `<p><strong>Execution Time:</strong> ${data.execution_time_ms}ms</p>` : ''}
+                        ${data.error ? `<p style="color: #721c24;"><strong>Error:</strong> ${data.error}</p>` : ''}
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    </div>
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="result-container">
+                        <div class="result-header">
+                            <span class="result-title">Error</span>
+                            <span class="result-status error">✗ Failed</span>
+                        </div>
+                        <p style="color: #721c24;">${error.message}</p>
+                    </div>
+                `;
+            } finally {
+                loading.classList.remove('active');
+            }
+        }
+
+        async function loadDatabaseRecords() {
+            const table = document.getElementById('db-table').value;
+            const workspaceId = document.getElementById('db-workspace-id').value;
+            const limit = document.getElementById('db-limit').value;
+
+            const loading = document.getElementById('db-loading');
+            const resultDiv = document.getElementById('db-result');
+
+            loading.classList.add('active');
+            resultDiv.innerHTML = '';
+
+            try {
+                let url = `${API_BASE}/database/${table}?limit=${limit}`;
+                if (workspaceId) {
+                    url += `&workspace_id=${workspaceId}`;
+                }
+
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.records && data.records.length > 0) {
+                    // Create table
+                    const keys = Object.keys(data.records[0]);
+                    const tableHtml = `
+                        <div class="result-container">
+                            <div class="result-header">
+                                <span class="result-title">${data.table} Records (${data.total} total)</span>
+                                <span class="result-status success">Showing ${data.records.length} records</span>
+                            </div>
+                            <div class="table-container">
+                                <table>
+                                    <thead>
+                                        <tr>${keys.map(k => `<th>${k}</th>`).join('')}</tr>
+                                    </thead>
+                                    <tbody>
+                                        ${data.records.map(record => `
+                                            <tr>${keys.map(k => {
+                                                let value = record[k];
+                                                if (typeof value === 'object' && value !== null) {
+                                                    value = JSON.stringify(value);
+                                                }
+                                                if (value === null) value = 'null';
+                                                if (typeof value === 'string' && value.length > 50) {
+                                                    value = value.substring(0, 50) + '...';
+                                                }
+                                                return `<td>${value}</td>`;
+                                            }).join('')}</tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    `;
+                    resultDiv.innerHTML = tableHtml;
+                } else {
+                    resultDiv.innerHTML = `
+                        <div class="result-container">
+                            <p>No records found</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="result-container">
+                        <div class="result-header">
+                            <span class="result-title">Error</span>
+                            <span class="result-status error">✗ Failed</span>
+                        </div>
+                        <p style="color: #721c24;">${error.message}</p>
+                    </div>
+                `;
+            } finally {
+                loading.classList.remove('active');
+            }
+        }
+
+        async function loadStats() {
+            const workspaceId = document.getElementById('stats-workspace-id').value;
+
+            const loading = document.getElementById('stats-loading');
+            const resultDiv = document.getElementById('stats-result');
+
+            loading.classList.add('active');
+            resultDiv.innerHTML = '';
+
+            try {
+                let url = `${API_BASE}/database/stats`;
+                if (workspaceId) {
+                    url += `?workspace_id=${workspaceId}`;
+                }
+
+                const response = await fetch(url);
+                const data = await response.json();
+
+                resultDiv.innerHTML = `
+                    <div class="grid">
+                        <div class="stat-card">
+                            <div class="stat-value">${data.workspaces}</div>
+                            <div class="stat-label">Workspaces</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${data.companies}</div>
+                            <div class="stat-label">Companies</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${data.people}</div>
+                            <div class="stat-label">People</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${data.interactions}</div>
+                            <div class="stat-label">Interactions</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${data.groups}</div>
+                            <div class="stat-label">Groups</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${data.users}</div>
+                            <div class="stat-label">Users</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${data.workspace_members}</div>
+                            <div class="stat-label">Workspace Members</div>
+                        </div>
+                    </div>
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="result-container">
+                        <div class="result-header">
+                            <span class="result-title">Error</span>
+                            <span class="result-status error">✗ Failed</span>
+                        </div>
+                        <p style="color: #721c24;">${error.message}</p>
+                    </div>
+                `;
+            } finally {
+                loading.classList.remove('active');
+            }
+        }
+
+        // Initialize on page load
+        updateToolInfo();
+    </script>
+</body>
+</html>

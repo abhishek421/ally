@@ -1,35 +1,72 @@
 # Application settings and configuration
 import os
+import logging
 from dotenv import load_dotenv
-from prompts import QUERY_OPTIMIZER_TEMPLATE
+from typing import Optional
+from prompts import (
+    BUSINESS_ANALYST_PERSONA,
+    BUSINESS_ANALYST_SYSTEM_CONTEXT,
+    QUERY_OPTIMIZER_TEMPLATE,
+    DATA_EXTRACTOR_TEMPLATE
+)
 
 # Load variables from a .env file if present
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
+# Business Analyst Persona (core system context)
+BUSINESS_ANALYST_PERSONA_PROMPT = BUSINESS_ANALYST_PERSONA
+BUSINESS_ANALYST_SYSTEM_PROMPT = BUSINESS_ANALYST_SYSTEM_CONTEXT
+
 # Prompt templates (imported from prompts module)
 QUERY_OPTIMIZATION_TEMPLATE = QUERY_OPTIMIZER_TEMPLATE
+DATA_EXTRACTOR_PROMPT_TEMPLATE = DATA_EXTRACTOR_TEMPLATE
 
 # ============================================================================
-# Per-Agent LLM Configuration
-# Each agent can have its own provider and model configuration
+# LLM Configuration (ENV-only)
+# Uses only environment variables with global and per-agent overrides
 # ============================================================================
 
-def _get_agent_config(agent_name: str, default_provider: str = "openai", default_model: str = "gpt-4") -> dict:
+
+def _get_env_agent_config(agent_name: str, default_provider: Optional[str] = None, default_model: Optional[str] = None) -> dict:
     """
-    Get configuration for a specific agent from environment variables
-    
+    Get configuration for a specific agent from environment variables (fallback only).
+
+    This function is used when ConfigManager is not available or as a fallback.
+
     Args:
         agent_name: Name of the agent (e.g., 'query_optimizer')
-        default_provider: Default provider if not specified
-        default_model: Default model if not specified
-    
+        default_provider: Optional default provider if not specified
+        default_model: Optional default model if not specified
+
     Returns:
         Dictionary with provider configuration
+
+    Raises:
+        ValueError: If provider or model cannot be determined from environment
     """
     prefix = agent_name.upper()
-    
-    provider = os.getenv(f"{prefix}_PROVIDER", default_provider)
-    model = os.getenv(f"{prefix}_MODEL", default_model)
+
+    # Check for global env vars first
+    provider = os.getenv(f"{prefix}_PROVIDER") or os.getenv("GLOBAL_LLM_PROVIDER")
+    model = os.getenv(f"{prefix}_MODEL") or os.getenv("GLOBAL_LLM_MODEL")
+
+    # Use defaults only if provided
+    if not provider and default_provider:
+        provider = default_provider
+    if not model and default_model:
+        model = default_model
+
+    # Raise error if still not set
+    if not provider:
+        raise ValueError(
+            f"Provider not configured for {agent_name}. Please set {prefix}_PROVIDER or GLOBAL_LLM_PROVIDER environment variable."
+        )
+    if not model:
+        raise ValueError(
+            f"Model not configured for {agent_name}. Please set {prefix}_MODEL or GLOBAL_LLM_MODEL environment variable."
+        )
     
     # Get API key based on provider
     if provider.lower() == 'openai':
@@ -47,65 +84,50 @@ OPENAI_API_KEY=REDACTED
         "api_key": api_key
     }
 
-# QueryOptimizerAgent Configuration
-QUERY_OPTIMIZER_CONFIG = _get_agent_config(
-    "QUERY_OPTIMIZER", 
-    default_provider="openai", 
-    default_model="gpt-4"
-)
+
+def get_agent_config(agent_name: str, default_provider: Optional[str] = None, default_model: Optional[str] = None) -> dict:
+    """
+    Get configuration for a specific agent.
+
+    Priority order:
+    1. Environment variables (agent-specific overrides)
+    2. Global environment variables
+    3. Optional defaults (if provided)
+
+    Args:
+        agent_name: Name of the agent (e.g., 'query_optimizer')
+        default_provider: Optional default provider if not specified
+        default_model: Optional default model if not specified
+
+    Returns:
+        Dictionary with provider, model, and api_key
+
+    Raises:
+        ValueError: If provider or model cannot be determined
+    """
+    return _get_env_agent_config(agent_name, default_provider, default_model)
+
+
+def set_config_manager(manager: 'ConfigManager') -> None:
+    """No-op retained for backward compatibility (DB config removed)."""
+    return None
+
+
+# ============================================================================
+# Per-Agent Configurations
+# These use ConfigManager when available, fall back to env vars
+# ============================================================================
+
+# QueryOptimizerAgent Configuration (initialized with env fallback, will be updated on startup)
+QUERY_OPTIMIZER_CONFIG = _get_env_agent_config("QUERY_OPTIMIZER")
 
 # DataExtractorAgent Configuration
-DATA_EXTRACTOR_CONFIG = _get_agent_config(
-    "DATA_EXTRACTOR",
-    default_provider="openai",
-    default_model="gpt-4"
-)
+DATA_EXTRACTOR_CONFIG = _get_env_agent_config("DATA_EXTRACTOR")
 
 # ResponseFormatterAgent Configuration
-RESPONSE_FORMATTER_CONFIG = _get_agent_config(
-    "RESPONSE_FORMATTER",
-    default_provider="openai",
-    default_model="gpt-3.5-turbo"
-)
+RESPONSE_FORMATTER_CONFIG = _get_env_agent_config("RESPONSE_FORMATTER")
 
-# Legacy support (for backward compatibility)
-OPENAI_API_KEY=REDACTED
-MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4")
-
-# LLM Configuration
-OPENAI_API_KEY=REDACTED
-MODEL_NAME = "gpt-4"  # or "gpt-3.5-turbo"
-
-# Query Optimization Configuration
-QUERY_OPTIMIZATION_TEMPLATE = """
-You are a QueryOptimizer. Your task is to convert user queries into more defined and structured queries 
-that can be easily understood by a DataExtractorAgent.
-
-IMPORTANT: Replace relative time references with EXACT values based on current date context.
-
-Date Context:
-{date_context}
-
-IMPORTANT RULES:
-1. Replace "this month" with exact month name (e.g., "Oct 2024")
-2. Replace "last month" with exact previous month (e.g., "Sep 2024")  
-3. Replace "this year" with exact current year (e.g., "2024")
-4. Replace "last year" with exact previous year (e.g., "2023")
-5. Replace "current month" with exact month name
-6. Replace "yesterday", "last week", etc. with exact dates
-7. Extract key entities (persons, companies, dates, etc.)
-8. Identify the intent and action needed
-9. Rewrite the query using clear language and proper grammar
-10. Be explicit about what data needs to be extracted
-
-User Query: {user_query}
-
-Output format: "The user is asking you to [action] based on: '[rewritten query with exact dates]' and return structured information"
-
-Example:
-- Input: "Show me all closed deals this month"
-- Output: "The user is asking you to fetch and analyze all closed deals from Oct 2024 and return structured information"
-
-Optimized Query:
 """
-
+Note: Configuration is ENV-only. Use per-agent configuration via
+get_agent_config(...) with global and agent-level env overrides.
+"""

@@ -26,10 +26,11 @@ class QueryType(str, Enum):
     SEARCH = "search"
     GET_BY_ID = "get_by_id"
     LIST = "list"
-    CREATE = "create"
-    UPDATE = "update"
-    DELETE = "delete"
     ANALYTICS = "analytics"
+    # TODO: Write operations not yet implemented
+    # CREATE = "create"
+    # UPDATE = "update"
+    # DELETE = "delete"
 
 
 class BaseTool(ABC):

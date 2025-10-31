@@ -2,7 +2,7 @@
 """
 AI Analyst Tools Package
 
-This package contains all the tools for the AI Analyst RAG system.
+This package contains all the tools for the AI Analyst system.
 Each tool inherits from BaseTool and implements specific data extraction logic.
 """
 

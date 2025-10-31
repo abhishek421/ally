@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: analyst-ai-redis
+    ports:
+      - "${REDIS_EXTERNAL_PORT:-6380}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - analyst-ai-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+  # FastAPI Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: analyst-ai-app
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      # Database Configuration
+      # Override DATABASE_URL to use host.docker.internal instead of localhost
+      # This allows the container to connect to PostgreSQL running on the host
+      DATABASE_URL: postgresql://postgres:postgres@host.docker.internal:5433/softsync?schema=public
+
+      # Redis Configuration
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: ${REDIS_DB:-0}
+
+      # LLM Provider API Keys (from .env file)
+OPENAI_API_KEY=REDACTED
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+
+      # Global LLM Configuration
+      GLOBAL_LLM_PROVIDER: ${GLOBAL_LLM_PROVIDER:-openai}
+      GLOBAL_LLM_MODEL: ${GLOBAL_LLM_MODEL:-gpt-4}
+
+      # AWS Configuration (optional)
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+AWS_ACCESS_KEY_ID=REDACTED
+AWS_SECRET_ACCESS_KEY=REDACTED
+      AWS_COGNITO_USER_POOL_ID: ${AWS_COGNITO_USER_POOL_ID}
+
+      # Application Configuration
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - analyst-ai-network
+    volumes:
+      # Mount code for development (comment out for production)
+      - .:/app
+      # Exclude node_modules and __pycache__
+      - /app/__pycache__
+      - /app/.pytest_cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  analyst-ai-network:
+    driver: bridge
+
+volumes:
+  redis_data:
+    driver: local
