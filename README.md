@@ -435,3 +435,116 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - [Streamlit](https://streamlit.io/) for the web interface
 - [OpenAI](https://openai.com/) for language model capabilities
 - [SQLAlchemy](https://www.sqlalchemy.org/) for database abstraction
+
+
+
+
+
+
+# Multi-User Multi-Chat LLM Chatbot Memory Architecture
+
+## Components Overview
+| Component | Role | Stores |
+|---------|------|--------|
+| **SQL DB** | Manages users and chat session list | user table, chat_sessions table |
+| **Vector DB** | Stores chat messages + embeddings | text + `user_id` + `chat_id` metadata |
+| **Redis (optional)** | Caches frequent Q&A and recent chat | speed optimization |
+
+## Data Model
+
+### SQL: `users`
+| Column | Example | Purpose |
+|--------|---------|---------|
+| user_id (pk) | `u_101` | identifies person |
+| name | "Amit" | optional |
+| email | "amit@example.com" | for login |
+
+### SQL: `chat_sessions`
+| Column | Example | Purpose |
+|--------|---------|---------|
+| chat_id (pk) | `chat_9asf1` | one conversation |
+| user_id (fk)` | `u_101` | belongs to user |
+| title | "GST Filing Help" | displayed in sidebar |
+| created_at | timestamp | UI sorting |
+| updated_at | timestamp | last active time |
+
+### Vector DB stored message format
+```json
+{
+  "id": "msg_001",
+  "text": "How to reply to GST notice?",
+  "embedding": [...],
+  "metadata": {
+    "user_id": "u_101",
+    "chat_id": "chat_9asf1",
+    "role": "user",
+    "timestamp": 1730458000
+  }
+}
+```
+
+---
+
+## Conversation Flow Scenarios
+
+### 1. User Opens Chatbot
+- App fetches user from SQL
+- Fetches chat list:
+```
+SELECT * FROM chat_sessions WHERE user_id = u_101 ORDER BY updated_at DESC;
+```
+
+### 2. User Creates New Chat
+```
+INSERT INTO chat_sessions (chat_id, user_id, title)
+VALUES ("chat_9asf1", "u_101", "Untitled Chat");
+```
+
+### 3. User Sends First Message
+1. Convert message to embedding
+2. Store to Vector DB
+3. Retrieve relevant history (none yet)
+4. LLM responds
+5. Store response
+6. Update chat title based on context
+
+### 4. Continuing Conversation
+Steps repeated:
+```
+Embed → Store → Retrieve top_k by chat_id & user_id → LLM → Save response → Update timestamps
+```
+
+### 5. Cached Responses (Redis)
+If a repeated question matches:
+```
+if redis.has(question_hash): return redis.get(question_hash)
+else: compute → store → return
+```
+
+---
+
+## Why This Works
+
+| Requirement | Covered By |
+|------------|-----------|
+| Multi-user access with login | SQL DB |
+| Multiple chat sessions per user | SQL DB + chat_id metadata |
+| Conversation memory & recall | Vector DB |
+| Fast repeated answers | Redis |
+| Prevents token overflow | Retrieve relevant history only |
+
+---
+
+## Final Summary
+
+**User & Chat metadata → SQL DB**  
+**Messages → Vector DB (with `user_id` + `chat_id`)**  
+**Caching (optional) → Redis**  
+
+This supports:
+- Multiple users
+- Multiple chats per user
+- Long-term memory
+- Fast response time
+
+
