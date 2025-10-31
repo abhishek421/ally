@@ -1,4 +1,4 @@
 """
-Tests module for AI Analyst RAG Pipeline
+Tests module for AI Analyst Pipeline
 """
 

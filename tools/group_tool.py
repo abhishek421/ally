@@ -3,7 +3,7 @@ from tools.base_tool import BaseTool, QueryType, ToolResult
 from database.prisma_client import prisma_client
 from typing import Dict, List, Any, Optional
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 class GroupSearchParams(BaseModel):
@@ -88,7 +88,7 @@ class GroupTool(BaseTool):
                 include={
                     "groupPeople": {
                         "include": {
-                            "person": {
+                            "people": {
                                 "select": {
                                     "id": True,
                                     "firstName": True,
@@ -98,19 +98,19 @@ class GroupTool(BaseTool):
                             }
                         }
                     },
-                    "groupCompanies": {
+                    "groupCompany": {
                         "include": {
                             "company": {
                                 "select": {
                                     "id": True,
                                     "name": True,
-                                    "domain": True
+                                    "description": True
                                 }
                             }
                         }
                     }
                 },
-                orderBy={"createdAt": "desc"}
+                order={"createdAt": "desc"}
             )
             
             # Get total count
@@ -146,27 +146,27 @@ class GroupTool(BaseTool):
                 include={
                     "groupPeople": {
                         "include": {
-                            "person": {
+                            "people": {
                                 "select": {
                                     "id": True,
                                     "firstName": True,
                                     "lastName": True,
                                     "jobTitle": True,
-                                    "emails": True,
-                                    "phoneNumbers": True
+                                    "email": True,
+                                    "phoneNumber": True
                                 }
                             }
                         }
                     },
-                    "groupCompanies": {
+                    "groupCompany": {
                         "include": {
                             "company": {
                                 "select": {
                                     "id": True,
                                     "name": True,
-                                    "domain": True,
-                                    "emails": True,
-                                    "phoneNumbers": True
+                                    "description": True,
+                                    "email": True,
+                                    "phoneNumber": True
                                 }
                             }
                         }
@@ -187,7 +187,7 @@ class GroupTool(BaseTool):
                 "created_at": group.createdAt.isoformat() if group.createdAt else None,
                 "updated_at": group.updatedAt.isoformat() if group.updatedAt else None,
                 "people": group.groupPeople,
-                "companies": group.groupCompanies
+                "companies": group.groupCompany
             }
         except Exception as e:
             self.logger.error(f"Error getting group by ID {group_id}: {e}")
@@ -210,7 +210,7 @@ class GroupTool(BaseTool):
                 include={
                     "groupPeople": {
                         "include": {
-                            "person": {
+                            "people": {
                                 "select": {
                                     "id": True,
                                     "firstName": True,
@@ -220,19 +220,19 @@ class GroupTool(BaseTool):
                             }
                         }
                     },
-                    "groupCompanies": {
+                    "groupCompany": {
                         "include": {
                             "company": {
                                 "select": {
                                     "id": True,
                                     "name": True,
-                                    "domain": True
+                                    "description": True
                                 }
                             }
                         }
                     }
                 },
-                orderBy={"createdAt": "desc"}
+                order={"createdAt": "desc"}
             )
             
             total_count = await client.group.count(where=where_clause)
@@ -297,8 +297,7 @@ class GroupTool(BaseTool):
             )
             
             # Get recent groups (last 30 days)
-            thirty_days_ago = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            thirty_days_ago = thirty_days_ago.replace(day=thirty_days_ago.day - 30)
+            thirty_days_ago = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=30)
             
             recent_groups = await client.group.count(
                 where={

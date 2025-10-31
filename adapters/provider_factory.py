@@ -21,17 +21,20 @@ class LLMProviderFactory:
     def create(cls, config: Dict[str, Any]) -> LLMProvider:
         """
         Create a provider instance based on configuration
-        
+
         Args:
             config: Dictionary containing provider configuration
-                   - provider: str (name of provider)
-                   - model: str (model name)
-                   - api_key: str (API key)
+                   - provider: str (name of provider, required)
+                   - model: str (model name, required)
+                   - api_key: str (API key, required)
                    - **kwargs: Additional provider-specific params
-        
+
         Returns:
             BaseLLMProvider instance
-            
+
+        Raises:
+            ValueError: If required configuration is missing
+
         Example:
             config = {
                 'provider': 'openai',
@@ -41,9 +44,15 @@ class LLMProviderFactory:
             provider = LLMProviderFactory.create(config)
         """
         logger = logging.getLogger(__name__)
-        
-        # Extract provider name
-        provider_name = config.get('provider', 'openai').lower()
+
+        # Extract provider name (required)
+        provider_name = config.get('provider')
+        if not provider_name:
+            raise ValueError(
+                "Provider name is required in configuration. "
+                "Please specify 'provider' in the config dictionary."
+            )
+        provider_name = provider_name.lower()
         
         # Get provider class
         provider_class = cls._providers.get(provider_name)
@@ -54,12 +63,24 @@ class LLMProviderFactory:
                 f"Available providers: {list(cls._providers.keys())}"
             )
         
-        # Extract configuration
+        # Extract configuration (required fields)
+        model = config.get('model')
+        if not model:
+            raise ValueError(
+                f"Model name is required for provider '{provider_name}'. "
+                "Please specify 'model' in the config dictionary."
+            )
+
         api_key = config.get('api_key', '')
-        model = config.get('model', '')
-        additional_params = {k: v for k, v in config.items() 
+        if not api_key:
+            logger.warning(
+                f"API key is empty for provider '{provider_name}'. "
+                "Make sure to set the appropriate environment variable."
+            )
+
+        additional_params = {k: v for k, v in config.items()
                            if k not in ['provider', 'api_key', 'model']}
-        
+
         logger.info(f"Creating {provider_name} provider with model {model}")
         
         # Create and return provider instance

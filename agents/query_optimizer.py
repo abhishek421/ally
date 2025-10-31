@@ -35,8 +35,11 @@ class QueryOptimizerAgent:
         self.llm_provider = llm_provider
         if self.llm_provider is None:
             from adapters.provider_factory import LLMProviderFactory
-            from config.settings import QUERY_OPTIMIZER_CONFIG
-            self.llm_provider = LLMProviderFactory.create(QUERY_OPTIMIZER_CONFIG)
+            from config.settings import get_agent_config
+            # Get config using ConfigManager (will fall back to env if not initialized)
+            agent_config = get_agent_config("query_optimizer")
+            self.llm_provider = LLMProviderFactory.create(agent_config)
+            self._logger.info(f"QueryOptimizerAgent using {agent_config.get('provider', 'unknown')}/{agent_config.get('model', 'unknown')}")
         
         self._logger.debug(f"QueryOptimizerAgent initialized with provider: {self.llm_provider}")
     
