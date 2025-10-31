@@ -88,7 +88,7 @@ class GroupTool(BaseTool):
                 include={
                     "groupPeople": {
                         "include": {
-                            "person": {
+                            "people": {
                                 "select": {
                                     "id": True,
                                     "firstName": True,
@@ -98,19 +98,19 @@ class GroupTool(BaseTool):
                             }
                         }
                     },
-                    "groupCompanies": {
+                    "groupCompany": {
                         "include": {
                             "company": {
                                 "select": {
                                     "id": True,
                                     "name": True,
-                                    "domain": True
+                                    "description": True
                                 }
                             }
                         }
                     }
                 },
-                orderBy={"createdAt": "desc"}
+                order={"createdAt": "desc"}
             )
             
             # Get total count
@@ -146,27 +146,27 @@ class GroupTool(BaseTool):
                 include={
                     "groupPeople": {
                         "include": {
-                            "person": {
+                            "people": {
                                 "select": {
                                     "id": True,
                                     "firstName": True,
                                     "lastName": True,
                                     "jobTitle": True,
-                                    "emails": True,
-                                    "phoneNumbers": True
+                                    "email": True,
+                                    "phoneNumber": True
                                 }
                             }
                         }
                     },
-                    "groupCompanies": {
+                    "groupCompany": {
                         "include": {
                             "company": {
                                 "select": {
                                     "id": True,
                                     "name": True,
-                                    "domain": True,
-                                    "emails": True,
-                                    "phoneNumbers": True
+                                    "description": True,
+                                    "email": True,
+                                    "phoneNumber": True
                                 }
                             }
                         }
@@ -187,7 +187,7 @@ class GroupTool(BaseTool):
                 "created_at": group.createdAt.isoformat() if group.createdAt else None,
                 "updated_at": group.updatedAt.isoformat() if group.updatedAt else None,
                 "people": group.groupPeople,
-                "companies": group.groupCompanies
+                "companies": group.groupCompany
             }
         except Exception as e:
             self.logger.error(f"Error getting group by ID {group_id}: {e}")
@@ -210,7 +210,7 @@ class GroupTool(BaseTool):
                 include={
                     "groupPeople": {
                         "include": {
-                            "person": {
+                            "people": {
                                 "select": {
                                     "id": True,
                                     "firstName": True,
@@ -220,19 +220,19 @@ class GroupTool(BaseTool):
                             }
                         }
                     },
-                    "groupCompanies": {
+                    "groupCompany": {
                         "include": {
                             "company": {
                                 "select": {
                                     "id": True,
                                     "name": True,
-                                    "domain": True
+                                    "description": True
                                 }
                             }
                         }
                     }
                 },
-                orderBy={"createdAt": "desc"}
+                order={"createdAt": "desc"}
             )
             
             total_count = await client.group.count(where=where_clause)

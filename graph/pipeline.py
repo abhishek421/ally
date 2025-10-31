@@ -47,12 +47,12 @@ class AnalystPipeline:
         optimized_query = self.query_optimizer.optimize(state['user_query'])
         return {"optimized_query": optimized_query}
     
-    def _data_extractor_node(self, state: AgentState) -> AgentState:
+    async def _data_extractor_node(self, state: AgentState) -> AgentState:
         """DataExtractorAgent: Extracts data using multiple tools"""
         from agents.data_extractor import DataExtractorAgent
-        
+
         data_extractor = DataExtractorAgent()
-        extracted = data_extractor.extract(
+        extracted = await data_extractor.extract(
             optimized_query=state['optimized_query'],
             workspace_id=state['workspace_id'],
             user_id=state['user_id']
@@ -60,16 +60,17 @@ class AnalystPipeline:
         return {"extracted_data": extracted}
     
     def _response_formatter_node(self, state: AgentState) -> AgentState:
-        """ResponseFormatterAgent: Formats response in JSON format"""
-        # TODO: Implement response formatting logic
-        formatted = {
-            "query": state['optimized_query'],
-            "data": state['extracted_data'],
-            "formatted_response": "JSON formatted response"
-        }
-        return {"final_response": formatted}
+        """ResponseFormatterAgent: Formats response in markdown format with raw data"""
+        from agents.response_formatter import ResponseFormatterAgent
+
+        response_formatter = ResponseFormatterAgent()
+        formatted_response = response_formatter.format(
+            optimized_query=state['optimized_query'],
+            extracted_data=state['extracted_data']
+        )
+        return {"final_response": formatted_response}
     
-    def run(self, user_query: str, workspace_id: str, user_id: str) -> dict:
+    async def run(self, user_query: str, workspace_id: str, user_id: str) -> dict:
         """Run the pipeline with a user query, workspace_id, and user_id"""
         initial_state = {
             "user_query": user_query,
@@ -79,7 +80,7 @@ class AnalystPipeline:
             "extracted_data": {},
             "final_response": {}
         }
-        result = self.graph.invoke(initial_state)
+        result = await self.graph.ainvoke(initial_state)
         return result['final_response']
 
 

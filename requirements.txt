@@ -25,6 +25,7 @@ python-dotenv>=1.0.0
 fastapi>=0.100.0
 uvicorn>=0.23.0
 python-multipart>=0.0.6
+aiofiles>=23.0.0  # Required for StaticFiles
 
 # JWT Authentication (AWS Cognito)
 python-jose[cryptography]>=3.3.0

@@ -78,9 +78,9 @@ class PeopleTool(BaseTool):
                 where_clause["jobTitle"] = {"contains": params.job_title, "mode": "insensitive"}
             
             if params.email:
-                where_clause["emails"] = {
+                where_clause["email"] = {
                     "some": {
-                        "email": {"contains": params.email, "mode": "insensitive"}
+                        "value": {"contains": params.email, "mode": "insensitive"}
                     }
                 }
             
@@ -88,32 +88,32 @@ class PeopleTool(BaseTool):
                 where_clause["privacyLevel"] = params.privacy_level
             
             # Execute search with pagination
-            people = await client.person.find_many(
+            people = await client.people.find_many(
                 where=where_clause,
                 skip=params.offset,
                 take=params.limit,
                 include={
-                    "emails": True,
-                    "phoneNumbers": True,
-                    "addresses": True,
-                    "urls": True,
-                    "companyMetaData": {
+                    "email": True,
+                    "phoneNumber": True,
+                    "address": True,
+                    "url": True,
+                    "metaData": {
                         "include": {
                             "company": {
                                 "select": {
                                     "id": True,
                                     "name": True,
-                                    "domain": True
+                                    "description": True
                                 }
                             }
                         }
                     }
                 },
-                orderBy={"createdAt": "desc"}
+                order={"createdAt": "desc"}
             )
-            
+
             # Get total count
-            total_count = await client.person.count(where=where_clause)
+            total_count = await client.people.count(where=where_clause)
             
             return {
                 "people": people,
@@ -137,23 +137,23 @@ class PeopleTool(BaseTool):
         try:
             client = await prisma_client.get_client()
             
-            person = await client.person.find_unique(
+            person = await client.people.find_unique(
                 where={
                     "id": person_id,
                     "workspaceId": self.workspace_id
                 },
                 include={
-                    "emails": True,
-                    "phoneNumbers": True,
-                    "addresses": True,
-                    "urls": True,
-                    "companyMetaData": {
+                    "email": True,
+                    "phoneNumber": True,
+                    "address": True,
+                    "url": True,
+                    "metaData": {
                         "include": {
                             "company": {
                                 "select": {
                                     "id": True,
                                     "name": True,
-                                    "domain": True,
+                                    "description": True,
                                     "privacyLevel": True
                                 }
                             }
@@ -173,11 +173,11 @@ class PeopleTool(BaseTool):
                 "privacy_level": person.privacyLevel,
                 "created_at": person.createdAt.isoformat() if person.createdAt else None,
                 "updated_at": person.updatedAt.isoformat() if person.updatedAt else None,
-                "emails": person.emails,
-                "phone_numbers": person.phoneNumbers,
-                "addresses": person.addresses,
-                "urls": person.urls,
-                "companies": person.companyMetaData
+                "emails": person.email,
+                "phone_numbers": person.phoneNumber,
+                "addresses": person.address,
+                "urls": person.url,
+                "companies": person.metaData
             }
         except Exception as e:
             self.logger.error(f"Error getting person by ID {person_id}: {e}")
@@ -188,31 +188,31 @@ class PeopleTool(BaseTool):
         try:
             client = await prisma_client.get_client()
             
-            people = await client.person.find_many(
+            people = await client.people.find_many(
                 where={"workspaceId": self.workspace_id},
                 skip=offset,
                 take=limit,
                 include={
-                    "emails": True,
-                    "phoneNumbers": True,
-                    "addresses": True,
-                    "urls": True,
-                    "companyMetaData": {
+                    "email": True,
+                    "phoneNumber": True,
+                    "address": True,
+                    "url": True,
+                    "metaData": {
                         "include": {
                             "company": {
                                 "select": {
                                     "id": True,
                                     "name": True,
-                                    "domain": True
+                                    "description": True
                                 }
                             }
                         }
                     }
                 },
-                orderBy={"createdAt": "desc"}
+                order={"createdAt": "desc"}
             )
-            
-            total_count = await client.person.count(
+
+            total_count = await client.people.count(
                 where={"workspaceId": self.workspace_id}
             )
             
@@ -239,33 +239,33 @@ class PeopleTool(BaseTool):
             client = await prisma_client.get_client()
             
             # Get total people
-            total_people = await client.person.count(
+            total_people = await client.people.count(
                 where={"workspaceId": self.workspace_id}
             )
-            
+
             # Get people by privacy level
-            privacy_levels = await client.person.group_by(
+            privacy_levels = await client.people.group_by(
                 by=["privacyLevel"],
                 where={"workspaceId": self.workspace_id},
                 _count={"id": True}
             )
-            
+
             # Get people by job title (top 10)
-            job_titles = await client.person.group_by(
+            job_titles = await client.people.group_by(
                 by=["jobTitle"],
                 where={
                     "workspaceId": self.workspace_id,
                     "jobTitle": {"not": None}
                 },
                 _count={"id": True},
-                orderBy={"_count": {"id": "desc"}},
+                order={"_count": {"id": "desc"}},
                 take=10
             )
-            
+
             # Get recent people (last 30 days)
             thirty_days_ago = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=30)
-            
-            recent_people = await client.person.count(
+
+            recent_people = await client.people.count(
                 where={
                     "workspaceId": self.workspace_id,
                     "createdAt": {"gte": thirty_days_ago}

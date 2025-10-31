@@ -24,9 +24,11 @@ class ConfigManager:
     2. DB global config
     3. Env agent-specific vars (AGENT_PROVIDER, AGENT_MODEL)
     4. Env global vars (GLOBAL_LLM_PROVIDER, GLOBAL_LLM_MODEL)
-    5. Hardcoded defaults (openai, gpt-4)
-    
+
     API keys are always sourced from environment variables.
+
+    Note: Hardcoded defaults have been removed. Configuration must be
+    provided via database or environment variables.
     """
     
     def __init__(self):
@@ -125,24 +127,26 @@ class ConfigManager:
     def get_agent_config_sync(self, agent_name: str) -> LLMConfig:
         """
         Get resolved LLM configuration for an agent.
-        
+
         Resolution priority:
         1. DB agent config (if provider/model set)
         2. DB global config
         3. Env agent vars
         4. Env global vars
-        5. Defaults (openai, gpt-4)
-        
+
         Args:
             agent_name: Name of the agent (e.g., 'query_optimizer')
-            
+
         Returns:
             LLMConfig with resolved provider, model, and api_key
+
+        Raises:
+            ValueError: If provider or model cannot be determined from any source
         """
         provider: Optional[str] = None
         model: Optional[str] = None
-        source: str = "default"
-        
+        source: str = "none"
+
         # Step 1: Check agent-specific DB config
         if self._db_available and agent_name in self._agent_configs:
             agent_config = self._agent_configs[agent_name]
@@ -151,14 +155,14 @@ class ConfigManager:
                 model = agent_config.model or (self._global_config.model if self._global_config else None)
                 source = "db_agent"
                 logger.debug(f"Using agent-specific DB config for '{agent_name}'")
-        
+
         # Step 2: Check global DB config
         if provider is None and self._global_config:
             provider = self._global_config.provider
             model = self._global_config.model
             source = "db_global"
             logger.debug(f"Using global DB config for '{agent_name}'")
-        
+
         # Step 3: Fall back to env vars (agent-specific)
         if provider is None:
             prefix = agent_name.upper()
@@ -167,7 +171,7 @@ class ConfigManager:
                 model = os.getenv(f"{prefix}_MODEL")
                 source = "env_agent"
                 logger.debug(f"Using agent-specific env vars for '{agent_name}'")
-        
+
         # Step 4: Fall back to env vars (global)
         if provider is None:
             provider = os.getenv("GLOBAL_LLM_PROVIDER")
@@ -175,24 +179,21 @@ class ConfigManager:
                 model = os.getenv("GLOBAL_LLM_MODEL")
                 source = "env_global"
                 logger.debug(f"Using global env vars for '{agent_name}'")
-        
-        # Step 5: Use defaults
+
+        # Raise error if provider/model not configured
         if provider is None:
-            provider = "openai"
-            model = "gpt-4"
-            source = "default"
-            logger.debug(f"Using default config for '{agent_name}'")
-        
-        # Ensure model is set
+            raise ValueError(
+                f"Provider not configured for agent '{agent_name}'. "
+                f"Please set configuration via database or environment variables "
+                f"(e.g., {agent_name.upper()}_PROVIDER or GLOBAL_LLM_PROVIDER)."
+            )
+
         if model is None:
-            # Provider-specific defaults
-            model_defaults = {
-                "openai": "gpt-4",
-                "anthropic": "claude-3-opus-20240229",
-                "gemini": "gemini-pro"
-            }
-            model = model_defaults.get(provider.lower(), "gpt-4")
-            logger.debug(f"Using default model '{model}' for provider '{provider}'")
+            raise ValueError(
+                f"Model not configured for agent '{agent_name}'. "
+                f"Please set configuration via database or environment variables "
+                f"(e.g., {agent_name.upper()}_MODEL or GLOBAL_LLM_MODEL)."
+            )
         
         # Get API key from environment (always from env)
         api_key = self._get_api_key_for_provider(provider)

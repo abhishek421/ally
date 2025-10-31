@@ -27,12 +27,12 @@ async def check_environment():
     print_header("Environment Variables Check")
     
     required_vars = {
-OPENAI_API_KEY=REDACTED
         'DATABASE_URL': 'PostgreSQL Database URL',
         'REDIS_HOST': 'Redis Host'
     }
     
     optional_vars = {
+OPENAI_API_KEY=REDACTED
         'ANTHROPIC_API_KEY': 'Anthropic API Key',
         'GOOGLE_API_KEY': 'Google API Key',
         'GLOBAL_LLM_PROVIDER': 'Global LLM Provider',

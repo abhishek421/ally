@@ -97,7 +97,7 @@ class InteractionTool(BaseTool):
                 skip=params.offset,
                 take=params.limit,
                 include={
-                    "person": {
+                    "people": {
                         "select": {
                             "id": True,
                             "firstName": True,
@@ -109,11 +109,11 @@ class InteractionTool(BaseTool):
                         "select": {
                             "id": True,
                             "name": True,
-                            "domain": True
+                            "description": True
                         }
                     }
                 },
-                orderBy={"date": "desc"}
+                order={"date": "desc"}
             )
             
             # Get total count
@@ -147,21 +147,21 @@ class InteractionTool(BaseTool):
                     "workspaceId": self.workspace_id
                 },
                 include={
-                    "person": {
+                    "people": {
                         "select": {
                             "id": True,
                             "firstName": True,
                             "lastName": True,
                             "jobTitle": True,
-                            "emails": True
+                            "email": True
                         }
                     },
                     "company": {
                         "select": {
                             "id": True,
                             "name": True,
-                            "domain": True,
-                            "emails": True
+                            "description": True,
+                            "email": True
                         }
                     }
                 }
@@ -175,12 +175,11 @@ class InteractionTool(BaseTool):
                 "type": interaction.type,
                 "direction": interaction.direction,
                 "date": interaction.date.isoformat() if interaction.date else None,
-                "duration": interaction.duration,
                 "subject": interaction.subject,
-                "description": interaction.description,
+                "content": interaction.content,
                 "created_at": interaction.createdAt.isoformat() if interaction.createdAt else None,
                 "updated_at": interaction.updatedAt.isoformat() if interaction.updatedAt else None,
-                "person": interaction.person,
+                "person": interaction.people,
                 "company": interaction.company
             }
         except Exception as e:
@@ -200,7 +199,7 @@ class InteractionTool(BaseTool):
                 skip=offset,
                 take=limit,
                 include={
-                    "person": {
+                    "people": {
                         "select": {
                             "id": True,
                             "firstName": True,
@@ -212,11 +211,11 @@ class InteractionTool(BaseTool):
                         "select": {
                             "id": True,
                             "name": True,
-                            "domain": True
+                            "description": True
                         }
                     }
                 },
-                orderBy={"date": "desc"}
+                order={"date": "desc"}
             )
             
             total_count = await client.interaction.count(

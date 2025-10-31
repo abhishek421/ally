@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 class CompanySearchParams(BaseModel):
     """Parameters for company search"""
     name: Optional[str] = None
-    domain: Optional[str] = None
+    description: Optional[str] = None
     privacy_level: Optional[str] = None
     limit: int = 50
     offset: int = 0
@@ -71,10 +71,10 @@ class CompanyTool(BaseTool):
             
             if params.name:
                 where_clause["name"] = {"contains": params.name, "mode": "insensitive"}
-            
-            if params.domain:
-                where_clause["domain"] = {"contains": params.domain, "mode": "insensitive"}
-            
+
+            if params.description:
+                where_clause["description"] = {"contains": params.description, "mode": "insensitive"}
+
             if params.privacy_level:
                 where_clause["privacyLevel"] = params.privacy_level
             
@@ -84,13 +84,24 @@ class CompanyTool(BaseTool):
                 skip=params.offset,
                 take=params.limit,
                 include={
-                    "emails": True,
-                    "phoneNumbers": True,
-                    "addresses": True,
-                    "urls": True,
-                    "peopleMetaData": True
+                    "email": True,
+                    "phoneNumber": True,
+                    "address": True,
+                    "url": True,
+                    "metaData": {
+                        "include": {
+                            "people": {
+                                "select": {
+                                    "id": True,
+                                    "firstName": True,
+                                    "lastName": True,
+                                    "jobTitle": True
+                                }
+                            }
+                        }
+                    }
                 },
-                orderBy={"createdAt": "desc"}
+                order={"createdAt": "desc"}
             )
             
             # Get total count
@@ -124,13 +135,13 @@ class CompanyTool(BaseTool):
                     "workspaceId": self.workspace_id
                 },
                 include={
-                    "emails": True,
-                    "phoneNumbers": True,
-                    "addresses": True,
-                    "urls": True,
-                    "peopleMetaData": {
+                    "email": True,
+                    "phoneNumber": True,
+                    "address": True,
+                    "url": True,
+                    "metaData": {
                         "include": {
-                            "person": {
+                            "people": {
                                 "select": {
                                     "id": True,
                                     "firstName": True,
@@ -149,15 +160,15 @@ class CompanyTool(BaseTool):
             return {
                 "id": company.id,
                 "name": company.name,
-                "domain": company.domain,
+                "description": company.description,
                 "privacy_level": company.privacyLevel,
                 "created_at": company.createdAt.isoformat() if company.createdAt else None,
                 "updated_at": company.updatedAt.isoformat() if company.updatedAt else None,
-                "emails": company.emails,
-                "phone_numbers": company.phoneNumbers,
-                "addresses": company.addresses,
-                "urls": company.urls,
-                "people": company.peopleMetaData
+                "emails": company.email,
+                "phone_numbers": company.phoneNumber,
+                "addresses": company.address,
+                "urls": company.url,
+                "people": company.metaData
             }
         except Exception as e:
             self.logger.error(f"Error getting company by ID {company_id}: {e}")
@@ -173,12 +184,12 @@ class CompanyTool(BaseTool):
                 skip=offset,
                 take=limit,
                 include={
-                    "emails": True,
-                    "phoneNumbers": True,
-                    "addresses": True,
-                    "urls": True
+                    "email": True,
+                    "phoneNumber": True,
+                    "address": True,
+                    "url": True
                 },
-                orderBy={"createdAt": "desc"}
+                order={"createdAt": "desc"}
             )
             
             total_count = await client.company.count(

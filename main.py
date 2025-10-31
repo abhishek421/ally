@@ -11,10 +11,9 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from graph.pipeline import AnalystPipeline
-from config.config_manager import get_config_manager
-from config.settings import set_config_manager
-from database.prisma_client import prisma_client
-from api.v1 import query, health
+from api.v1 import query, health, admin
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 # Setup logging
 logging.basicConfig(
@@ -26,47 +25,32 @@ logger = logging.getLogger(__name__)
 
 async def initialize_application():
     """
-    Initialize application configuration from database.
-    This should be called before creating any agents or pipelines.
+    Initialize application (ENV-only configuration).
     """
-    logger.info("Initializing application configuration...")
-    
+    logger.info("Initializing application (ENV-only config)...")
+
+    # Initialize database connection
+    from database.prisma_client import prisma_client
     try:
-        # Initialize ConfigManager
-        config_manager = get_config_manager()
-        await config_manager.initialize()
-        
-        # Set it globally so settings.py can use it
-        set_config_manager(config_manager)
-        
-        logger.info("Application initialized successfully")
-        
-        # Log loaded configurations
-        if config_manager.db_available:
-            if config_manager.global_config:
-                logger.info(f"Global LLM config: {config_manager.global_config.provider}/{config_manager.global_config.model}")
-            
-            for agent_name in config_manager._agent_configs:
-                config = config_manager.get_agent_config_sync(agent_name)
-                logger.info(f"Agent '{agent_name}' config: {config.provider}/{config.model} (source: {config.source})")
-        else:
-            logger.warning("Database not available, using environment variable fallback")
-        
+        await prisma_client.connect()
+        logger.info("Database connection initialized successfully")
     except Exception as e:
-        logger.error(f"Failed to initialize application configuration: {e}")
-        logger.warning("Continuing with environment variable fallback")
-        # Still set a basic ConfigManager so the app can continue
-        config_manager = get_config_manager()
-        set_config_manager(config_manager)
+        logger.error(f"Failed to initialize database connection: {e}")
+        raise
+
+    logger.info("Application initialization complete (ENV-only)")
 
 
 async def cleanup_application():
-    """Cleanup database connections on shutdown"""
+    """Cleanup on shutdown."""
+    from database.prisma_client import prisma_client
     try:
         await prisma_client.disconnect()
-        logger.info("Application cleanup completed")
+        logger.info("Database connection closed successfully")
     except Exception as e:
-        logger.warning(f"Error during cleanup: {e}")
+        logger.warning(f"Error during database cleanup: {e}")
+
+    logger.info("Application cleanup completed")
 
 
 @asynccontextmanager
@@ -101,6 +85,16 @@ app.add_middleware(
 # Include routers
 app.include_router(health.router, tags=["Health"])
 app.include_router(query.router, prefix="/api/v1", tags=["Query"])
+app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Admin panel route
+@app.get("/admin")
+async def admin_panel():
+    """Serve the admin panel HTML"""
+    return FileResponse("static/admin.html")
 
 
 # Exception handlers

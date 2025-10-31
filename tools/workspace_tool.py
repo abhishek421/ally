@@ -44,12 +44,16 @@ class WorkspaceTool(BaseTool):
             workspace = await client.workspace.find_unique(
                 where={"id": self.workspace_id},
                 include={
-                    "users": {
-                        "select": {
-                            "id": True,
-                            "email": True,
-                            "firstName": True,
-                            "lastName": True
+                    "workspaceMember": {
+                        "include": {
+                            "user": {
+                                "select": {
+                                    "id": True,
+                                    "email": True,
+                                    "firstName": True,
+                                    "lastName": True
+                                }
+                            }
                         }
                     }
                 }
@@ -68,7 +72,13 @@ class WorkspaceTool(BaseTool):
                 "name": workspace.name,
                 "created_at": workspace.createdAt.isoformat() if workspace.createdAt else None,
                 "updated_at": workspace.updatedAt.isoformat() if workspace.updatedAt else None,
-                "users": workspace.users if workspace.users else []
+                "members": [
+                    {
+                        **member.user.__dict__,
+                        "role": member.role
+                    }
+                    for member in workspace.workspaceMember
+                ] if workspace.workspaceMember else []
             }
         except Exception as e:
             self.logger.error(f"Error getting workspace info: {e}")
@@ -81,46 +91,54 @@ class WorkspaceTool(BaseTool):
             }
     
     async def _list_workspace_settings(self) -> Dict[str, Any]:
-        """Get workspace settings and configuration"""
+        """List all workspaces the user is a member of"""
         try:
             client = await prisma_client.get_client()
-            
-            # Query workspace settings
-            workspace = await client.workspace.find_unique(
-                where={"id": self.workspace_id},
-                select={
-                    "name": True,
-                    "createdAt": True,
-                    "updatedAt": True,
-                    "settings": True
-                }
+
+            # Query all workspace memberships for the user
+            workspace_members = await client.workspacemember.find_many(
+                where={"userId": self.user_id},
+                include={
+                    "workspace": {
+                        "select": {
+                            "id": True,
+                            "name": True,
+                            "createdAt": True,
+                            "updatedAt": True
+                        }
+                    }
+                },
+                order={"createdAt": "desc"}
             )
-            
-            if not workspace:
+
+            if not workspace_members:
                 return {
-                    "timezone": "UTC",
-                    "date_format": "YYYY-MM-DD",
-                    "features": ["ai_analyst", "email_sync"],
-                    "workspace_name": "Unknown"
+                    "workspaces": [],
+                    "total": 0
                 }
-            
-            # Parse settings if they exist
-            settings = workspace.settings if workspace.settings else {}
-            
+
+            # Build list of workspaces with user's role
+            workspaces = []
+            for member in workspace_members:
+                workspace_data = {
+                    "id": member.workspace.id,
+                    "name": member.workspace.name,
+                    "role": member.role,
+                    "created_at": member.workspace.createdAt.isoformat() if member.workspace.createdAt else None,
+                    "updated_at": member.workspace.updatedAt.isoformat() if member.workspace.updatedAt else None,
+                    "joined_at": member.createdAt.isoformat() if member.createdAt else None
+                }
+                workspaces.append(workspace_data)
+
             return {
-                "timezone": settings.get("timezone", "UTC"),
-                "date_format": settings.get("date_format", "YYYY-MM-DD"),
-                "features": settings.get("features", ["ai_analyst", "email_sync"]),
-                "workspace_name": workspace.name,
-                "created_at": workspace.createdAt.isoformat() if workspace.createdAt else None,
-                "updated_at": workspace.updatedAt.isoformat() if workspace.updatedAt else None
+                "workspaces": workspaces,
+                "total": len(workspaces)
             }
         except Exception as e:
-            self.logger.error(f"Error getting workspace settings: {e}")
-            # Return fallback settings
+            self.logger.error(f"Error listing workspaces: {e}")
+            # Return fallback empty list
             return {
-                "timezone": "UTC",
-                "date_format": "YYYY-MM-DD",
-                "features": ["ai_analyst", "email_sync"],
-                "workspace_name": "Sample Workspace"
+                "workspaces": [],
+                "total": 0,
+                "error": str(e)
             }

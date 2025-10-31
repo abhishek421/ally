@@ -56,7 +56,7 @@ logs/
 
 # Environment variables file (SECURITY)
 .env
-.env.*
+!.env.example
 
 # Python testing
 .pytest_cache/

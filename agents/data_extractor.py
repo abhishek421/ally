@@ -42,15 +42,15 @@ class DataExtractorAgent:
         
         self._logger.debug(f"DataExtractorAgent initialized with provider: {self.llm_provider}")
     
-    def extract(self, optimized_query: str, workspace_id: str, user_id: str) -> Dict[str, Any]:
+    async def extract(self, optimized_query: str, workspace_id: str, user_id: str) -> Dict[str, Any]:
         """
         Main entry point to extract data based on optimized query
-        
+
         Args:
             optimized_query: Optimized query string from QueryOptimizerAgent
             workspace_id: Workspace identifier for data isolation
             user_id: User identifier for access control
-            
+
         Returns:
             Dictionary with extracted data grouped by tool:
             {
@@ -65,26 +65,26 @@ class DataExtractorAgent:
         self._logger.info("Starting data extraction")
         self._logger.debug(f"Optimized query: {optimized_query}")
         self._logger.debug(f"Workspace: {workspace_id}, User: {user_id}")
-        
+
         start_time = time.time()
-        
+
         try:
             # Step 1: Parse optimized query using LLM
             parsed_query = self._parse_optimized_query(optimized_query)
             self._logger.debug(f"Parsed query: {parsed_query}")
-            
+
             # Step 2: Execute tool calls
-            tool_results = self._execute_tool_calls(parsed_query, workspace_id, user_id)
-            
+            tool_results = await self._execute_tool_calls(parsed_query, workspace_id, user_id)
+
             # Step 3: Aggregate results in tool-grouped structure
             extracted_data = self._aggregate_results(tool_results)
-            
+
             elapsed_ms = int((time.time() - start_time) * 1000)
             self._logger.info(f"Data extraction completed in {elapsed_ms} ms")
             self._logger.debug(f"Extracted data keys: {list(extracted_data.keys())}")
-            
+
             return extracted_data
-            
+
         except Exception as e:
             self._logger.exception(f"Error in data extraction: {e}")
             # Return empty structure on error
@@ -171,29 +171,29 @@ class DataExtractorAgent:
         
         return response
     
-    def _execute_tool_calls(self, parsed_query: Dict[str, Any], workspace_id: str, user_id: str) -> List[Dict[str, Any]]:
+    async def _execute_tool_calls(self, parsed_query: Dict[str, Any], workspace_id: str, user_id: str) -> List[Dict[str, Any]]:
         """
         Execute all tool calls from parsed query
-        
+
         Args:
             parsed_query: Parsed query with tool_calls
             workspace_id: Workspace identifier
             user_id: User identifier
-            
+
         Returns:
             List of tool execution results with metadata
         """
         tool_calls = parsed_query.get("tool_calls", [])
-        
+
         if not tool_calls:
             self._logger.warning("No tool calls in parsed query")
             return []
-        
+
         self._logger.info(f"Executing {len(tool_calls)} tool call(s)")
-        
+
         # Execute tools asynchronously
-        results = asyncio.run(self._execute_tools_async(tool_calls, workspace_id, user_id))
-        
+        results = await self._execute_tools_async(tool_calls, workspace_id, user_id)
+
         return results
     
     async def _execute_tools_async(self, tool_calls: List[Dict], workspace_id: str, user_id: str) -> List[Dict[str, Any]]:

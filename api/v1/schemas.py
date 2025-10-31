@@ -6,11 +6,15 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class QueryRequest(BaseModel):
-    """Request model for query endpoint"""
+    """
+    Request model for query endpoint
+
+    Note: workspace_id and user_id are now passed via headers:
+    - X-Workspace-ID: Workspace identifier
+    - X-User-ID: User identifier
+    """
     query: str = Field(..., min_length=1, max_length=2000, description="Natural language query")
-    workspace_id: str = Field(..., min_length=1, description="Workspace identifier")
-    user_id: str = Field(..., min_length=1, description="User identifier")
-    
+
     @field_validator('query')
     @classmethod
     def validate_query(cls, v: str) -> str:

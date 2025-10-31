@@ -21,29 +21,44 @@ logger = logging.getLogger(__name__)
 
 
 async def seed_global_config():
-    """Seed global LLM configuration with defaults"""
+    """
+    Seed global LLM configuration from environment variables.
+
+    Requires GLOBAL_LLM_PROVIDER and GLOBAL_LLM_MODEL to be set.
+    """
     try:
         client = await prisma_client.get_client()
-        
+
         # Check if global config exists
         existing = await client.globalllmconfig.find_first(where={"enabled": True})
-        
+
         if existing:
             logger.info(f"Global LLM config already exists: {existing.provider}/{existing.model}")
             return existing
         else:
-            # Create default global config
+            # Get configuration from environment variables
+            provider = os.getenv("GLOBAL_LLM_PROVIDER")
+            model = os.getenv("GLOBAL_LLM_MODEL")
+
+            if not provider or not model:
+                raise ValueError(
+                    "GLOBAL_LLM_PROVIDER and GLOBAL_LLM_MODEL environment variables "
+                    "must be set to seed global configuration. "
+                    f"Current values: provider='{provider}', model='{model}'"
+                )
+
+            # Create global config from env vars
             config = await client.globalllmconfig.create(
                 data={
-                    "provider": "openai",
-                    "model": "gpt-4",
+                    "provider": provider,
+                    "model": model,
                     "enabled": True,
                     "version": 1
                 }
             )
-            logger.info(f"Created default global LLM config: {config.provider}/{config.model}")
+            logger.info(f"Created global LLM config from environment: {config.provider}/{config.model}")
             return config
-            
+
     except Exception as e:
         logger.error(f"Error seeding global config: {e}")
         raise
@@ -93,34 +108,54 @@ async def seed_agent_config(agent_name: str, provider: str = None, model: str = 
 
 
 async def seed_all_configs():
-    """Seed all LLM configurations with defaults"""
+    """
+    Seed all LLM configurations from environment variables.
+
+    Environment variables used:
+    - GLOBAL_LLM_PROVIDER and GLOBAL_LLM_MODEL (required for global config)
+    - <AGENT>_PROVIDER and <AGENT>_MODEL (optional for agent-specific overrides)
+
+    Agents will inherit from global config unless specific overrides are set.
+    """
     logger.info("Starting LLM configuration seeding...")
-    
+
     try:
         # Connect to database
         await prisma_client.connect()
         logger.info("Connected to database")
-        
-        # Seed global config
+
+        # Seed global config (requires env vars)
         await seed_global_config()
-        
+
         # Seed agent configs (using None for provider/model = inherit from global)
-        # You can specify overrides here if needed
+        # Check environment variables for agent-specific overrides
         agents = [
-            {"name": "query_optimizer", "provider": None, "model": None},
-            {"name": "data_extractor", "provider": None, "model": None},
-            {"name": "response_formatter", "provider": None, "model": "gpt-3.5-turbo"}  # Use cheaper model for formatting
+            {
+                "name": "query_optimizer",
+                "provider": os.getenv("QUERY_OPTIMIZER_PROVIDER"),
+                "model": os.getenv("QUERY_OPTIMIZER_MODEL")
+            },
+            {
+                "name": "data_extractor",
+                "provider": os.getenv("DATA_EXTRACTOR_PROVIDER"),
+                "model": os.getenv("DATA_EXTRACTOR_MODEL")
+            },
+            {
+                "name": "response_formatter",
+                "provider": os.getenv("RESPONSE_FORMATTER_PROVIDER"),
+                "model": os.getenv("RESPONSE_FORMATTER_MODEL")
+            }
         ]
-        
+
         for agent in agents:
             await seed_agent_config(
                 agent_name=agent["name"],
                 provider=agent["provider"],
                 model=agent["model"]
             )
-        
+
         logger.info("LLM configuration seeding completed successfully")
-        
+
     except Exception as e:
         logger.error(f"Failed to seed LLM configurations: {e}")
         raise

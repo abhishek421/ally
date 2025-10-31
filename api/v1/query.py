@@ -4,9 +4,10 @@ Main query endpoint for processing natural language queries
 import time
 import logging
 import uuid
-from fastapi import APIRouter, HTTPException, status, Depends, Request
+from fastapi import APIRouter, HTTPException, status, Header
+from typing import Optional
 from api.v1.schemas import QueryRequest, QueryResponse, ErrorResponse
-from api.dependencies import verify_token_dependency
+# from api.dependencies import verify_token_dependency  # Commented out for now
 from graph.pipeline import AnalystPipeline
 
 logger = logging.getLogger(__name__)
@@ -17,45 +18,50 @@ router = APIRouter()
 @router.post("/query", response_model=QueryResponse)
 async def process_query(
     request: QueryRequest,
-    token_claims: dict = Depends(verify_token_dependency)
+    workspace_id: str = Header(..., alias="X-Workspace-ID", description="Workspace identifier"),
+    user_id: str = Header(..., alias="X-User-ID", description="User identifier"),
+    # token_claims: dict = Depends(verify_token_dependency)  # Commented out - JWT auth disabled
 ):
     """
     Process a natural language query through the AI Analyst pipeline
-    
+
     Args:
-        request: QueryRequest containing query, workspace_id, and user_id
-        token_claims: Verified JWT token claims (validated but not used for IDs)
-        
+        request: QueryRequest containing the query text
+        workspace_id: Workspace identifier from header (X-Workspace-ID)
+        user_id: User identifier from header (X-User-ID)
+
     Returns:
         QueryResponse with formatted results
-        
+
     Raises:
         HTTPException: If query processing fails
+
+    Note:
+        JWT authentication is currently disabled. workspace_id and user_id
+        are read directly from headers for simplified testing.
     """
     # Generate request ID for tracing
     request_id = str(uuid.uuid4())
-    
+
     # Log request with request ID
     logger.info(
-        f"Processing query (request_id={request_id}, workspace={request.workspace_id}, "
-        f"user={request.user_id}, query_length={len(request.query)})"
+        f"Processing query (request_id={request_id}, workspace={workspace_id}, "
+        f"user={user_id}, query_length={len(request.query)})"
     )
-    
+
     start_time = time.time()
-    
+
     try:
         # Create pipeline instance
         pipeline = AnalystPipeline()
-        
-        # Execute pipeline (synchronous call)
-        # Note: pipeline.run() is synchronous, so we call it directly
-        # In production, consider wrapping in run_in_executor for better async handling
-        result = pipeline.run(
+
+        # Execute pipeline (async call)
+        result = await pipeline.run(
             user_query=request.query,
-            workspace_id=request.workspace_id,
-            user_id=request.user_id
+            workspace_id=workspace_id,
+            user_id=user_id
         )
-        
+
         execution_time_ms = int((time.time() - start_time) * 1000)
         
         logger.info(
@@ -68,8 +74,8 @@ async def process_query(
             query=request.query,
             result=result,
             execution_time_ms=execution_time_ms,
-            workspace_id=request.workspace_id,
-            user_id=request.user_id
+            workspace_id=workspace_id,
+            user_id=user_id
         )
         
     except Exception as e:
