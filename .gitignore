@@ -81,6 +81,7 @@ coverage.xml
 *.onnx
 *.tflite
 models/
+!config/models/
 checkpoints/
 weights/
 
