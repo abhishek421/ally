@@ -1,4 +1,4 @@
-# AI Analyst Service
+# AI Analyst Agent
 
 A production-ready, intelligent CRM query system that transforms natural language questions into structured data responses. Built with FastAPI and LangGraph, it orchestrates multiple AI agents to understand queries, extract data from various sources (PostgreSQL, DynamoDB, Redis), and format results through a simple REST API.
 
