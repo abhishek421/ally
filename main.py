@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from graph.pipeline import AnalystPipeline
-from api.v1 import query, health, admin
+from api.v1 import query, health, admin, conversations
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
@@ -85,6 +85,7 @@ app.add_middleware(
 # Include routers
 app.include_router(health.router, tags=["Health"])
 app.include_router(query.router, prefix="/api/v1", tags=["Query"])
+app.include_router(conversations.router, prefix="/api/v1", tags=["Conversations"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
 
 # Mount static files
