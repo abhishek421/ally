@@ -1,6 +1,16 @@
 version: '3.8'
 
 services:
+  # Qdrant Vector DB
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: analyst-ai-qdrant
+    ports:
+      - "6333:6333"
+    networks:
+      - analyst-ai-network
+    restart: unless-stopped
+
   # Redis Cache
   redis:
     image: redis:7-alpine
@@ -55,8 +65,12 @@ AWS_SECRET_ACCESS_KEY=REDACTED
 
       # Application Configuration
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Vector DB (Qdrant)
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
 
     depends_on:
+      qdrant:
+        condition: service_started
       redis:
         condition: service_healthy
     networks:

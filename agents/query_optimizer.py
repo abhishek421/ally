@@ -1,7 +1,7 @@
 """
 QueryOptimizerAgent - Converts user queries to more defined and structured queries
 """
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Any
 import logging
 import time
 from datetime import datetime, timedelta
@@ -43,12 +43,13 @@ class QueryOptimizerAgent:
         
         self._logger.debug(f"QueryOptimizerAgent initialized with provider: {self.llm_provider}")
     
-    def optimize(self, user_query: str) -> str:
+    def optimize(self, user_query: str, context_messages: List[Dict[str, Any]] = None) -> str:
         """
         Optimize a user query to make it more structured and actionable
         
         Args:
             user_query: Natural language query from the user
+            context_messages: Previous conversation messages for context
             
         Returns:
             Optimized query with clear intent and structure
@@ -56,14 +57,34 @@ class QueryOptimizerAgent:
         
         self._logger.info("Optimizing query")
         self._logger.debug("User query received: %s", user_query)
+        
+        # Build context if available
+        context_str = ""
+        if context_messages:
+            self._logger.info(f"Using {len(context_messages)} context messages")
+            context_str = self._build_context_string(context_messages)
+        
         # for LLM-based optimization with exact date replacements
         start_time = time.time()
-        optimized = self._llm_optimization(user_query)
+        optimized = self._llm_optimization(user_query, context_str)
         elapsed_ms = int((time.time() - start_time) * 1000)
         self._logger.info("Query optimized in %d ms", elapsed_ms)
         self._logger.debug("Optimized query: %s", optimized)
         
         return optimized
+    
+    def _build_context_string(self, context_messages: List[Dict[str, Any]]) -> str:
+        """Build a formatted string from context messages"""
+        if not context_messages:
+            return ""
+        
+        context_lines = ["Previous conversation context:"]
+        for msg in context_messages:
+            role = msg.get("role", "UNKNOWN")
+            content = msg.get("content", "")
+            context_lines.append(f"{role}: {content}")
+        
+        return "\n".join(context_lines)
     
     def _get_current_date_context(self) -> str:
         """
@@ -84,19 +105,24 @@ class QueryOptimizerAgent:
         self._logger.debug("Date context generated")
         return context
     
-    def _llm_optimization(self, user_query: str) -> str:
+    def _llm_optimization(self, user_query: str, context_str: str = "") -> str:
         """
-        Use LLM to optimize the query with exact date replacements
+        Use LLM to optimize the query with exact date replacements and conversation context
         """
         self._logger.info(f"Calling LLM for optimization (provider={self.llm_provider})")
         
         # Get current date context
         date_context = self._get_current_date_context()
         
+        # Build full query with context
+        full_query = user_query
+        if context_str:
+            full_query = f"{context_str}\n\nCurrent query: {user_query}"
+        
         # Format template with both date_context and user_query
         prompt = self.template.format(
             date_context=date_context,
-            user_query=user_query
+            user_query=full_query
         )
         self._logger.debug("Prompt prepared (length=%d)", len(prompt))
         
