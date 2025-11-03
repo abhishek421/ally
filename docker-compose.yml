@@ -6,7 +6,7 @@ services:
     image: redis:7-alpine
     container_name: analyst-ai-redis
     ports:
-      - "${REDIS_EXTERNAL_PORT:-6380}:6379"
+      - "${REDIS_EXTERNAL_PORT:-6380}:6379"  # Service-specific: Redis external port
     volumes:
       - redis_data:/data
     healthcheck:
@@ -26,19 +26,19 @@ services:
       dockerfile: Dockerfile
     container_name: analyst-ai-app
     ports:
-      - "${APP_PORT:-8000}:8000"
+      - "${ANALYST_AI_PORT:-8000}:8000"
     environment:
-      # Database Configuration
+      # Database Configuration (Common - shared across services)
       # Override DATABASE_URL to use host.docker.internal instead of localhost
       # This allows the container to connect to PostgreSQL running on the host
       DATABASE_URL: postgresql://postgres:postgres@host.docker.internal:5433/softsync?schema=public
 
-      # Redis Configuration
+      # Redis Configuration (Common - shared across services)
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_DB: ${REDIS_DB:-0}
 
-      # LLM Provider API Keys (from .env file)
+      # LLM Provider API Keys (Common - shared across services)
 OPENAI_API_KEY=REDACTED
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
@@ -47,7 +47,7 @@ OPENAI_API_KEY=REDACTED
       GLOBAL_LLM_PROVIDER: ${GLOBAL_LLM_PROVIDER:-openai}
       GLOBAL_LLM_MODEL: ${GLOBAL_LLM_MODEL:-gpt-4}
 
-      # AWS Configuration (optional)
+      # AWS Configuration (Common - shared across services)
       AWS_REGION: ${AWS_REGION:-us-east-1}
 AWS_ACCESS_KEY_ID=REDACTED
 AWS_SECRET_ACCESS_KEY=REDACTED

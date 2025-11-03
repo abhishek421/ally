@@ -3,6 +3,7 @@ import redis.asyncio as redis
 from typing import Optional, Any
 import json
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -10,10 +11,11 @@ logger = logging.getLogger(__name__)
 class RedisClient:
     """Redis client wrapper for caching"""
     
-    def __init__(self, host: str = "localhost", port: int = 6379, db: int = 0):
-        self.host = host
-        self.port = port
-        self.db = db
+    def __init__(self, host: Optional[str] = None, port: Optional[int] = None, db: Optional[int] = None):
+        # Use environment variables (common across services) with defaults
+        self.host = host or os.getenv("REDIS_HOST", "localhost")
+        self.port = port or int(os.getenv("REDIS_PORT", "6379"))
+        self.db = db if db is not None else int(os.getenv("REDIS_DB", "0"))
         self.client: Optional[redis.Redis] = None
     
     async def connect(self):
