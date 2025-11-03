@@ -38,6 +38,16 @@ async def initialize_application():
         logger.error(f"Failed to initialize database connection: {e}")
         raise
 
+    # Initialize config manager
+    from config.config_manager import get_config_manager
+    try:
+        config_manager = get_config_manager()
+        await config_manager.initialize()
+        logger.info("ConfigManager initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize ConfigManager: {e}")
+        raise
+
     logger.info("Application initialization complete (ENV-only)")
 
 

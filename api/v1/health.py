@@ -46,6 +46,13 @@ async def readiness_check():
     # Check config manager
     try:
         config_manager = get_config_manager()
+        if not config_manager._initialized:
+            # Try to initialize if not already initialized
+            try:
+                await config_manager.initialize()
+            except Exception as init_error:
+                logger.warning(f"Config manager initialization failed: {init_error}")
+        
         if config_manager._initialized:
             services["config_manager"] = "ready"
         else:
