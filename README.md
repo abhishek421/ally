@@ -394,8 +394,8 @@ Create a `.env` file in the project root:
 REDIS_DB=0
 REDIS_EXTERNAL_PORT=6380
 
-# Application Port
-APP_PORT=8000
+# Service-Specific Port (Analyst AI Service)
+ANALYST_AI_PORT=8000
 
 # LLM Provider API Keys (REQUIRED - at least one)
 OPENAI_API_KEY=sk-your-openai-api-key

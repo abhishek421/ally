@@ -3,6 +3,7 @@ import boto3
 from typing import Optional
 from botocore.config import Config
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -12,9 +13,11 @@ class DynamoDBClient:
     
     def __init__(self):
         self.client: Optional[boto3.resource] = None
+        # Use AWS_REGION environment variable (common across services)
+        region = os.getenv("AWS_REGION", "us-east-1")
         self.config = Config(
             retries={'max_attempts': 3},
-            region_name='us-east-1'  # TODO: Make configurable
+            region_name=region
         )
     
     def get_client(self):
