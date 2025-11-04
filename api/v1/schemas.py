@@ -14,6 +14,7 @@ class QueryRequest(BaseModel):
     - X-User-ID: User identifier
     """
     query: str = Field(..., min_length=1, max_length=2000, description="Natural language query")
+    conversation_id: Optional[str] = Field(None, description="Conversation identifier (optional)")
 
     @field_validator('query')
     @classmethod

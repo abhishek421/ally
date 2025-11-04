@@ -17,7 +17,6 @@ async def list_conversations(
 ):
     """
     List all conversations for a user (most recent first)
-    Like ChatGPT's sidebar conversation list
     """
     client = await prisma_client.get_client()
     
@@ -91,7 +90,6 @@ async def get_conversation_messages(
 ):
     """
     Get messages for a conversation (chronological order)
-    Like loading chat history in ChatGPT
     """
     client = await prisma_client.get_client()
     
