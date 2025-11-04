@@ -20,7 +20,6 @@ async def process_query(
     request: QueryRequest,
     workspace_id: str = Header(..., alias="X-Workspace-ID", description="Workspace identifier"),
     user_id: str = Header(..., alias="X-User-ID", description="User identifier"),
-    conversation_id: Optional[str] = Header(None, alias="X-Conversation-ID", description="Conversation identifier"),
     # token_claims: dict = Depends(verify_token_dependency)  # Commented out - JWT auth disabled
 ):
     """
@@ -59,7 +58,7 @@ async def process_query(
         conversation_id = await ensure_conversation(
             workspace_id=workspace_id,
             user_id=user_id,
-            conversation_id=conversation_id,
+            conversation_id=request.conversation_id,
             title_hint=request.query
         )
 
@@ -72,15 +71,29 @@ async def process_query(
         )
 
         # Retrieve conversation context (hybrid search with recency priority)
-        from services.vector_store import retrieve_conversation_context
-        
+        from services.vector_store import retrieve_conversation_context, get_recent_messages_from_db
+
+        # Simple summary intent detection
+        q_lower = request.query.lower()
+        summary_intent = any(
+            kw in q_lower for kw in [
+                "summarize", "summarise", "recap", "summary", "all messages", "entire conversation"
+            ]
+        )
+
         try:
-            context_messages = await retrieve_conversation_context(
-                conversation_id=conversation_id,
-                current_query=request.query,
-                top_k=5  # Get top 5 relevant messages
-            )
-            logger.info(f"Retrieved {len(context_messages)} context messages")
+            if summary_intent:
+                # Bypass retrieval: provide a larger recent window for summarization
+                context_messages = await get_recent_messages_from_db(conversation_id=conversation_id, limit=100)
+                logger.info(f"Summary intent detected, provided {len(context_messages)} recent messages")
+            else:
+                context_messages = await retrieve_conversation_context(
+                    conversation_id=conversation_id,
+                    current_query=request.query,
+                    k_recent=10,  # Always include last 10
+                    r_retrieved=5  # Plus 5 retrieved
+                )
+                logger.info(f"Retrieved {len(context_messages)} context messages (K=10, R=5)")
         except Exception as e:
             logger.warning(f"Context retrieval failed: {e}, continuing without context")
             context_messages = []

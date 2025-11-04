@@ -207,28 +207,29 @@ async def get_recent_messages_from_db(
 async def retrieve_conversation_context(
     conversation_id: str,
     current_query: str,
-    top_k: int = 5,
+    k_recent: int = 10,
+    r_retrieved: int = 5,
 ) -> List[Dict[str, Any]]:
     """
     Retrieve relevant context from conversation history with hybrid search + recency priority
     
     Strategy:
-    1. Always include last 3 messages (immediate context)
-    2. Semantic search for additional relevant messages
+    1. Always include last k_recent messages (immediate context)
+    2. Semantic search for additional r_retrieved messages
     3. Apply BM25 for keyword matching
     4. Boost recent messages with recency score
     """
     try:
-        # Step 1: Get last 3 messages (always included)
+        # Step 1: Get last k_recent messages (always included)
         recent_messages = await get_recent_messages_from_db(
             conversation_id=conversation_id,
-            limit=3
+            limit=k_recent
         )
         recent_ids = {msg["id"] for msg in recent_messages}
         
         # If we already have enough context, return
-        if len(recent_messages) >= top_k:
-            return recent_messages[:top_k]
+        if len(recent_messages) >= (k_recent + r_retrieved):
+            return recent_messages[:k_recent]
         
         # Step 2: Semantic search for additional context
         client = get_qdrant_client()
@@ -246,7 +247,7 @@ async def retrieve_conversation_context(
                     )
                 ]
             ),
-            limit=top_k * 2,  # Get more candidates for reranking
+            limit=max(r_retrieved * 3, 10),  # Get more candidates for reranking
             score_threshold=0.3,  # Minimum similarity
         )
         
@@ -284,7 +285,15 @@ async def retrieve_conversation_context(
         
         # Step 5: Sort by hybrid score and take top results
         candidates.sort(key=lambda x: x["score"], reverse=True)
-        additional_context = candidates[:top_k - len(recent_messages)]
+        # Take only up to r_retrieved items
+        # Also ensure we don't include any of the recent_ids
+        additional_context = []
+        for c in candidates:
+            if c["id"] in recent_ids:
+                continue
+            additional_context.append(c)
+            if len(additional_context) >= r_retrieved:
+                break
         
         # Combine: recent messages first, then semantically relevant
         return recent_messages + additional_context
