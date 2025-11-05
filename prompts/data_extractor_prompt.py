@@ -26,12 +26,12 @@ AVAILABLE TOOLS:
    - LIST: limit, offset
    - ANALYTICS: Returns contact metrics (count, companies, interaction frequency)
 
-3. **email** - Email synchronization data (external integration)
+3. **email** - Email synchronization data (DynamoDB storage)
    Operations: SEARCH | GET_BY_ID | LIST | ANALYTICS
-   - SEARCH: person_id, integration_id, from_email, to_email, subject, date_from (ISO 8601), date_to (ISO 8601), direction ('sent'|'received'), limit
+   - SEARCH: person_id, company_id, from_email, to_email, subject, date_from (ISO 8601), date_to (ISO 8601), direction ('sent'|'received'), limit, next_token
    - GET_BY_ID: message_id (required)
-   - LIST: person_id, limit
-   - ANALYTICS: Returns email metrics (count, threads, response rates)
+   - LIST: person_id OR company_id (at least one required), limit, next_token
+   - ANALYTICS: Returns email metrics (total_emails, by_direction counts)
 
 4. **interaction** - Interactions (calls, meetings, notes)
    Operations: SEARCH | GET_BY_ID | LIST | ANALYTICS
@@ -119,8 +119,8 @@ Output:
     "execution_plan": "Use analytics tool to retrieve aggregated deal metrics including revenue and counts"
 }}
 
-Example 3 - Multi-Entity Query:
-Optimized Query: {{"intent": "search", "primary_entity": "email", "entities": {{"people": ["John Smith"], "companies": ["TechCorp"], "time_range": {{"from": "2024-10-01", "to": "2024-10-31"}}}}, "filters": {{"direction": "sent"}}}}
+Example 3 - Person Email Query:
+Optimized Query: {{"intent": "search", "primary_entity": "email", "entities": {{"people": ["John Smith"], "time_range": {{"from": "2024-10-01", "to": "2024-10-31"}}}}, "filters": {{"direction": "sent"}}}}
 Output:
 {{
     "tool_calls": [
@@ -136,19 +136,45 @@ Output:
         }},
         {{
             "tool": "email",
-            "query_type": "search",
+            "query_type": "list",
             "params": {{
-                "from_email": "john.smith",
-                "subject": "TechCorp",
+                "person_id": "<person_id_from_previous_call>",
                 "date_from": "2024-10-01T00:00:00Z",
                 "date_to": "2024-10-31T23:59:59Z",
                 "direction": "sent",
                 "limit": 50
             }},
-            "reason": "Search emails sent by John Smith mentioning TechCorp in October 2024"
+            "reason": "List emails sent by John Smith in October 2024"
         }}
     ],
-    "execution_plan": "First find John Smith's person_id, then search for emails sent by that person mentioning TechCorp within the date range"
+    "execution_plan": "First find John Smith's person_id, then list emails sent by that person within the date range"
+}}
+
+Example 3.5 - Company Email Query:
+Optimized Query: {{"intent": "search", "primary_entity": "email", "entities": {{"companies": ["Acme Corp"], "time_range": {{"from": "2024-01-01", "to": "2024-12-31"}}}}, "filters": {{"direction": "received"}}}}
+Output:
+{{
+    "tool_calls": [
+        {{
+            "tool": "company",
+            "query_type": "search",
+            "params": {{
+                "name": "Acme Corp",
+                "limit": 1
+            }},
+            "reason": "Find company_id for Acme Corp"
+        }},
+        {{
+            "tool": "email",
+            "query_type": "list",
+            "params": {{
+                "company_id": "<company_id_from_previous_call>",
+                "limit": 50
+            }},
+            "reason": "List all emails associated with Acme Corp"
+        }}
+    ],
+    "execution_plan": "First find Acme Corp's company_id, then list all emails associated with that company for the year 2024"
 }}
 
 Example 4 - Get by ID with Related Data:
