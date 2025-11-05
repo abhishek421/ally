@@ -1,7 +1,7 @@
 """
 LangGraph pipeline orchestration for AI Analyst
 """
-from typing import TypedDict, Annotated
+from typing import TypedDict, Annotated, List, Dict, Any
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from agents.query_optimizer import QueryOptimizerAgent
@@ -12,6 +12,7 @@ class AgentState(TypedDict):
     user_query: str
     workspace_id: str
     user_id: str
+    context_messages: List[Dict[str, Any]]
     optimized_query: str
     extracted_data: dict
     final_response: dict
@@ -43,8 +44,11 @@ class AnalystPipeline:
         return workflow.compile()
     
     def _query_optimizer_node(self, state: AgentState) -> AgentState:
-        """QueryOptimizerAgent: Converts user query to defined query"""
-        optimized_query = self.query_optimizer.optimize(state['user_query'])
+        """QueryOptimizerAgent: Converts user query to defined query with context"""
+        optimized_query = self.query_optimizer.optimize(
+            user_query=state['user_query'],
+            context_messages=state.get('context_messages', [])
+        )
         return {"optimized_query": optimized_query}
     
     async def _data_extractor_node(self, state: AgentState) -> AgentState:
@@ -70,12 +74,13 @@ class AnalystPipeline:
         )
         return {"final_response": formatted_response}
     
-    async def run(self, user_query: str, workspace_id: str, user_id: str) -> dict:
-        """Run the pipeline with a user query, workspace_id, and user_id"""
+    async def run(self, user_query: str, workspace_id: str, user_id: str, context_messages: List[Dict[str, Any]] = None) -> dict:
+        """Run the pipeline with a user query, workspace_id, user_id, and optional context"""
         initial_state = {
             "user_query": user_query,
             "workspace_id": workspace_id,
             "user_id": user_id,
+            "context_messages": context_messages or [],
             "optimized_query": "",
             "extracted_data": {},
             "final_response": {}
