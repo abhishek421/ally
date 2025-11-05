@@ -130,9 +130,7 @@ class EmailTool(BaseTool):
                     'ExpressionAttributeValues': {':pk': pk},
                     'ScanIndexForward': False,  # Most recent first
                     'Limit': min(params.limit, 100)  # Cap at 100 for performance
-                    'Limit': min(params.limit, 100)  # Cap at 100 for performance
                 }
-
 
                 # Add filters if provided
                 filter_expressions = []
@@ -238,8 +236,6 @@ class EmailTool(BaseTool):
                     'KeyConditionExpression': 'PK = :pk',
                     'ExpressionAttributeValues': {':pk': pk},
                     'ScanIndexForward': False,
-                    'Limit': min(params.limit, 100)
-                    'Limit': min(params.limit, 100)
                 }
 
                 # Handle pagination token
@@ -270,9 +266,7 @@ class EmailTool(BaseTool):
                 scan_params = {
                     'FilterExpression': 'begins_with(PK, :pk_prefix)',
                     'FilterExpression': 'begins_with(PK, :pk_prefix)',
-                    'ExpressionAttributeValues': {':pk_prefix': f"WORKSPACE#{self.workspace_id}#"},
-                    'Limit': min(params.limit, 100)
-                    'Limit': min(params.limit, 100)
+                    'ExpressionAttributeValues': {':pk_prefix': f"WORKSPACE#{self.workspace_id}#"}, 
                 }
 
                 # Handle pagination token
@@ -359,10 +353,10 @@ class EmailTool(BaseTool):
             response = table.query(
                 IndexName='GSI1',
                 KeyConditionExpression='GSI1PK = :gsi1pk',
-                ExpressionAttributeValues={':gsi1pk': gsi1pk}
+                ExpressionAttributeValues={':gsi1pk': gsi1pk},
                 KeyConditionExpression='GSI1PK = :gsi1pk',
                 ExpressionAttributeValues={':gsi1pk': gsi1pk}
-            )
+                )
 
 
             items = response.get('Items', [])
@@ -378,13 +372,6 @@ class EmailTool(BaseTool):
         except Exception as e:
             self.logger.error(f"Error getting email by ID {message_id}: {e}")
             return {}
-
-    async def _list_emails_by_person(
-        self,
-        person_id: str,
-        limit: int,
-        next_token: Optional[str] = None
-    ) -> Dict[str, Any]:
 
     async def _list_emails_by_person(
         self,
