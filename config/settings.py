@@ -127,6 +127,33 @@ DATA_EXTRACTOR_CONFIG = _get_env_agent_config("DATA_EXTRACTOR")
 # ResponseFormatterAgent Configuration
 RESPONSE_FORMATTER_CONFIG = _get_env_agent_config("RESPONSE_FORMATTER")
 
+# ============================================================================
+# Conversation Context Configuration
+# ============================================================================
+
+# Number of recent messages to always include in context
+CONTEXT_K_RECENT = int(os.getenv("CONTEXT_K_RECENT", "10"))
+
+# Number of retrieved messages from hybrid search (semantic + BM25)
+CONTEXT_R_RETRIEVED = int(os.getenv("CONTEXT_R_RETRIEVED", "5"))
+
+# ============================================================================
+# Qdrant Vector DB Configuration
+# ============================================================================
+
+# Qdrant collection name for storing message embeddings
+QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "conversation_messages")
+
+# Embedding model name (sentence-transformers model)
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
+
+# Vector dimension (must match the embedding model)
+# all-MiniLM-L6-v2 = 384, all-mpnet-base-v2 = 768, etc.
+QDRANT_VECTOR_SIZE = int(os.getenv("QDRANT_VECTOR_SIZE", "384"))
+
+# Minimum similarity threshold for vector search (0.0 to 1.0)
+QDRANT_SCORE_THRESHOLD = float(os.getenv("QDRANT_SCORE_THRESHOLD", "0.3"))
+
 """
 Note: Configuration is ENV-only. Use per-agent configuration via
 get_agent_config(...) with global and agent-level env overrides.

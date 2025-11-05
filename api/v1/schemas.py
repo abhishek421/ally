@@ -14,6 +14,7 @@ class QueryRequest(BaseModel):
     - X-User-ID: User identifier
     """
     query: str = Field(..., min_length=1, max_length=2000, description="Natural language query")
+    conversation_id: Optional[str] = Field(None, description="Conversation identifier (optional)")
 
     @field_validator('query')
     @classmethod
@@ -32,6 +33,7 @@ class QueryResponse(BaseModel):
     execution_time_ms: int = Field(..., description="Query execution time in milliseconds")
     workspace_id: str = Field(..., description="Workspace identifier")
     user_id: str = Field(..., description="User identifier")
+    conversation_id: str | None = Field(None, description="Conversation identifier")
 
 
 class ErrorResponse(BaseModel):

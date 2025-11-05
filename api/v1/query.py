@@ -9,6 +9,7 @@ from typing import Optional
 from api.v1.schemas import QueryRequest, QueryResponse, ErrorResponse
 # from api.dependencies import verify_token_dependency  # Commented out for now
 from graph.pipeline import AnalystPipeline
+from config.settings import CONTEXT_K_RECENT, CONTEXT_R_RETRIEVED
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +53,57 @@ async def process_query(
     start_time = time.time()
 
     try:
+        # Ensure conversation exists and store messages
+        from services.conversation import ensure_conversation, create_message
+
+        conversation_id = await ensure_conversation(
+            workspace_id=workspace_id,
+            user_id=user_id,
+            conversation_id=request.conversation_id,
+            title_hint=request.query
+        )
+
+        # Store user message
+        await create_message(
+            conversation_id=conversation_id,
+            role="USER",
+            content=request.query,
+            metadata={"workspace_id": workspace_id, "user_id": user_id}
+        )
+
+        # Retrieve conversation context (hybrid search: K=10 recent + R=5 retrieved)
+        from services.vector_store import retrieve_conversation_context
+        
+        try:
+            context_messages = await retrieve_conversation_context(
+                conversation_id=conversation_id,
+                current_query=request.query,
+                k_recent=CONTEXT_K_RECENT,
+                r_retrieved=CONTEXT_R_RETRIEVED
+            )
+            logger.info(f"Retrieved {len(context_messages)} context messages (K={CONTEXT_K_RECENT}, R={CONTEXT_R_RETRIEVED})")
+        except Exception as e:
+            logger.warning(f"Context retrieval failed: {e}, continuing without context")
+            context_messages = []
+
         # Create pipeline instance
         pipeline = AnalystPipeline()
 
-        # Execute pipeline (async call)
+        # Execute pipeline with context (async call)
         result = await pipeline.run(
             user_query=request.query,
             workspace_id=workspace_id,
-            user_id=user_id
+            user_id=user_id,
+            context_messages=context_messages
+        )
+
+        # Store assistant message (keep metadata JSON-safe and minimal)
+        assistant_text = result.get("response") if isinstance(result, dict) else str(result)
+        await create_message(
+            conversation_id=conversation_id,
+            role="ASSISTANT",
+            content=assistant_text,
+            metadata={"workspace_id": workspace_id, "user_id": user_id}
         )
 
         execution_time_ms = int((time.time() - start_time) * 1000)
@@ -75,7 +119,8 @@ async def process_query(
             result=result,
             execution_time_ms=execution_time_ms,
             workspace_id=workspace_id,
-            user_id=user_id
+            user_id=user_id,
+            conversation_id=conversation_id
         )
         
     except Exception as e:
