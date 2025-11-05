@@ -1,6 +1,7 @@
 # tools/emails_tool.py
 from tools.base_tool import BaseTool, QueryType, ToolResult
 from database.dynamodb_client import dynamodb_client
+from database.prisma_client import prisma_client
 from typing import Dict, List, Any, Optional
 from pydantic import BaseModel
 from datetime import datetime, timedelta
@@ -10,6 +11,14 @@ import json
 import base64
 import os
 import re
+from enum import Enum
+
+
+class PrivacyLevel(Enum):
+    """Privacy levels for email visibility"""
+    PRIVATE = "PRIVATE"  # Only visible to creator
+    SUBJECT_ONLY = "SUBJECT_ONLY"  # Show subject/metadata, hide body
+    FULL_ACCESS = "FULL_ACCESS"  # Show everything
 
 
 class EmailSearchParams(BaseModel):
@@ -210,12 +219,16 @@ class EmailTool(BaseTool):
             # Map DynamoDB items to email data structure
             mapped_emails = [self._map_dynamo_item_to_email(item) for item in emails]
 
+            # Apply privacy filtering
+            filtered_emails = await self._apply_privacy_filtering(mapped_emails)
+
             return {
-                "emails": mapped_emails,
-                "total_count": len(mapped_emails),
+                "emails": filtered_emails,
+                "total_count": len(filtered_emails),
                 "has_more": last_evaluated_key is not None,
                 "next_token": next_token_encoded,
-                "limit": params.limit
+                "limit": params.limit,
+                "privacy_filtered": len(mapped_emails) - len(filtered_emails)
             }
 
         except ClientError as e:
@@ -305,13 +318,17 @@ class EmailTool(BaseTool):
             # Map items
             mapped_emails = [self._map_dynamo_item_to_email(item) for item in emails]
 
+            # Apply privacy filtering
+            filtered_emails = await self._apply_privacy_filtering(mapped_emails)
+
             return {
-                "emails": mapped_emails,
-                "total_count": len(mapped_emails),
+                "emails": filtered_emails,
+                "total_count": len(filtered_emails),
                 "has_more": last_evaluated_key is not None,
                 "next_token": next_token_encoded,
                 "limit": limit,
-                "person_id": person_id
+                "person_id": person_id,
+                "privacy_filtered": len(mapped_emails) - len(filtered_emails)
             }
 
         except ClientError as e:
@@ -377,13 +394,17 @@ class EmailTool(BaseTool):
             # Map items
             mapped_emails = [self._map_dynamo_item_to_email(item) for item in emails]
 
+            # Apply privacy filtering
+            filtered_emails = await self._apply_privacy_filtering(mapped_emails)
+
             return {
-                "emails": mapped_emails,
-                "total_count": len(mapped_emails),
+                "emails": filtered_emails,
+                "total_count": len(filtered_emails),
                 "has_more": last_evaluated_key is not None,
                 "next_token": next_token_encoded,
                 "limit": limit,
-                "company_id": company_id
+                "company_id": company_id,
+                "privacy_filtered": len(mapped_emails) - len(filtered_emails)
             }
 
         except ClientError as e:
@@ -580,3 +601,147 @@ class EmailTool(BaseTool):
         except (ValueError, AttributeError):
             self.logger.warning(f"Could not parse datetime: {dt_str}")
             return None
+
+    async def _apply_privacy_filtering(
+        self,
+        emails: List[Dict[str, Any]],
+        user_privacy_levels: Optional[Dict[str, str]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Filter emails based on privacy settings
+
+        Privacy Levels:
+        - PRIVATE: Only visible to creator (filter out for non-owners)
+        - SUBJECT_ONLY: Show subject and metadata, hide body
+        - FULL_ACCESS: Show everything
+
+        Args:
+            emails: List of email dictionaries
+            user_privacy_levels: Dictionary mapping user_id -> privacy_level
+                                If None, will attempt to fetch from database
+
+        Returns:
+            Filtered list of emails with privacy rules applied
+        """
+        if not emails:
+            return emails
+
+        # If no privacy levels provided, fetch from database
+        if user_privacy_levels is None:
+            # Extract unique user IDs from emails
+            user_ids = set()
+            for email in emails:
+                user_id = email.get('userId') or email.get('createdById')
+                if user_id:
+                    user_ids.add(user_id)
+            
+            if user_ids:
+                user_privacy_levels = await self._get_user_privacy_levels(
+                    list(user_ids), 
+                    self.workspace_id
+                )
+            else:
+                user_privacy_levels = {}
+
+        filtered = []
+
+        for email in emails:
+            email_user_id = email.get('userId') or email.get('createdById')
+            is_own = email_user_id == self.user_id
+
+            # Owner always sees their own emails in full
+            if is_own:
+                email['_privacyLevel'] = user_privacy_levels.get(email_user_id, PrivacyLevel.PRIVATE.value)
+                filtered.append(email)
+                continue
+
+            # Get privacy level for email owner
+            owner_privacy = user_privacy_levels.get(email_user_id, PrivacyLevel.PRIVATE.value)
+
+            # Apply privacy rules
+            if owner_privacy == PrivacyLevel.PRIVATE.value:
+                # Hide completely from non-owners
+                continue
+            elif owner_privacy == PrivacyLevel.SUBJECT_ONLY.value:
+                # Show subject and metadata, hide body
+                email['body'] = None
+                email['htmlBody'] = None
+                email['_privacyLevel'] = owner_privacy
+                filtered.append(email)
+            elif owner_privacy == PrivacyLevel.FULL_ACCESS.value:
+                # Show everything
+                email['_privacyLevel'] = owner_privacy
+                filtered.append(email)
+            else:
+                # Unknown privacy level, default to private
+                self.logger.warning(f"Unknown privacy level '{owner_privacy}' for user {email_user_id}, treating as PRIVATE")
+                continue
+
+        return filtered
+
+    async def _get_user_privacy_levels(
+        self, 
+        user_ids: List[str], 
+        workspace_id: str
+    ) -> Dict[str, str]:
+        """
+        Fetch user privacy levels from PostgreSQL emailIntegration table.
+
+        Args:
+            user_ids: List of user UUIDs to fetch privacy levels for
+            workspace_id: Workspace UUID
+
+        Returns:
+            Dictionary mapping user_id -> privacy_level string
+            (PRIVATE, SUBJECT_ONLY, or FULL_ACCESS)
+
+        Notes:
+            - Table: emailIntegration (lowercase)
+            - Default privacy level: PRIVATE (if user has no active integration)
+            - Only returns privacy levels for active integrations (isActive = true)
+        """
+        if not user_ids:
+            return {}
+
+        try:
+            client = await prisma_client.get_client()
+
+            # Query emailIntegration table for active integrations
+            integrations = await client.emailintegration.find_many(
+                where={
+                    'userId': {'in': user_ids},
+                    'workspaceId': workspace_id,
+                    'isActive': True
+                },
+                select={
+                    'userId': True,
+                    'privacyLevel': True
+                }
+            )
+
+            # Map user_id -> privacy_level
+            privacy_levels = {}
+            for integration in integrations:
+                # Convert InteractionPrivacy enum to string
+                privacy_level = integration.privacyLevel.value
+                privacy_levels[integration.userId] = privacy_level
+
+            # Set default PRIVATE for users without active integrations
+            for user_id in user_ids:
+                if user_id not in privacy_levels:
+                    privacy_levels[user_id] = PrivacyLevel.PRIVATE.value
+
+            self.logger.debug(
+                f"Privacy filtering: Fetched privacy levels for {len(privacy_levels)} users "
+                f"from emailIntegration table (workspace: {workspace_id})"
+            )
+
+            return privacy_levels
+
+        except Exception as e:
+            self.logger.error(
+                f"Error fetching user privacy levels from PostgreSQL: {e}. "
+                "Falling back to default PRIVATE for all users."
+            )
+            # On error, default to PRIVATE for all users (more restrictive)
+            return {user_id: PrivacyLevel.PRIVATE.value for user_id in user_ids}
