@@ -10,13 +10,21 @@ from qdrant_client.models import Distance, VectorParams, PointStruct
 from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
 import numpy as np
+from config.settings import (
+    CONTEXT_K_RECENT, 
+    CONTEXT_R_RETRIEVED,
+    QDRANT_COLLECTION_NAME,
+    EMBEDDING_MODEL_NAME,
+    QDRANT_VECTOR_SIZE,
+    QDRANT_SCORE_THRESHOLD
+)
 
 logger = logging.getLogger(__name__)
 
 # Initialize clients
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", None)
-COLLECTION_NAME = "conversation_messages"
+COLLECTION_NAME = QDRANT_COLLECTION_NAME
 
 # Global instances (lazy loaded)
 _qdrant_client: Optional[QdrantClient] = None
@@ -39,9 +47,8 @@ def get_embedding_model() -> SentenceTransformer:
     """Get or create embedding model instance"""
     global _embedding_model
     if _embedding_model is None:
-        # Using all-MiniLM-L6-v2: fast, good quality, 384 dimensions
-        _embedding_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
-        logger.info("Loaded embedding model: all-MiniLM-L6-v2")
+        _embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+        logger.info(f"Loaded embedding model: {EMBEDDING_MODEL_NAME}")
     return _embedding_model
 
 
@@ -62,7 +69,7 @@ def _ensure_collection_exists():
         client.create_collection(
             collection_name=COLLECTION_NAME,
             vectors_config=VectorParams(
-                size=384,  # all-MiniLM-L6-v2 dimension
+                size=QDRANT_VECTOR_SIZE,
                 distance=Distance.COSINE,
             ),
         )
@@ -93,7 +100,7 @@ async def embed_text(text: str) -> List[float]:
     except Exception as e:
         logger.error(f"Error generating embedding: {e}")
         # Fallback to zero vector
-        return [0.0] * 384
+        return [0.0] * QDRANT_VECTOR_SIZE
 
 
 def calculate_bm25_scores(query: str, documents: List[str]) -> List[float]:
@@ -207,8 +214,8 @@ async def get_recent_messages_from_db(
 async def retrieve_conversation_context(
     conversation_id: str,
     current_query: str,
-    k_recent: int = 10,
-    r_retrieved: int = 5,
+    k_recent: int = CONTEXT_K_RECENT,
+    r_retrieved: int = CONTEXT_R_RETRIEVED,
 ) -> List[Dict[str, Any]]:
     """
     Retrieve relevant context from conversation history with hybrid search + recency priority
@@ -248,7 +255,7 @@ async def retrieve_conversation_context(
                 ]
             ),
             limit=max(r_retrieved * 3, 10),  # Get more candidates for reranking
-            score_threshold=0.3,  # Minimum similarity
+            score_threshold=QDRANT_SCORE_THRESHOLD,  # Minimum similarity
         )
         
         # Step 3: Rerank with hybrid scoring (semantic + BM25 + recency)

@@ -9,6 +9,7 @@ from typing import Optional
 from api.v1.schemas import QueryRequest, QueryResponse, ErrorResponse
 # from api.dependencies import verify_token_dependency  # Commented out for now
 from graph.pipeline import AnalystPipeline
+from config.settings import CONTEXT_K_RECENT, CONTEXT_R_RETRIEVED
 
 logger = logging.getLogger(__name__)
 
@@ -77,10 +78,10 @@ async def process_query(
             context_messages = await retrieve_conversation_context(
                 conversation_id=conversation_id,
                 current_query=request.query,
-                k_recent=10,  # Always include last 10 messages
-                r_retrieved=5  # Plus 5 retrieved via hybrid search
+                k_recent=CONTEXT_K_RECENT,
+                r_retrieved=CONTEXT_R_RETRIEVED
             )
-            logger.info(f"Retrieved {len(context_messages)} context messages (K=10, R=5)")
+            logger.info(f"Retrieved {len(context_messages)} context messages (K={CONTEXT_K_RECENT}, R={CONTEXT_R_RETRIEVED})")
         except Exception as e:
             logger.warning(f"Context retrieval failed: {e}, continuing without context")
             context_messages = []
