@@ -70,30 +70,17 @@ async def process_query(
             metadata={"workspace_id": workspace_id, "user_id": user_id}
         )
 
-        # Retrieve conversation context (hybrid search with recency priority)
-        from services.vector_store import retrieve_conversation_context, get_recent_messages_from_db
-
-        # Simple summary intent detection
-        q_lower = request.query.lower()
-        summary_intent = any(
-            kw in q_lower for kw in [
-                "summarize", "summarise", "recap", "summary", "all messages", "entire conversation"
-            ]
-        )
-
+        # Retrieve conversation context (hybrid search: K=10 recent + R=5 retrieved)
+        from services.vector_store import retrieve_conversation_context
+        
         try:
-            if summary_intent:
-                # Bypass retrieval: provide a larger recent window for summarization
-                context_messages = await get_recent_messages_from_db(conversation_id=conversation_id, limit=100)
-                logger.info(f"Summary intent detected, provided {len(context_messages)} recent messages")
-            else:
-                context_messages = await retrieve_conversation_context(
-                    conversation_id=conversation_id,
-                    current_query=request.query,
-                    k_recent=10,  # Always include last 10
-                    r_retrieved=5  # Plus 5 retrieved
-                )
-                logger.info(f"Retrieved {len(context_messages)} context messages (K=10, R=5)")
+            context_messages = await retrieve_conversation_context(
+                conversation_id=conversation_id,
+                current_query=request.query,
+                k_recent=10,  # Always include last 10 messages
+                r_retrieved=5  # Plus 5 retrieved via hybrid search
+            )
+            logger.info(f"Retrieved {len(context_messages)} context messages (K=10, R=5)")
         except Exception as e:
             logger.warning(f"Context retrieval failed: {e}, continuing without context")
             context_messages = []
