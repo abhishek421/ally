@@ -25,7 +25,6 @@ class EmailSearchParams(BaseModel):
     """Parameters for email search"""
     person_id: Optional[str] = None
     company_id: Optional[str] = None
-    company_id: Optional[str] = None
     integration_id: Optional[str] = None
     from_email: Optional[str] = None
     to_email: Optional[str] = None
@@ -35,7 +34,6 @@ class EmailSearchParams(BaseModel):
     direction: Optional[str] = None  # 'sent' or 'received'
     limit: int = 50
     next_token: Optional[str] = None
-    next_token: Optional[str] = None
 
 
 class EmailTool(BaseTool):
@@ -44,9 +42,6 @@ class EmailTool(BaseTool):
 
     def __init__(self, workspace_id: str, user_id: str):
         super().__init__(workspace_id, user_id)
-        # Get table name from environment variable as per documentation
-        self.table_name = os.getenv("DYNAMODB_TABLE", "prod-softsync")
-
         # Get table name from environment variable as per documentation
         self.table_name = os.getenv("DYNAMODB_TABLE", "prod-softsync")
 
@@ -73,16 +68,7 @@ class EmailTool(BaseTool):
             elif query_type == QueryType.LIST:
                 person_id = kwargs.get('person_id')
                 company_id = kwargs.get('company_id')
-                company_id = kwargs.get('company_id')
                 limit = kwargs.get('limit', 50)
-                next_token = kwargs.get('next_token')
-
-                if person_id:
-                    result = await self._list_emails_by_person(person_id, limit, next_token)
-                elif company_id:
-                    result = await self._list_emails_by_company(company_id, limit, next_token)
-                else:
-                    raise ValueError("Either person_id or company_id is required for LIST operation")
                 next_token = kwargs.get('next_token')
 
                 if person_id:
@@ -121,7 +107,6 @@ class EmailTool(BaseTool):
             # Build query parameters based on search criteria
             if params.person_id:
                 # Query by person ID using partition key (as per documentation)
-                # Query by person ID using partition key (as per documentation)
                 pk = f"WORKSPACE#{self.workspace_id}#PERSON#{params.person_id}"
 
 
@@ -139,24 +124,14 @@ class EmailTool(BaseTool):
 
                 if params.from_email:
                     filter_expressions.append('contains(#from, :from_email)')
-                    filter_expressions.append('contains(#from, :from_email)')
                     expression_values[':from_email'] = params.from_email
-                    if 'ExpressionAttributeNames' not in query_params:
-                        query_params['ExpressionAttributeNames'] = {}
-                    query_params['ExpressionAttributeNames']['#from'] = 'from'
-
                     if 'ExpressionAttributeNames' not in query_params:
                         query_params['ExpressionAttributeNames'] = {}
                     query_params['ExpressionAttributeNames']['#from'] = 'from'
 
                 if params.to_email:
                     filter_expressions.append('contains(#to, :to_email)')
-                    filter_expressions.append('contains(#to, :to_email)')
                     expression_values[':to_email'] = params.to_email
-                    if 'ExpressionAttributeNames' not in query_params:
-                        query_params['ExpressionAttributeNames'] = {}
-                    query_params['ExpressionAttributeNames']['#to'] = 'to'
-
                     if 'ExpressionAttributeNames' not in query_params:
                         query_params['ExpressionAttributeNames'] = {}
                     query_params['ExpressionAttributeNames']['#to'] = 'to'
@@ -173,24 +148,14 @@ class EmailTool(BaseTool):
 
                 if params.date_from:
                     filter_expressions.append('#date >= :date_from')
-                    filter_expressions.append('#date >= :date_from')
                     expression_values[':date_from'] = params.date_from.isoformat()
-                    if 'ExpressionAttributeNames' not in query_params:
-                        query_params['ExpressionAttributeNames'] = {}
-                    query_params['ExpressionAttributeNames']['#date'] = 'date'
-
                     if 'ExpressionAttributeNames' not in query_params:
                         query_params['ExpressionAttributeNames'] = {}
                     query_params['ExpressionAttributeNames']['#date'] = 'date'
 
                 if params.date_to:
                     filter_expressions.append('#date <= :date_to')
-                    filter_expressions.append('#date <= :date_to')
                     expression_values[':date_to'] = params.date_to.isoformat()
-                    if 'ExpressionAttributeNames' not in query_params:
-                        query_params['ExpressionAttributeNames'] = {}
-                    query_params['ExpressionAttributeNames']['#date'] = 'date'
-
                     if 'ExpressionAttributeNames' not in query_params:
                         query_params['ExpressionAttributeNames'] = {}
                     query_params['ExpressionAttributeNames']['#date'] = 'date'
@@ -208,23 +173,8 @@ class EmailTool(BaseTool):
                     except Exception as e:
                         self.logger.error(f"Invalid pagination token: {e}")
 
-
-                # Handle pagination token
-                if params.next_token:
-                    try:
-                        decoded_token = base64.b64decode(params.next_token).decode('utf-8')
-                        exclusive_start_key = json.loads(decoded_token)
-                        query_params['ExclusiveStartKey'] = exclusive_start_key
-                    except Exception as e:
-                        self.logger.error(f"Invalid pagination token: {e}")
-
                 response = table.query(**query_params)
                 emails = response.get('Items', [])
-
-            elif params.company_id:
-                # Query by company ID using partition key (as per documentation)
-                pk = f"WORKSPACE#{self.workspace_id}#COMPANY#{params.company_id}"
-
 
             elif params.company_id:
                 # Query by company ID using partition key (as per documentation)
@@ -233,20 +183,8 @@ class EmailTool(BaseTool):
                 query_params = {
                     'KeyConditionExpression': 'PK = :pk',
                     'ExpressionAttributeValues': {':pk': pk},
-                    'KeyConditionExpression': 'PK = :pk',
-                    'ExpressionAttributeValues': {':pk': pk},
                     'ScanIndexForward': False,
                 }
-
-                # Handle pagination token
-                if params.next_token:
-                    try:
-                        decoded_token = base64.b64decode(params.next_token).decode('utf-8')
-                        exclusive_start_key = json.loads(decoded_token)
-                        query_params['ExclusiveStartKey'] = exclusive_start_key
-                    except Exception as e:
-                        self.logger.error(f"Invalid pagination token: {e}")
-
 
                 # Handle pagination token
                 if params.next_token:
@@ -265,19 +203,8 @@ class EmailTool(BaseTool):
                 # Scan operation (less efficient, use sparingly)
                 scan_params = {
                     'FilterExpression': 'begins_with(PK, :pk_prefix)',
-                    'FilterExpression': 'begins_with(PK, :pk_prefix)',
-                    'ExpressionAttributeValues': {':pk_prefix': f"WORKSPACE#{self.workspace_id}#"}, 
+                    'ExpressionAttributeValues': {':pk_prefix': f"WORKSPACE#{self.workspace_id}#"},
                 }
-
-                # Handle pagination token
-                if params.next_token:
-                    try:
-                        decoded_token = base64.b64decode(params.next_token).decode('utf-8')
-                        exclusive_start_key = json.loads(decoded_token)
-                        scan_params['ExclusiveStartKey'] = exclusive_start_key
-                    except Exception as e:
-                        self.logger.error(f"Invalid pagination token: {e}")
-
 
                 # Handle pagination token
                 if params.next_token:
@@ -322,7 +249,6 @@ class EmailTool(BaseTool):
                 "total_count": 0,
                 "has_more": False,
                 "next_token": None,
-                "next_token": None,
                 "limit": params.limit
             }
         except Exception as e:
@@ -332,13 +258,11 @@ class EmailTool(BaseTool):
                 "total_count": 0,
                 "has_more": False,
                 "next_token": None,
-                "next_token": None,
                 "limit": params.limit
             }
 
 
     async def _get_email_by_id(self, message_id: str) -> Dict[str, Any]:
-        """Get specific email by message ID using GSI1"""
         """Get specific email by message ID using GSI1"""
         try:
             table = dynamodb_client.get_table(self.table_name)
@@ -346,22 +270,14 @@ class EmailTool(BaseTool):
             # Query by message ID using GSI1 (as per documentation)
             gsi1pk = f"WORKSPACE#{self.workspace_id}#EMAIL#{message_id}"
 
-
-            # Query by message ID using GSI1 (as per documentation)
-            gsi1pk = f"WORKSPACE#{self.workspace_id}#EMAIL#{message_id}"
-
             response = table.query(
                 IndexName='GSI1',
                 KeyConditionExpression='GSI1PK = :gsi1pk',
-                ExpressionAttributeValues={':gsi1pk': gsi1pk},
-                KeyConditionExpression='GSI1PK = :gsi1pk',
                 ExpressionAttributeValues={':gsi1pk': gsi1pk}
-                )
-
+            )
 
             items = response.get('Items', [])
             if items:
-                return self._map_dynamo_item_to_email(items[0])
                 return self._map_dynamo_item_to_email(items[0])
             return {}
 
@@ -384,27 +300,7 @@ class EmailTool(BaseTool):
             table = dynamodb_client.get_table(self.table_name)
 
             # Use PERSON partition key as per documentation
-
-            # Use PERSON partition key as per documentation
             pk = f"WORKSPACE#{self.workspace_id}#PERSON#{person_id}"
-
-            query_params = {
-                'KeyConditionExpression': 'PK = :pk',
-                'ExpressionAttributeValues': {':pk': pk},
-                'ScanIndexForward': False,  # Most recent first
-                'Limit': min(limit, 100)
-            }
-
-            # Handle pagination token
-            if next_token:
-                try:
-                    decoded_token = base64.b64decode(next_token).decode('utf-8')
-                    exclusive_start_key = json.loads(decoded_token)
-                    query_params['ExclusiveStartKey'] = exclusive_start_key
-                except Exception as e:
-                    self.logger.error(f"Invalid pagination token: {e}")
-
-            response = table.query(**query_params)
 
             query_params = {
                 'KeyConditionExpression': 'PK = :pk',
@@ -456,7 +352,6 @@ class EmailTool(BaseTool):
                 "total_count": 0,
                 "has_more": False,
                 "next_token": None,
-                "next_token": None,
                 "limit": limit,
                 "person_id": person_id
             }
@@ -466,7 +361,6 @@ class EmailTool(BaseTool):
                 "emails": [],
                 "total_count": 0,
                 "has_more": False,
-                "next_token": None,
                 "next_token": None,
                 "limit": limit,
                 "person_id": person_id
@@ -557,18 +451,14 @@ class EmailTool(BaseTool):
             # Scan for workspace emails (this is expensive, consider caching)
             response = table.scan(
                 FilterExpression='begins_with(PK, :pk_prefix)',
-                FilterExpression='begins_with(PK, :pk_prefix)',
                 ExpressionAttributeValues={':pk_prefix': f"WORKSPACE#{self.workspace_id}#"},
                 Select='COUNT'
             )
 
-
             total_emails = response.get('Count', 0)
-
 
             # Get emails by direction
             sent_response = table.scan(
-                FilterExpression='begins_with(PK, :pk_prefix) AND direction = :direction',
                 FilterExpression='begins_with(PK, :pk_prefix) AND direction = :direction',
                 ExpressionAttributeValues={
                     ':pk_prefix': f"WORKSPACE#{self.workspace_id}#",
@@ -577,9 +467,7 @@ class EmailTool(BaseTool):
                 Select='COUNT'
             )
 
-
             received_response = table.scan(
-                FilterExpression='begins_with(PK, :pk_prefix) AND direction = :direction',
                 FilterExpression='begins_with(PK, :pk_prefix) AND direction = :direction',
                 ExpressionAttributeValues={
                     ':pk_prefix': f"WORKSPACE#{self.workspace_id}#",
