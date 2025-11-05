@@ -247,6 +247,16 @@ class EmailTool(BaseTool):
                     except Exception as e:
                         self.logger.error(f"Invalid pagination token: {e}")
 
+
+                # Handle pagination token
+                if params.next_token:
+                    try:
+                        decoded_token = base64.b64decode(params.next_token).decode('utf-8')
+                        exclusive_start_key = json.loads(decoded_token)
+                        query_params['ExclusiveStartKey'] = exclusive_start_key
+                    except Exception as e:
+                        self.logger.error(f"Invalid pagination token: {e}")
+
                 response = table.query(**query_params)
                 emails = response.get('Items', [])
 
@@ -256,8 +266,18 @@ class EmailTool(BaseTool):
                 scan_params = {
                     'FilterExpression': 'begins_with(PK, :pk_prefix)',
                     'FilterExpression': 'begins_with(PK, :pk_prefix)',
-                    'ExpressionAttributeValues': {':pk_prefix': f"WORKSPACE#{self.workspace_id}#"},
+                    'ExpressionAttributeValues': {':pk_prefix': f"WORKSPACE#{self.workspace_id}#"}, 
                 }
+
+                # Handle pagination token
+                if params.next_token:
+                    try:
+                        decoded_token = base64.b64decode(params.next_token).decode('utf-8')
+                        exclusive_start_key = json.loads(decoded_token)
+                        scan_params['ExclusiveStartKey'] = exclusive_start_key
+                    except Exception as e:
+                        self.logger.error(f"Invalid pagination token: {e}")
+
 
                 # Handle pagination token
                 if params.next_token:
