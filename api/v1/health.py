@@ -4,9 +4,12 @@ Health check endpoints
 import logging
 from datetime import datetime
 from fastapi import APIRouter
+from typing import Dict, Any
 from api.v1.schemas import HealthResponse, ReadyResponse
 from config.config_manager import get_config_manager
 from database.prisma_client import prisma_client
+from database.redis_client import redis_client
+from database.dynamodb_client import dynamodb_client
 
 logger = logging.getLogger(__name__)
 
@@ -70,4 +73,55 @@ async def readiness_check():
         services=services,
         timestamp=datetime.utcnow().isoformat()
     )
+
+
+@router.get("/pool-stats")
+async def pool_stats() -> Dict[str, Any]:
+    """
+    Get connection pool statistics for all database clients.
+    Useful for monitoring connection pool health and usage.
+    No authentication required (for monitoring purposes).
+    """
+    stats = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "databases": {}
+    }
+    
+    # PostgreSQL pool stats
+    try:
+        stats["databases"]["postgresql"] = prisma_client.get_pool_stats()
+        # Test connection
+        await prisma_client.health_check()
+        stats["databases"]["postgresql"]["health"] = "healthy"
+    except Exception as e:
+        stats["databases"]["postgresql"] = {
+            "health": "unhealthy",
+            "error": str(e)
+        }
+    
+    # Redis pool stats
+    try:
+        stats["databases"]["redis"] = redis_client.get_pool_stats()
+        # Test connection
+        await redis_client.health_check()
+        stats["databases"]["redis"]["health"] = "healthy"
+    except Exception as e:
+        stats["databases"]["redis"] = {
+            "health": "unhealthy",
+            "error": str(e)
+        }
+    
+    # DynamoDB pool stats
+    try:
+        stats["databases"]["dynamodb"] = dynamodb_client.get_pool_stats()
+        # Test connection
+        await dynamodb_client.health_check()
+        stats["databases"]["dynamodb"]["health"] = "healthy"
+    except Exception as e:
+        stats["databases"]["dynamodb"] = {
+            "health": "unhealthy",
+            "error": str(e)
+        }
+    
+    return stats
 
