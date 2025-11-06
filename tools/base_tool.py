@@ -27,6 +27,8 @@ class QueryType(str, Enum):
     GET_BY_ID = "get_by_id"
     LIST = "list"
     ANALYTICS = "analytics"
+    GET_LATEST = "get_latest"
+    GET_BY_THREAD = "get_by_thread"
     # TODO: Write operations not yet implemented
     # CREATE = "create"
     # UPDATE = "update"

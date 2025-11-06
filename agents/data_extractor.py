@@ -234,7 +234,7 @@ class DataExtractorAgent:
         params: Dict[str, Any],
         previous_results: List[Dict[str, Any]],
         tool_index: int
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """
         Resolve parameter placeholders using results from previous tool calls
 
@@ -251,12 +251,17 @@ class DataExtractorAgent:
 
         Returns:
             Resolved parameter dictionary with placeholders replaced by actual values
+            Returns None if critical required parameters (person_id, company_id, etc.) failed to resolve
         """
         if not params or not previous_results:
             return params
 
         resolved_params = {}
         has_placeholders = False
+        failed_critical_params = []
+
+        # Define critical parameters that if missing should cause the tool call to be skipped
+        critical_params = ['person_id', 'company_id', 'message_id', 'interaction_id', 'group_id']
 
         for key, value in params.items():
             # Check if value is a placeholder string
@@ -276,16 +281,32 @@ class DataExtractorAgent:
                         f"Tool {tool_index}: Resolved placeholder '{value}' -> '{extracted_value}' for param '{key}'"
                     )
                 else:
-                    # Could not resolve - log warning and skip this parameter
+                    # Could not resolve - log warning
                     self._logger.warning(
                         f"Tool {tool_index}: Could not resolve placeholder '{value}' for param '{key}'. "
                         f"Checked {len(previous_results)} previous result(s)."
                     )
+
+                    # Check if this is a critical parameter
+                    if key in critical_params:
+                        failed_critical_params.append(key)
+                        self._logger.error(
+                            f"Tool {tool_index}: Critical parameter '{key}' failed to resolve. "
+                            "This tool call should be skipped."
+                        )
+
                     # Don't include unresolved parameters
                     continue
             else:
                 # Not a placeholder, keep as-is
                 resolved_params[key] = value
+
+        # If any critical parameters failed to resolve, return None to signal failure
+        if failed_critical_params:
+            self._logger.warning(
+                f"Tool {tool_index}: Skipping tool call due to unresolved critical parameters: {failed_critical_params}"
+            )
+            return None
 
         if has_placeholders:
             self._logger.info(
@@ -400,7 +421,24 @@ class DataExtractorAgent:
                 # Resolve parameters using previous results (for dependent tool calls)
                 resolved_params = self._resolve_parameters(params, results, tool_index)
 
-                # Check if parameter resolution failed
+                # Check if parameter resolution failed (None means critical params failed)
+                if resolved_params is None:
+                    # Critical parameters failed to resolve
+                    self._logger.error(
+                        f"Tool {tool_index} ({tool_name}): Critical required parameters could not be resolved. "
+                        f"This likely means a previous tool call (e.g., company/person search) returned no results. "
+                        f"Skipping this tool call."
+                    )
+                    results.append({
+                        "tool": tool_name,
+                        "query_type": query_type_str,
+                        "result": None,
+                        "success": False,
+                        "error": "Required parameters (person_id, company_id, etc.) could not be resolved from previous tool results. The dependent entity may not exist in the system."
+                    })
+                    continue
+
+                # Also check if all params are empty (edge case)
                 if not resolved_params and params:
                     # All parameters were placeholders and none could be resolved
                     self._logger.error(
@@ -412,7 +450,7 @@ class DataExtractorAgent:
                         "query_type": query_type_str,
                         "result": None,
                         "success": False,
-                        "error": "Could not resolve parameter placeholders from previous tool results"
+                        "error": "Could not resolve any parameter placeholders from previous tool results"
                     })
                     continue
 
