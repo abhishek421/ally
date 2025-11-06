@@ -93,3 +93,14 @@ async def create_message(conversation_id: str, role: str, content: str, metadata
     return message_id
 
 
+async def get_message_count(conversation_id: str) -> int:
+    """Get the total number of messages in a conversation"""
+    client: Prisma = await prisma_client.get_client()
+
+    count = await client.conversationmessage.count(
+        where={"conversationId": conversation_id}
+    )
+
+    return count
+
+

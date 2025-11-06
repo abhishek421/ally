@@ -257,6 +257,32 @@ class DataExtractorAgent:
 
         return results
     
+    def _normalize_parameters(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Normalize parameter values to match database schema expectations
+
+        Examples:
+        - Convert 'private' → 'PRIVATE' for PrivacyLevel enum
+        - Convert 'public' → 'PUBLIC' for PrivacyLevel enum
+
+        Args:
+            params: Parameter dictionary
+
+        Returns:
+            Normalized parameter dictionary
+        """
+        if not params:
+            return params
+
+        normalized = params.copy()
+
+        # Normalize privacy_level to uppercase (PrivacyLevel enum: PRIVATE, PUBLIC)
+        if 'privacy_level' in normalized and isinstance(normalized['privacy_level'], str):
+            normalized['privacy_level'] = normalized['privacy_level'].upper()
+            self._logger.debug(f"Normalized privacy_level to: {normalized['privacy_level']}")
+
+        return normalized
+
     def _resolve_parameters(
         self,
         params: Dict[str, Any],
@@ -485,11 +511,14 @@ class DataExtractorAgent:
                 # Convert string query_type to enum
                 query_type = QueryType(query_type_str.lower())
 
-                # Execute tool with resolved parameters
+                # Normalize parameters (fix enum cases, etc.)
+                normalized_params = self._normalize_parameters(resolved_params)
+
+                # Execute tool with resolved and normalized parameters
                 result = await self._execute_single_tool(
                     tool_name=tool_name,
                     query_type=query_type,
-                    params=resolved_params,  # Use resolved parameters
+                    params=normalized_params,  # Use normalized parameters
                     workspace_id=workspace_id,
                     user_id=user_id
                 )

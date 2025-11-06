@@ -188,7 +188,7 @@ class AnalystPipeline:
             "heuristic_issues": [issue.dict() for issue in validation_result.heuristic_issues],
             "semantic_analysis": validation_result.semantic_analysis.dict() if validation_result.semantic_analysis else None,
             "recommendations": validation_result.recommendations,
-            "next_action": validation_result.next_action.value,
+            "next_action": validation_result.next_action if isinstance(validation_result.next_action, str) else validation_result.next_action.value,
             "metadata": validation_result.metadata
         }
 
@@ -348,25 +348,25 @@ class AnalystPipeline:
 
 
 # Main entry point
-def create_pipeline(enable_reactive: bool = True, enable_orchestrator: bool = False):
+def create_pipeline(enable_reactive: bool = True, enable_orchestrator: bool = True):
     """
     Factory function to create and return the pipeline
 
     Args:
         enable_reactive: Use ReActiveDataExtractor (True) or legacy DataExtractor (False)
-        enable_orchestrator: Use OrchestratorAgent for intelligent coordination (default: False)
+        enable_orchestrator: Use OrchestratorAgent for intelligent coordination (default: True)
 
     Returns:
         AnalystPipeline instance
 
     Note:
-        When enable_orchestrator=True:
+        When enable_orchestrator=True (default):
         - Orchestrator analyzes query complexity before execution
+        - Routes meta queries for instant responses
         - Automatically selects best extractor (static vs reactive)
         - Conditionally runs optimization and validation
         - Provides detailed execution metadata
-
-        For backward compatibility, orchestrator is disabled by default.
+        - Breaks the sequential pipeline for optimal performance
     """
     return AnalystPipeline(enable_reactive=enable_reactive, enable_orchestrator=enable_orchestrator)
 

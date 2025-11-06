@@ -101,14 +101,7 @@ class CompanyTool(BaseTool):
                     "url": True,
                     "metaData": {
                         "include": {
-                            "people": {
-                                "select": {
-                                    "id": True,
-                                    "firstName": True,
-                                    "lastName": True,
-                                    "jobTitle": True
-                                }
-                            }
+                            "people": True
                         }
                     }
                 },
@@ -152,14 +145,7 @@ class CompanyTool(BaseTool):
                     "url": True,
                     "metaData": {
                         "include": {
-                            "people": {
-                                "select": {
-                                    "id": True,
-                                    "firstName": True,
-                                    "lastName": True,
-                                    "jobTitle": True
-                                }
-                            }
+                            "people": True
                         }
                     }
                 }
@@ -238,7 +224,7 @@ class CompanyTool(BaseTool):
             privacy_levels = await client.company.group_by(
                 by=["privacyLevel"],
                 where={"workspaceId": self.workspace_id},
-                _count={"id": True}
+                count={"id": True}
             )
             
             # Get recent companies (last 30 days)

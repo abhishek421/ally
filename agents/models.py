@@ -216,6 +216,7 @@ class QueryComplexity(str, Enum):
 
 class QueryIntent(str, Enum):
     """Types of query intents"""
+    META = "meta"                  # Meta queries (help, capabilities, greetings)
     SEARCH = "search"              # Find entities matching criteria
     COUNT = "count"                # Count matching entities
     ANALYTICS = "analytics"        # Compute aggregations or metrics
