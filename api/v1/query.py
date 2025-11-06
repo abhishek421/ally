@@ -16,6 +16,54 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _clean_response(result: dict) -> dict:
+    """
+    Remove internal debugging metadata from response for cleaner API output
+
+    Keeps only user-facing data:
+    - response: The AI answer
+    - data: The actual query results
+    - (optionally) minimal metadata for debugging
+
+    Args:
+        result: Raw result from pipeline
+
+    Returns:
+        Cleaned result dict
+    """
+    if not isinstance(result, dict):
+        return result
+
+    # Start with a clean dict
+    cleaned = {}
+
+    # Always include the AI response
+    if "response" in result:
+        cleaned["response"] = result["response"]
+
+    # Include the actual data, but clean it too
+    if "data" in result:
+        data = result["data"]
+        if isinstance(data, dict):
+            # Remove internal metadata fields (those starting with _)
+            cleaned["data"] = {
+                k: v for k, v in data.items()
+                if not k.startswith("_")
+            }
+        else:
+            cleaned["data"] = data
+
+    # Optionally include minimal metadata (not the full orchestration details)
+    if "metadata" in result and isinstance(result["metadata"], dict):
+        # Only include high-level metadata, not internal processing details
+        cleaned["metadata"] = {
+            k: v for k, v in result["metadata"].items()
+            if k in ["data_sources_count", "response_length"]
+        }
+
+    return cleaned
+
+
 @router.post("/query", response_model=QueryResponse)
 async def process_query(
     request: QueryRequest,
@@ -53,6 +101,29 @@ async def process_query(
     start_time = time.time()
 
     try:
+        # Fast-path routing for meta queries (help, greetings, etc.)
+        from agents.query_router import QueryRouter
+        router = QueryRouter()
+        fast_response = router.route(request.query)
+
+        if fast_response:
+            # Meta query - return instant response
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            logger.info(
+                f"Fast-path response delivered (request_id={request_id}, "
+                f"execution_time_ms={execution_time_ms})"
+            )
+            return QueryResponse(
+                success=True,
+                query=request.query,
+                result=fast_response,
+                execution_time_ms=execution_time_ms,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                conversation_id=request.conversation_id or "N/A"
+            )
+
+        # Regular data query - continue with full pipeline
         # Ensure conversation exists and store messages
         from services.conversation import ensure_conversation, create_message
 
@@ -86,8 +157,9 @@ async def process_query(
             logger.warning(f"Context retrieval failed: {e}, continuing without context")
             context_messages = []
 
-        # Create pipeline instance
-        pipeline = AnalystPipeline()
+        # Create pipeline instance with orchestrator enabled
+        from graph.pipeline import create_pipeline
+        pipeline = create_pipeline(enable_reactive=True, enable_orchestrator=True)
 
         # Execute pipeline with context (async call)
         result = await pipeline.run(
@@ -101,7 +173,16 @@ async def process_query(
         # Extract compact query context (IDs and references only, not full data)
         from utils.metadata_extractor import extract_compact_query_context, extract_performance_metadata
 
-        assistant_text = result.get("response") if isinstance(result, dict) else str(result)
+        # Handle both successful responses and clarification requests
+        if isinstance(result, dict) and result.get("status") == "needs_clarification":
+            assistant_text = result.get("clarification_question", "I need more information to answer your question.")
+        else:
+            assistant_text = result.get("response") if isinstance(result, dict) else str(result)
+
+        # Ensure assistant_text is not None
+        if not assistant_text:
+            assistant_text = "I couldn't generate a response. Please try again."
+
         query_context = extract_compact_query_context(result)
         performance_metadata = extract_performance_metadata(result)
 
@@ -125,16 +206,19 @@ async def process_query(
         )
 
         execution_time_ms = int((time.time() - start_time) * 1000)
-        
+
         logger.info(
             f"Query processed successfully (request_id={request_id}, "
             f"execution_time_ms={execution_time_ms})"
         )
-        
+
+        # Clean up response - remove internal metadata for production
+        cleaned_result = _clean_response(result)
+
         return QueryResponse(
             success=True,
             query=request.query,
-            result=result,
+            result=cleaned_result,
             execution_time_ms=execution_time_ms,
             workspace_id=workspace_id,
             user_id=user_id,

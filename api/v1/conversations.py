@@ -72,10 +72,18 @@ async def get_conversation(
     message_count = await client.conversationmessage.count(
         where={"conversationId": conversation_id}
     )
-    
+
+    # Return only useful fields (exclude null relation fields)
     return {
         "success": True,
-        "conversation": conversation,
+        "conversation": {
+            "id": conversation.id,
+            "workspace_id": conversation.workspaceId,
+            "user_id": conversation.userId,
+            "title": conversation.title,
+            "created_at": conversation.createdAt,
+            "updated_at": conversation.updatedAt,
+        },
         "message_count": message_count,
     }
 

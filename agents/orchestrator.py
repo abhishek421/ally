@@ -91,6 +91,7 @@ class OrchestratorAgent:
         Main entry point - orchestrates entire query execution
 
         Flow:
+        0. PRE-ROUTE: Fast-path for meta queries (help, greetings)
         1. ANALYZE: Assess query complexity, intent, clarity
         2. PLAN: Create execution strategy
         3. COORDINATE: Execute agents with adaptive retry
@@ -114,6 +115,45 @@ class OrchestratorAgent:
         agents_executed = []
 
         try:
+            # Phase 0: PRE-ROUTE - Fast-path for meta queries
+            from agents.query_router import QueryRouter
+            router = QueryRouter()
+            fast_response = router.route(user_query)
+
+            if fast_response:
+                # Meta query detected - return instant response
+                total_time_ms = int((time.time() - start_time) * 1000)
+                self._logger.info(f"FAST-PATH: Meta query handled in {total_time_ms}ms")
+
+                return OrchestrationResult(
+                    success=True,
+                    data=fast_response,
+                    query_analysis=QueryAnalysis(
+                        complexity=QueryComplexity.SIMPLE,
+                        intent=QueryIntent.META,
+                        entities_mentioned=[],
+                        filters_detected=[],
+                        clarity_score=1.0,
+                        requires_optimization=False,
+                        estimated_steps=0,
+                        reasoning="Meta query - instant response"
+                    ),
+                    execution_plan=ExecutionPlan(
+                        should_optimize_query=False,
+                        extractor_strategy=ExtractorStrategy.STATIC,
+                        validation_level=ValidationLevel.NONE,
+                        max_retries=0,
+                        confidence_threshold=1.0,
+                        reasoning="Meta query fast-path",
+                        estimated_cost="zero"
+                    ),
+                    agents_executed=[],
+                    total_time_ms=total_time_ms,
+                    confidence_score=1.0,
+                    retry_count=0,
+                    needs_clarification=False
+                )
+
             # Phase 1: ANALYZE QUERY
             self._logger.info("Phase 1: ANALYZE - Assessing query...")
             analysis = await self._analyze_query(user_query, context_messages)
@@ -289,10 +329,20 @@ class OrchestratorAgent:
         complexity_score = 0
 
         # Count complexity indicators
-        if any(word in query_lower for word in ['and', 'or', 'with', 'that', 'where']):
-            complexity_score += 1
+        # Note: Don't count "and" in simple entity lists like "companies, people, and interactions"
+        # Only count if used in actual filter conditions
+        has_filter_and = False
+        if ' where ' in query_lower or ' with ' in query_lower or ' that ' in query_lower:
+            # These suggest actual filtering conditions
+            if ' and ' in query_lower or ' or ' in query_lower:
+                complexity_score += 1
+                has_filter_and = True
+
+        # Count temporal filters
         if any(word in query_lower for word in ['last week', 'last month', 'yesterday', 'before', 'after']):
             complexity_score += 1
+
+        # Count aggregation operations
         if any(word in query_lower for word in ['aggregate', 'sum', 'average', 'group by', 'total']):
             complexity_score += 2
 
@@ -303,6 +353,15 @@ class OrchestratorAgent:
 
         # Detect intent
         intent = QueryIntent.SEARCH
+
+        # Simple list queries (find X, show X, get X)
+        if any(word in query_lower for word in ['find', 'show', 'get', 'list']):
+            # Check if it's just "find X" without filters
+            words = query_lower.split()
+            if len(words) <= 3 and complexity_score == 0:
+                intent = QueryIntent.LIST
+                complexity = QueryComplexity.SIMPLE  # Force simple for basic list queries
+
         if any(word in query_lower for word in ['how many', 'count', 'number of']):
             intent = QueryIntent.COUNT
         elif any(word in query_lower for word in ['list all', 'show all', 'get all']):
@@ -323,10 +382,21 @@ class OrchestratorAgent:
 
         # Estimate clarity
         clarity_score = 0.7  # Default medium clarity
-        if len(user_query.split()) < 5:
+
+        # Count queries with clear entities are very clear
+        if intent == QueryIntent.COUNT and len(entities) > 0:
+            clarity_score = 0.9  # Count queries are explicit about what they want
+        # Simple queries with clear entities are very clear
+        elif len(entities) > 0 and len(query_lower.split()) <= 3 and complexity_score == 0:
+            clarity_score = 0.95  # Very clear and simple
+        elif len(user_query.split()) < 5:
             clarity_score = 0.6  # Short queries might be ambiguous
+
         if any(word in query_lower for word in ['that', 'this', 'those', 'them']) and len(entities) == 0:
             clarity_score = 0.3  # References without entities are ambiguous
+
+        # Simple queries don't need optimization
+        requires_optimization = complexity != QueryComplexity.SIMPLE or clarity_score < 0.8
 
         return QueryAnalysis(
             complexity=complexity,
@@ -334,9 +404,9 @@ class OrchestratorAgent:
             entities_mentioned=entities,
             filters_detected=[],
             clarity_score=clarity_score,
-            requires_optimization=True,
+            requires_optimization=requires_optimization,
             estimated_steps=1 if complexity == QueryComplexity.SIMPLE else 2,
-            reasoning=f"Heuristic analysis: complexity={complexity.value}, intent={intent.value}"
+            reasoning=f"Heuristic analysis: complexity={complexity.value}, intent={intent.value}, clarity={clarity_score:.2f}"
         )
 
     async def _create_execution_plan(
@@ -366,40 +436,57 @@ class OrchestratorAgent:
         complexity = analysis.complexity
         clarity = analysis.clarity_score
 
-        # Decision tree
+        # Decision tree - optimized for performance
         if complexity == QueryComplexity.SIMPLE and clarity > 0.8:
-            # Fast path: simple and clear
+            # FAST PATH: Simple and clear queries
+            # Examples: "find companies", "show people", "list emails"
+            # Strategy: Direct tool call, no optimization, no validation
             return ExecutionPlan(
-                should_optimize_query=False,
+                should_optimize_query=False,  # Skip query optimization LLM call
+                extractor_strategy=ExtractorStrategy.STATIC,  # Direct tool execution
+                validation_level=ValidationLevel.NONE,  # Skip validation
+                max_retries=0,  # No retries
+                confidence_threshold=0.6,  # Lower threshold since no validation
+                reasoning=f"FAST PATH: Simple & clear (clarity={clarity:.2f}) - direct execution, no optimization/validation",
+                estimated_cost="low"
+            )
+
+        elif complexity == QueryComplexity.SIMPLE and clarity > 0.6:
+            # LIGHT PATH: Simple but slightly ambiguous
+            # Strategy: Quick optimization, static extraction, skip validation
+            return ExecutionPlan(
+                should_optimize_query=True,  # Light optimization to clarify
                 extractor_strategy=ExtractorStrategy.STATIC,
                 validation_level=ValidationLevel.NONE,
                 max_retries=0,
                 confidence_threshold=0.7,
-                reasoning="Simple, clear query - using fast path (static extractor, no validation)",
-                estimated_cost="low"
+                reasoning=f"LIGHT PATH: Simple but moderate clarity ({clarity:.2f}) - quick optimization, no validation",
+                estimated_cost="low-medium"
             )
 
         elif complexity == QueryComplexity.COMPLEX or clarity < 0.5:
-            # Adaptive path: complex or ambiguous
+            # ADAPTIVE PATH: Complex or ambiguous queries
+            # Strategy: Full optimization, reactive loops, semantic validation
             return ExecutionPlan(
                 should_optimize_query=True,
                 extractor_strategy=ExtractorStrategy.REACTIVE,
                 validation_level=ValidationLevel.SEMANTIC,
                 max_retries=2,
                 confidence_threshold=0.8,
-                reasoning="Complex or ambiguous query - using adaptive path (reactive extractor, semantic validation)",
+                reasoning=f"ADAPTIVE PATH: {'Complex' if complexity == QueryComplexity.COMPLEX else 'Ambiguous'} (clarity={clarity:.2f}) - full pipeline",
                 estimated_cost="high"
             )
 
         else:
-            # Standard path: medium complexity
+            # STANDARD PATH: Medium complexity with good clarity
+            # Strategy: Optimization + static extraction + light validation
             return ExecutionPlan(
                 should_optimize_query=True,
                 extractor_strategy=ExtractorStrategy.STATIC,
-                validation_level=ValidationLevel.HEURISTIC,
+                validation_level=ValidationLevel.HEURISTIC,  # Fast validation only
                 max_retries=1,
                 confidence_threshold=0.7,
-                reasoning="Medium complexity - using standard path (static extractor, heuristic validation)",
+                reasoning=f"STANDARD PATH: Medium complexity (clarity={clarity:.2f}) - standard pipeline",
                 estimated_cost="medium"
             )
 
