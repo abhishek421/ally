@@ -112,7 +112,7 @@ class EmailTool(BaseTool):
     async def _list_emails(self, **kwargs) -> Dict[str, Any]:
         """
         Main entry point for listing emails.
-        Supports: company_id, company_name, person_id, person_name
+        Supports: company_id, company_name, person_id, person_name, direction
         Also supports order parameter: latest, second_latest, oldest, etc.
         """
         company_id = kwargs.get('company_id')
@@ -122,16 +122,17 @@ class EmailTool(BaseTool):
         limit = kwargs.get('limit', 50)
         next_token = kwargs.get('next_token')
         order = kwargs.get('order')  # e.g., "latest", "second_latest", "oldest"
+        direction = kwargs.get('direction')  # e.g., "sent", "received"
 
         # Route to appropriate list function
         if company_id:
-            result = await self._list_emails_by_company_id(company_id, limit, next_token)
+            result = await self._list_emails_by_company_id(company_id, limit, next_token, direction)
         elif company_name:
-            result = await self._list_emails_by_company_name(company_name, limit, next_token)
+            result = await self._list_emails_by_company_name(company_name, limit, next_token, direction)
         elif person_id:
-            result = await self._list_emails_by_person_id(person_id, limit, next_token)
+            result = await self._list_emails_by_person_id(person_id, limit, next_token, direction)
         elif person_name:
-            result = await self._list_emails_by_person_name(person_name, limit, next_token)
+            result = await self._list_emails_by_person_name(person_name, limit, next_token, direction)
         else:
             error_msg = (
                 "Either company_id, company_name, person_id, or person_name is required. "
@@ -141,7 +142,7 @@ class EmailTool(BaseTool):
                 "- LIST with person_name='John Doe' "
                 "- LIST with person_id='123e4567-e89b-12d3-a456-426614174000' "
                 "- LIST with company_name='Acme Corp', order='latest' "
-                "- LIST with person_name='John Doe', order='second_latest'"
+                "- LIST with person_name='John Doe', order='second_latest', direction='sent'"
             )
             raise ValueError(error_msg)
 
@@ -155,7 +156,8 @@ class EmailTool(BaseTool):
         self,
         company_name: str,
         limit: int = 50,
-        next_token: Optional[str] = None
+        next_token: Optional[str] = None,
+        direction: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         List emails from a company by name.
@@ -187,7 +189,8 @@ class EmailTool(BaseTool):
                 result = await self._get_company_emails(
                     company_id=company_id,
                     limit=limit,
-                    next_token=current_token
+                    next_token=current_token,
+                    direction=direction
                 )
 
                 all_emails.extend(result['items'])
@@ -227,11 +230,12 @@ class EmailTool(BaseTool):
         self,
         company_id: str,
         limit: int = 50,
-        next_token: Optional[str] = None
+        next_token: Optional[str] = None,
+        direction: Optional[str] = None
     ) -> Dict[str, Any]:
         """List emails from a company by ID"""
         try:
-            result = await self._get_company_emails(company_id, limit, next_token)
+            result = await self._get_company_emails(company_id, limit, next_token, direction)
 
             # Apply privacy filtering
             filtered_emails = await self._apply_privacy_filtering(result['items'])
@@ -262,7 +266,8 @@ class EmailTool(BaseTool):
         self,
         person_name: str,
         limit: int = 50,
-        next_token: Optional[str] = None
+        next_token: Optional[str] = None,
+        direction: Optional[str] = None
     ) -> Dict[str, Any]:
         """List emails from a person by name"""
         try:
@@ -284,7 +289,7 @@ class EmailTool(BaseTool):
             person_id = person.id
 
             # Get emails for person
-            result = await self._get_person_emails(person_id, limit, next_token)
+            result = await self._get_person_emails(person_id, limit, next_token, direction)
 
             # Apply privacy filtering
             filtered_emails = await self._apply_privacy_filtering(result['items'])
@@ -316,11 +321,12 @@ class EmailTool(BaseTool):
         self,
         person_id: str,
         limit: int = 50,
-        next_token: Optional[str] = None
+        next_token: Optional[str] = None,
+        direction: Optional[str] = None
     ) -> Dict[str, Any]:
         """List emails from a person by ID"""
         try:
-            result = await self._get_person_emails(person_id, limit, next_token)
+            result = await self._get_person_emails(person_id, limit, next_token, direction)
 
             # Apply privacy filtering
             filtered_emails = await self._apply_privacy_filtering(result['items'])
@@ -376,16 +382,44 @@ class EmailTool(BaseTool):
             return None
 
     async def _find_person_by_name(self, person_name: str):
-        """Find person by name (case-insensitive)"""
+        """
+        Find person by name (case-insensitive)
+        Searches by firstName, lastName, or full name combination
+        """
         try:
             client = await prisma_client.get_client()
 
-            person = await client.person.find_first(
+            # Try to split name into first and last
+            name_parts = person_name.strip().split(None, 1)  # Split on first whitespace
+
+            # Build search conditions
+            search_conditions = []
+
+            if len(name_parts) == 2:
+                # Has both first and last name
+                first_name, last_name = name_parts
+                # Try exact match on both
+                search_conditions.append({
+                    'AND': [
+                        {'firstName': {'equals': first_name, 'mode': 'insensitive'}},
+                        {'lastName': {'equals': last_name, 'mode': 'insensitive'}}
+                    ]
+                })
+                # Try contains match on both
+                search_conditions.append({
+                    'AND': [
+                        {'firstName': {'contains': first_name, 'mode': 'insensitive'}},
+                        {'lastName': {'contains': last_name, 'mode': 'insensitive'}}
+                    ]
+                })
+
+            # Also search by either firstName or lastName containing the full query
+            search_conditions.append({'firstName': {'contains': person_name, 'mode': 'insensitive'}})
+            search_conditions.append({'lastName': {'contains': person_name, 'mode': 'insensitive'}})
+
+            person = await client.people.find_first(
                 where={
-                    'name': {
-                        'equals': person_name,
-                        'mode': 'insensitive'
-                    },
+                    'OR': search_conditions,
                     'workspaceId': self.workspace_id
                 }
             )
@@ -400,11 +434,13 @@ class EmailTool(BaseTool):
         self,
         company_id: str,
         limit: int = 50,
-        next_token: Optional[str] = None
+        next_token: Optional[str] = None,
+        direction: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Get emails for a company from DynamoDB.
         Implements: get_company_emails(company_id, workspace_id, limit, next_token)
+        Supports optional direction filter: 'sent' or 'received'
         """
         try:
             table = dynamodb_client.get_table(self.table_name)
@@ -419,6 +455,11 @@ class EmailTool(BaseTool):
                 'ScanIndexForward': False,  # Sort descending (newest first)
                 'Limit': min(limit, 100)
             }
+
+            # Add direction filter if provided
+            if direction:
+                query_params['FilterExpression'] = 'direction = :direction'
+                query_params['ExpressionAttributeValues'][':direction'] = direction
 
             # Add pagination token if provided
             if next_token:
@@ -464,9 +505,13 @@ class EmailTool(BaseTool):
         self,
         person_id: str,
         limit: int = 50,
-        next_token: Optional[str] = None
+        next_token: Optional[str] = None,
+        direction: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Get emails for a person from DynamoDB"""
+        """
+        Get emails for a person from DynamoDB
+        Supports optional direction filter: 'sent' or 'received'
+        """
         try:
             table = dynamodb_client.get_table(self.table_name)
 
@@ -480,6 +525,11 @@ class EmailTool(BaseTool):
                 'ScanIndexForward': False,  # Sort descending (newest first)
                 'Limit': min(limit, 100)
             }
+
+            # Add direction filter if provided
+            if direction:
+                query_params['FilterExpression'] = 'direction = :direction'
+                query_params['ExpressionAttributeValues'][':direction'] = direction
 
             # Add pagination token if provided
             if next_token:

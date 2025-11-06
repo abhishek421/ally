@@ -46,8 +46,30 @@ class BaseTool(ABC):
     
     @abstractmethod
     async def execute(self, query_type: QueryType, **kwargs) -> ToolResult:
-        """Execute tool operation"""
+        """Execute tool operation - subclasses must implement this"""
         pass
+
+    async def execute_with_validation(self, query_type: QueryType, **kwargs) -> ToolResult:
+        """
+        Execute tool operation with workspace access validation
+        This is the main entry point that should be called by agents
+        """
+        # Validate workspace access first
+        has_access = await self._validate_workspace_access()
+        if not has_access:
+            return ToolResult(
+                success=False,
+                error=f"Access denied: User {self.user_id} does not have access to workspace {self.workspace_id}",
+                execution_time_ms=0,
+                metadata={
+                    "workspace_id": self.workspace_id,
+                    "user_id": self.user_id,
+                    "operation": query_type.value
+                }
+            )
+
+        # Execute the actual operation
+        return await self.execute(query_type, **kwargs)
     
     @abstractmethod
     def get_supported_operations(self) -> List[QueryType]:
@@ -55,10 +77,38 @@ class BaseTool(ABC):
         pass
     
     async def _validate_workspace_access(self) -> bool:
-        """Validate user has access to workspace"""
-        # TODO: Implement workspace access validation
-        # This should check if the user has access to the workspace
-        return True
+        """
+        Validate user has access to workspace
+        Checks if user is a member of the workspace
+        """
+        try:
+            from database.prisma_client import prisma_client
+
+            client = await prisma_client.get_client()
+
+            # Check if user is a member of the workspace
+            workspace_member = await client.workspacemember.find_first(
+                where={
+                    'workspaceId': self.workspace_id,
+                    'userId': self.user_id
+                }
+            )
+
+            if workspace_member is None:
+                self.logger.warning(
+                    f"Access denied: User {self.user_id} is not a member of workspace {self.workspace_id}"
+                )
+                return False
+
+            self.logger.debug(
+                f"Access validated: User {self.user_id} has access to workspace {self.workspace_id}"
+            )
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error validating workspace access: {e}")
+            # Fail closed - deny access on error
+            return False
     
     async def _cache_key(self, operation: str, **kwargs) -> str:
         """Generate cache key for operation"""
@@ -129,8 +179,11 @@ class BaseTool(ABC):
             metadata={"operation": operation, "workspace_id": self.workspace_id}
         )
     
-    async def clear_cache(self, operation: Optional[str] = None):
-        """Clear cache for this tool"""
+    async def clear_cache(self, operation: Optional[str] = None) -> int:
+        """
+        Clear cache for this tool using pattern matching
+        Returns the number of keys deleted
+        """
         try:
             if operation:
                 # Clear specific operation cache
@@ -138,11 +191,37 @@ class BaseTool(ABC):
             else:
                 # Clear all cache for this tool
                 pattern = f"{self.__class__.__name__}:*:{self.workspace_id}:*"
-            
-            # Note: Redis doesn't have a direct pattern delete, so we'd need to scan and delete
-            # For now, we'll implement a simple approach
+
             self.logger.info(f"Clearing cache for pattern: {pattern}")
-            # TODO: Implement pattern-based cache clearing
-            
+
+            # Get Redis client
+            redis_conn = await redis_client.get_client()
+
+            # Use SCAN to find matching keys (more efficient than KEYS for production)
+            deleted_count = 0
+            cursor = 0
+
+            while True:
+                # SCAN returns (cursor, keys) tuple
+                cursor, keys = await redis_conn.scan(
+                    cursor=cursor,
+                    match=pattern,
+                    count=100  # Scan 100 keys at a time
+                )
+
+                if keys:
+                    # Delete all matching keys
+                    deleted = await redis_conn.delete(*keys)
+                    deleted_count += deleted
+                    self.logger.debug(f"Deleted {deleted} keys matching pattern: {pattern}")
+
+                # Break when cursor returns to 0 (full iteration complete)
+                if cursor == 0:
+                    break
+
+            self.logger.info(f"Cache cleared: {deleted_count} keys deleted for pattern: {pattern}")
+            return deleted_count
+
         except Exception as e:
             self.logger.error(f"Error clearing cache: {e}")
+            return 0
