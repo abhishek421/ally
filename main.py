@@ -48,6 +48,25 @@ async def initialize_application():
         logger.error(f"Failed to initialize ConfigManager: {e}")
         raise
 
+    # Pre-load embedding model to avoid cold start penalty (~3-4s on first query)
+    from services.vector_store import get_embedding_model, get_qdrant_client
+    try:
+        logger.info("Pre-loading embedding model...")
+        get_embedding_model()
+        logger.info("Embedding model pre-loaded successfully")
+    except Exception as e:
+        logger.warning(f"Failed to pre-load embedding model: {e}")
+        # Don't raise - this is not critical for startup
+
+    # Initialize Qdrant client connection
+    try:
+        logger.info("Initializing Qdrant client...")
+        get_qdrant_client()
+        logger.info("Qdrant client initialized successfully")
+    except Exception as e:
+        logger.warning(f"Failed to initialize Qdrant client: {e}")
+        # Don't raise - this is not critical for startup
+
     logger.info("Application initialization complete (ENV-only)")
 
 

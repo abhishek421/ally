@@ -4,7 +4,7 @@ Main query endpoint for processing natural language queries
 import time
 import logging
 import uuid
-from fastapi import APIRouter, HTTPException, status, Header
+from fastapi import APIRouter, HTTPException, status, Header, BackgroundTasks
 from typing import Optional
 from api.v1.schemas import QueryRequest, QueryResponse, ErrorResponse
 # from api.dependencies import verify_token_dependency  # Commented out for now
@@ -67,6 +67,7 @@ def _clean_response(result: dict) -> dict:
 @router.post("/query", response_model=QueryResponse)
 async def process_query(
     request: QueryRequest,
+    background_tasks: BackgroundTasks,
     workspace_id: str = Header(..., alias="X-Workspace-ID", description="Workspace identifier"),
     user_id: str = Header(..., alias="X-User-ID", description="User identifier"),
     # token_claims: dict = Depends(verify_token_dependency)  # Commented out - JWT auth disabled
@@ -142,20 +143,35 @@ async def process_query(
             metadata={"workspace_id": workspace_id, "user_id": user_id}
         )
 
-        # Retrieve conversation context (hybrid search: K=10 recent + R=5 retrieved)
-        from services.vector_store import retrieve_conversation_context
-        
-        try:
-            context_messages = await retrieve_conversation_context(
-                conversation_id=conversation_id,
-                current_query=request.query,
-                k_recent=CONTEXT_K_RECENT,
-                r_retrieved=CONTEXT_R_RETRIEVED
-            )
-            logger.info(f"Retrieved {len(context_messages)} context messages (K={CONTEXT_K_RECENT}, R={CONTEXT_R_RETRIEVED})")
-        except Exception as e:
-            logger.warning(f"Context retrieval failed: {e}, continuing without context")
+        # Conditionally retrieve conversation context (only if needed)
+        # This saves 500-800ms for most queries
+        from agents.query_router import QueryRouter
+        from services.conversation import get_message_count
+
+        router = QueryRouter()
+
+        # Check if this is the first message
+        message_count = await get_message_count(conversation_id)
+        is_first = (message_count == 1)  # Just the user message we stored above
+
+        # Only retrieve context if query needs it
+        if router.needs_context(request.query, is_first_message=is_first):
+            from services.vector_store import retrieve_conversation_context
+
+            try:
+                context_messages = await retrieve_conversation_context(
+                    conversation_id=conversation_id,
+                    current_query=request.query,
+                    k_recent=CONTEXT_K_RECENT,
+                    r_retrieved=CONTEXT_R_RETRIEVED
+                )
+                logger.info(f"Retrieved {len(context_messages)} context messages (K={CONTEXT_K_RECENT}, R={CONTEXT_R_RETRIEVED})")
+            except Exception as e:
+                logger.warning(f"Context retrieval failed: {e}, continuing without context")
+                context_messages = []
+        else:
             context_messages = []
+            logger.info("Context retrieval skipped (not needed for this query)")
 
         # Create pipeline instance with orchestrator enabled
         from graph.pipeline import create_pipeline
@@ -193,7 +209,10 @@ async def process_query(
                 f"results={list(query_context.get('result_summary', {}).keys())}"
             )
 
-        await create_message(
+        # Store assistant message in background (saves 200-500ms)
+        # Don't wait for DB write before returning response to user
+        background_tasks.add_task(
+            create_message,
             conversation_id=conversation_id,
             role="ASSISTANT",
             content=assistant_text,

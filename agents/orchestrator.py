@@ -154,17 +154,47 @@ class OrchestratorAgent:
                     needs_clarification=False
                 )
 
-            # Phase 1: ANALYZE QUERY
-            self._logger.info("Phase 1: ANALYZE - Assessing query...")
-            analysis = await self._analyze_query(user_query, context_messages)
-            self._logger.info(
-                f"Analysis complete: complexity={analysis.complexity.value}, "
-                f"intent={analysis.intent.value}, clarity={analysis.clarity_score:.2f}"
-            )
+            # Phase 0.5: Check if query is simple enough to skip detailed analysis
+            from agents.query_router import QueryRouter
+            query_router = QueryRouter()
 
-            # Phase 2: CREATE EXECUTION PLAN
-            self._logger.info("Phase 2: PLAN - Creating execution strategy...")
-            execution_plan = await self._create_execution_plan(analysis)
+            if query_router.is_simple_query(user_query):
+                # FAST-PATH: Simple query - skip QueryAnalysis and use fast execution plan
+                self._logger.info("FAST-PATH: Simple query detected, skipping detailed analysis")
+
+                analysis = QueryAnalysis(
+                    complexity=QueryComplexity.SIMPLE,
+                    intent=QueryIntent.SEARCH,
+                    entities_mentioned=[],
+                    filters_detected=[],
+                    clarity_score=1.0,
+                    requires_optimization=False,
+                    estimated_steps=1,
+                    reasoning="Simple query pattern detected - fast path"
+                )
+
+                execution_plan = ExecutionPlan(
+                    should_optimize_query=False,  # Skip QueryOptimizer!
+                    extractor_strategy=ExtractorStrategy.STATIC,
+                    validation_level=ValidationLevel.NONE,
+                    max_retries=0,
+                    confidence_threshold=0.6,
+                    reasoning="FAST PATH: Simple query - direct execution, no optimization",
+                    estimated_cost="low"
+                )
+            else:
+                # Normal path: Full analysis
+                # Phase 1: ANALYZE QUERY
+                self._logger.info("Phase 1: ANALYZE - Assessing query...")
+                analysis = await self._analyze_query(user_query, context_messages)
+                self._logger.info(
+                    f"Analysis complete: complexity={analysis.complexity.value}, "
+                    f"intent={analysis.intent.value}, clarity={analysis.clarity_score:.2f}"
+                )
+
+                # Phase 2: CREATE EXECUTION PLAN
+                self._logger.info("Phase 2: PLAN - Creating execution strategy...")
+                execution_plan = await self._create_execution_plan(analysis)
             self._logger.info(
                 f"Plan: strategy={execution_plan.extractor_strategy.value}, "
                 f"validation={execution_plan.validation_level.value}, "
