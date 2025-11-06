@@ -97,13 +97,31 @@ async def process_query(
             context_messages=context_messages
         )
 
-        # Store assistant message (keep metadata JSON-safe and minimal)
+        # Store assistant message with compact metadata
+        # Extract compact query context (IDs and references only, not full data)
+        from utils.metadata_extractor import extract_compact_query_context, extract_performance_metadata
+
         assistant_text = result.get("response") if isinstance(result, dict) else str(result)
+        query_context = extract_compact_query_context(result)
+        performance_metadata = extract_performance_metadata(result)
+
+        # Log what we're storing (for monitoring/debugging)
+        if query_context.get("tools_executed"):
+            logger.info(
+                f"Storing compact metadata: tools={query_context['tools_executed']}, "
+                f"results={list(query_context.get('result_summary', {}).keys())}"
+            )
+
         await create_message(
             conversation_id=conversation_id,
             role="ASSISTANT",
             content=assistant_text,
-            metadata={"workspace_id": workspace_id, "user_id": user_id}
+            metadata={
+                "workspace_id": workspace_id,
+                "user_id": user_id,
+                "query_context": query_context,
+                "performance": performance_metadata
+            }
         )
 
         execution_time_ms = int((time.time() - start_time) * 1000)

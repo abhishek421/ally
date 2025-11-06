@@ -92,7 +92,10 @@ class DataExtractorAgent:
                 "emails": [...],
                 "interactions": [...],
                 "groups": [...],
-                "workspace": {...}
+                "workspace": {...},
+                "_reasoning_traces": [...],  # NEW: Execution reasoning
+                "_confidence_scores": {...},  # NEW: Confidence per tool
+                "_validation": {...}          # NEW: Validation results
             }
         """
         self._logger.info("Starting data extraction")
@@ -101,10 +104,22 @@ class DataExtractorAgent:
 
         start_time = time.time()
 
+        # NEW: Initialize reasoning traces
+        self.reasoning_traces = []
+
         try:
             # Step 1: Parse optimized query using LLM
             parsed_query = self._parse_optimized_query(optimized_query)
             self._logger.debug(f"Parsed query: {parsed_query}")
+
+            # NEW: Log parsing decision
+            self.reasoning_traces.append({
+                "step": "parse_query",
+                "timestamp": datetime.now().isoformat(),
+                "decision": f"Planned {len(parsed_query.get('tool_calls', []))} tool call(s)",
+                "tools_planned": [tc.get("tool") for tc in parsed_query.get("tool_calls", [])],
+                "execution_plan": parsed_query.get("execution_plan", "No plan provided")
+            })
 
             # Step 2: Execute tool calls
             tool_results = await self._execute_tool_calls(parsed_query, workspace_id, user_id)
@@ -112,9 +127,22 @@ class DataExtractorAgent:
             # Step 3: Aggregate results in tool-grouped structure
             extracted_data = self._aggregate_results(tool_results)
 
+            # NEW: Step 4: Score confidence for each tool result
+            confidence_scores = self._score_tool_results(tool_results)
+
+            # NEW: Step 5: Validate results
+            validation_result = self._validate_results(optimized_query, extracted_data, confidence_scores)
+
             elapsed_ms = int((time.time() - start_time) * 1000)
             self._logger.info(f"Data extraction completed in {elapsed_ms} ms")
+            self._logger.info(f"Overall confidence: {validation_result.get('overall_confidence', 0.0):.2f}")
             self._logger.debug(f"Extracted data keys: {list(extracted_data.keys())}")
+
+            # NEW: Add metadata to response
+            extracted_data["_reasoning_traces"] = self.reasoning_traces
+            extracted_data["_confidence_scores"] = confidence_scores
+            extracted_data["_validation"] = validation_result
+            extracted_data["_execution_time_ms"] = elapsed_ms
 
             return extracted_data
 
@@ -234,7 +262,7 @@ class DataExtractorAgent:
         params: Dict[str, Any],
         previous_results: List[Dict[str, Any]],
         tool_index: int
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """
         Resolve parameter placeholders using results from previous tool calls
 
@@ -251,12 +279,17 @@ class DataExtractorAgent:
 
         Returns:
             Resolved parameter dictionary with placeholders replaced by actual values
+            Returns None if critical required parameters (person_id, company_id, etc.) failed to resolve
         """
         if not params or not previous_results:
             return params
 
         resolved_params = {}
         has_placeholders = False
+        failed_critical_params = []
+
+        # Define critical parameters that if missing should cause the tool call to be skipped
+        critical_params = ['person_id', 'company_id', 'message_id', 'interaction_id', 'group_id']
 
         for key, value in params.items():
             # Check if value is a placeholder string
@@ -276,16 +309,32 @@ class DataExtractorAgent:
                         f"Tool {tool_index}: Resolved placeholder '{value}' -> '{extracted_value}' for param '{key}'"
                     )
                 else:
-                    # Could not resolve - log warning and skip this parameter
+                    # Could not resolve - log warning
                     self._logger.warning(
                         f"Tool {tool_index}: Could not resolve placeholder '{value}' for param '{key}'. "
                         f"Checked {len(previous_results)} previous result(s)."
                     )
+
+                    # Check if this is a critical parameter
+                    if key in critical_params:
+                        failed_critical_params.append(key)
+                        self._logger.error(
+                            f"Tool {tool_index}: Critical parameter '{key}' failed to resolve. "
+                            "This tool call should be skipped."
+                        )
+
                     # Don't include unresolved parameters
                     continue
             else:
                 # Not a placeholder, keep as-is
                 resolved_params[key] = value
+
+        # If any critical parameters failed to resolve, return None to signal failure
+        if failed_critical_params:
+            self._logger.warning(
+                f"Tool {tool_index}: Skipping tool call due to unresolved critical parameters: {failed_critical_params}"
+            )
+            return None
 
         if has_placeholders:
             self._logger.info(
@@ -400,7 +449,24 @@ class DataExtractorAgent:
                 # Resolve parameters using previous results (for dependent tool calls)
                 resolved_params = self._resolve_parameters(params, results, tool_index)
 
-                # Check if parameter resolution failed
+                # Check if parameter resolution failed (None means critical params failed)
+                if resolved_params is None:
+                    # Critical parameters failed to resolve
+                    self._logger.error(
+                        f"Tool {tool_index} ({tool_name}): Critical required parameters could not be resolved. "
+                        f"This likely means a previous tool call (e.g., company/person search) returned no results. "
+                        f"Skipping this tool call."
+                    )
+                    results.append({
+                        "tool": tool_name,
+                        "query_type": query_type_str,
+                        "result": None,
+                        "success": False,
+                        "error": "Required parameters (person_id, company_id, etc.) could not be resolved from previous tool results. The dependent entity may not exist in the system."
+                    })
+                    continue
+
+                # Also check if all params are empty (edge case)
                 if not resolved_params and params:
                     # All parameters were placeholders and none could be resolved
                     self._logger.error(
@@ -412,7 +478,7 @@ class DataExtractorAgent:
                         "query_type": query_type_str,
                         "result": None,
                         "success": False,
-                        "error": "Could not resolve parameter placeholders from previous tool results"
+                        "error": "Could not resolve any parameter placeholders from previous tool results"
                     })
                     continue
 
@@ -427,7 +493,19 @@ class DataExtractorAgent:
                     workspace_id=workspace_id,
                     user_id=user_id
                 )
-                
+
+                # NEW: Log tool execution reasoning
+                self.reasoning_traces.append({
+                    "step": f"execute_{tool_name}",
+                    "timestamp": datetime.now().isoformat(),
+                    "tool": tool_name,
+                    "query_type": query_type_str,
+                    "params": {k: v for k, v in resolved_params.items() if k not in ['workspace_id', 'user_id']},
+                    "success": result.success if hasattr(result, 'success') else False,
+                    "result_count": self._count_results(result) if result else 0,
+                    "error": result.error if hasattr(result, 'error') and result.error else None
+                })
+
                 results.append({
                     "tool": tool_name,
                     "query_type": query_type_str,
@@ -805,3 +883,244 @@ class DataExtractorAgent:
             "groups": [],
             "workspace": None
         }
+
+    def _count_results(self, tool_result: ToolResult) -> int:
+        """
+        Count number of items in tool result
+
+        Args:
+            tool_result: ToolResult object
+
+        Returns:
+            Count of items in result
+        """
+        if not tool_result.success or not tool_result.data:
+            return 0
+
+        data = tool_result.data
+
+        # Check common list keys
+        for key in ['companies', 'people', 'emails', 'interactions', 'groups']:
+            if key in data and isinstance(data[key], list):
+                return len(data[key])
+
+        # Single object result
+        if isinstance(data, dict) and 'id' in data:
+            return 1
+
+        # List result
+        if isinstance(data, list):
+            return len(data)
+
+        return 0
+
+    def _score_tool_results(self, tool_results: List[Dict[str, Any]]) -> Dict[str, float]:
+        """
+        Score confidence for each tool result
+
+        Scoring criteria:
+        - Tool success/failure
+        - Result count (0 = low, 1-50 = high, >50 = medium)
+        - Data quality
+
+        Args:
+            tool_results: List of tool execution results
+
+        Returns:
+            Dictionary mapping tool names to confidence scores (0.0-1.0)
+        """
+        scores = {}
+
+        for tool_result in tool_results:
+            tool_name = tool_result.get("tool")
+            result = tool_result.get("result")
+            success = tool_result.get("success", False)
+
+            if not success or not result:
+                scores[tool_name] = 0.1
+                self._logger.debug(f"Tool {tool_name} scored 0.1 (failed)")
+                continue
+
+            # Start with base score
+            score = 1.0
+
+            # Factor 1: Success/failure
+            if not result.success:
+                score *= 0.1
+                self._logger.debug(f"Tool {tool_name}: Failed execution")
+
+            # Factor 2: Result count
+            if result.success:
+                count = self._count_results(result)
+
+                if count == 0:
+                    score *= 0.3
+                    self._logger.debug(f"Tool {tool_name}: No results found")
+                elif count > 100:
+                    score *= 0.7  # Too many results might be too broad
+                    self._logger.debug(f"Tool {tool_name}: Many results ({count}), might be too broad")
+                elif count > 50:
+                    score *= 0.85
+                    self._logger.debug(f"Tool {tool_name}: Good number of results ({count})")
+                else:
+                    # 1-50 results is optimal
+                    self._logger.debug(f"Tool {tool_name}: Optimal result count ({count})")
+
+            # Factor 3: Error messages
+            if result.error:
+                score *= 0.2
+                self._logger.debug(f"Tool {tool_name}: Has error: {result.error}")
+
+            # Factor 4: Pagination (incomplete results)
+            if isinstance(result.data, dict) and result.data.get("has_more"):
+                score *= 0.9  # Slightly reduce confidence for paginated results
+
+            scores[tool_name] = round(score, 2)
+
+            # Log reasoning trace for this tool
+            self.reasoning_traces.append({
+                "step": f"score_{tool_name}",
+                "timestamp": datetime.now().isoformat(),
+                "tool": tool_name,
+                "confidence_score": scores[tool_name],
+                "result_count": self._count_results(result) if success else 0,
+                "success": success
+            })
+
+        return scores
+
+    def _validate_results(
+        self,
+        optimized_query: str,
+        extracted_data: Dict[str, Any],
+        confidence_scores: Dict[str, float]
+    ) -> Dict[str, Any]:
+        """
+        Validate extracted results using heuristic checks
+
+        Checks performed:
+        1. Is data empty?
+        2. Are there errors?
+        3. Does data type match query intent?
+        4. Are results ambiguous (too many)?
+
+        Args:
+            optimized_query: Original optimized query
+            extracted_data: Extracted data dictionary
+            confidence_scores: Confidence scores per tool
+
+        Returns:
+            Dictionary with validation results:
+            {
+                "is_valid": bool,
+                "overall_confidence": float,
+                "issues": List[Dict],
+                "recommendations": List[str],
+                "has_data": bool
+            }
+        """
+        issues = []
+        recommendations = []
+
+        # Check 1: Is data empty?
+        has_data = any(
+            len(v) > 0 if isinstance(v, list) else v is not None
+            for k, v in extracted_data.items()
+            if not k.startswith("_")
+        )
+
+        if not has_data:
+            issues.append({
+                "severity": "ERROR",
+                "type": "NO_DATA",
+                "message": "No data was retrieved from any tool",
+                "impact": "Cannot answer user query"
+            })
+            recommendations.append("Check if entities exist in database or refine search criteria")
+
+        # Check 2: Are there errors?
+        if extracted_data.get("_errors"):
+            error_count = len(extracted_data["_errors"])
+            issues.append({
+                "severity": "WARNING",
+                "type": "TOOL_ERRORS",
+                "message": f"{error_count} tool(s) failed during execution",
+                "details": extracted_data["_errors"]
+            })
+            recommendations.append("Review failed tools and retry with different parameters")
+
+        # Check 3: Query type vs data type heuristic
+        query_lower = optimized_query.lower()
+
+        # Detect if query asks for count
+        is_count_query = any(word in query_lower for word in ['how many', 'count', 'number of', 'total'])
+
+        # Detect if we returned list data
+        has_list_data = any(
+            isinstance(v, list) and len(v) > 0
+            for k, v in extracted_data.items()
+            if not k.startswith("_")
+        )
+
+        if is_count_query and has_list_data and 'analytics' not in query_lower:
+            issues.append({
+                "severity": "WARNING",
+                "type": "TYPE_MISMATCH",
+                "message": "Query asks for count but returned list of items",
+                "impact": "Response formatter should count the items"
+            })
+            recommendations.append("Consider using analytics tool for count queries")
+
+        # Check 4: Too many results (ambiguous query)
+        for key, value in extracted_data.items():
+            if isinstance(value, list) and len(value) > 50:
+                issues.append({
+                    "severity": "WARNING",
+                    "type": "TOO_MANY_RESULTS",
+                    "message": f"Retrieved {len(value)} {key}, query might be too broad",
+                    "impact": "User might be overwhelmed with results"
+                })
+                recommendations.append(f"Consider adding filters to narrow down {key} results")
+
+        # Calculate overall confidence
+        if confidence_scores:
+            overall_confidence = sum(confidence_scores.values()) / len(confidence_scores)
+        else:
+            overall_confidence = 0.0
+
+        # Adjust confidence based on issues
+        error_issues = [i for i in issues if i["severity"] == "ERROR"]
+        if error_issues:
+            overall_confidence *= 0.3
+        elif not has_data:
+            overall_confidence = 0.2
+
+        validation_result = {
+            "is_valid": len(error_issues) == 0,
+            "overall_confidence": round(overall_confidence, 2),
+            "has_data": has_data,
+            "issues": issues,
+            "recommendations": recommendations,
+            "total_issues": len(issues),
+            "error_count": len(error_issues),
+            "warning_count": len([i for i in issues if i["severity"] == "WARNING"])
+        }
+
+        # Log validation reasoning
+        self.reasoning_traces.append({
+            "step": "validate_results",
+            "timestamp": datetime.now().isoformat(),
+            "overall_confidence": validation_result["overall_confidence"],
+            "is_valid": validation_result["is_valid"],
+            "has_data": has_data,
+            "issue_count": len(issues),
+            "issues_summary": [f"{i['severity']}: {i['type']}" for i in issues]
+        })
+
+        self._logger.info(
+            f"Validation complete: is_valid={validation_result['is_valid']}, "
+            f"confidence={validation_result['overall_confidence']:.2f}, "
+            f"issues={len(issues)}"
+        )
+
+        return validation_result
