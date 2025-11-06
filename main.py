@@ -25,11 +25,11 @@ logger = logging.getLogger(__name__)
 
 async def initialize_application():
     """
-    Initialize application (ENV-only configuration) with connection pooling.
+    Initialize application (ENV-only configuration).
     """
     logger.info("Initializing application (ENV-only config)...")
 
-    # Initialize database connection with pooling
+    # Initialize database connection
     from database.prisma_client import prisma_client
     try:
         await prisma_client.connect()
@@ -37,15 +37,6 @@ async def initialize_application():
     except Exception as e:
         logger.error(f"Failed to initialize database connection: {e}")
         raise
-
-    # Initialize Redis connection pool
-    from database.redis_client import redis_client
-    try:
-        await redis_client.connect()
-        logger.info("Redis connection pool initialized successfully")
-    except Exception as e:
-        logger.warning(f"Failed to initialize Redis connection pool: {e}")
-        logger.warning("Application will continue without Redis caching")
 
     # Initialize config manager
     from config.config_manager import get_config_manager
@@ -61,21 +52,13 @@ async def initialize_application():
 
 
 async def cleanup_application():
-    """Cleanup on shutdown - close all connection pools."""
+    """Cleanup on shutdown."""
     from database.prisma_client import prisma_client
     try:
         await prisma_client.disconnect()
         logger.info("Database connection closed successfully")
     except Exception as e:
         logger.warning(f"Error during database cleanup: {e}")
-
-    # Close Redis connection pool
-    from database.redis_client import redis_client
-    try:
-        await redis_client.disconnect()
-        logger.info("Redis connection pool closed successfully")
-    except Exception as e:
-        logger.warning(f"Error during Redis cleanup: {e}")
 
     logger.info("Application cleanup completed")
 

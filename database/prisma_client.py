@@ -3,98 +3,29 @@ from prisma import Prisma
 from typing import Optional
 import asyncio
 import logging
-import os
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 logger = logging.getLogger(__name__)
 
 
 class PrismaClient:
-    """Prisma client wrapper with connection management and pooling"""
-    
+    """Prisma client wrapper with connection management"""
+
     def __init__(self):
         self.client: Optional[Prisma] = None
         self._connection_lock = asyncio.Lock()
-        self._ensure_connection_pool_config()
-    
-    def _ensure_connection_pool_config(self):
-        """
-        Ensure DATABASE_URL has connection pool parameters.
-        Adds them if missing to optimize connection reuse and prevent idle timeout.
-        """
-        database_url = os.getenv("DATABASE_URL", "")
-        if not database_url:
-            return
 
-        try:
-            # Parse the URL
-            parsed = urlparse(database_url)
-            query_params = parse_qs(parsed.query)
-
-            # Default pool configuration (can be overridden via env vars)
-            pool_size = int(os.getenv("DB_POOL_SIZE", "20"))
-            pool_timeout = int(os.getenv("DB_POOL_TIMEOUT", "30"))
-            max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "10"))
-            connect_timeout = int(os.getenv("DB_CONNECT_TIMEOUT", "10"))
-
-            # Add connection pool parameters if not present
-            updated = False
-            if "connection_limit" not in query_params:
-                query_params["connection_limit"] = [str(pool_size)]
-                updated = True
-            if "pool_timeout" not in query_params:
-                query_params["pool_timeout"] = [str(pool_timeout)]
-                updated = True
-            if "max_overflow" not in query_params:
-                query_params["max_overflow"] = [str(max_overflow)]
-                updated = True
-            # Add connect_timeout to prevent idle connection issues
-            if "connect_timeout" not in query_params:
-                query_params["connect_timeout"] = [str(connect_timeout)]
-                updated = True
-            # Add pgbouncer parameter to handle connection pooling better
-            if "pgbouncer" not in query_params:
-                query_params["pgbouncer"] = ["true"]
-                updated = True
-
-            if updated:
-                # Reconstruct URL with pool parameters
-                new_query = urlencode(query_params, doseq=True)
-                new_parsed = parsed._replace(query=new_query)
-                new_url = urlunparse(new_parsed)
-
-                # Update environment variable
-                os.environ["DATABASE_URL"] = new_url
-                logger.info(
-                    f"Enhanced DATABASE_URL with connection pool settings: "
-                    f"connection_limit={pool_size}, pool_timeout={pool_timeout}, "
-                    f"max_overflow={max_overflow}, connect_timeout={connect_timeout}"
-                )
-            else:
-                logger.debug("DATABASE_URL already has connection pool parameters")
-
-        except Exception as e:
-            logger.warning(f"Could not enhance DATABASE_URL with pool config: {e}")
-    
     async def connect(self):
-        """Connect to PostgreSQL database with connection pooling"""
+        """Connect to PostgreSQL database"""
         async with self._connection_lock:
             if not self.client:
                 try:
-                    # Prisma automatically uses connection pooling via DATABASE_URL parameters
                     self.client = Prisma()
                     await self.client.connect()
-                    
-                    # Log connection pool info
-                    pool_size = os.getenv("DB_POOL_SIZE", "20")
-                    logger.info(
-                        f"Connected to PostgreSQL database with connection pooling "
-                        f"(pool_size={pool_size})"
-                    )
+                    logger.info("Connected to PostgreSQL database")
                 except Exception as e:
                     logger.error(f"Failed to connect to PostgreSQL: {e}")
                     raise
-    
+
     async def disconnect(self):
         """Disconnect from database"""
         async with self._connection_lock:
@@ -105,11 +36,10 @@ class PrismaClient:
                     logger.info("Disconnected from PostgreSQL database")
                 except Exception as e:
                     logger.error(f"Error disconnecting from PostgreSQL: {e}")
-    
+
     async def get_client(self) -> Prisma:
         """
-        Get Prisma client instance (reuses pooled connection).
-        Connection pooling is handled automatically by Prisma via DATABASE_URL.
+        Get Prisma client instance.
         Automatically reconnects if connection is lost.
         """
         if not self.client:
@@ -126,33 +56,17 @@ class PrismaClient:
                     pass
                 await self.connect()
         return self.client
-    
+
     async def health_check(self) -> bool:
-        """
-        Check database connection health and pool status.
-        This validates that connections can be acquired from the pool.
-        """
+        """Check database connection health"""
         try:
             client = await self.get_client()
-            # Simple query to test connection (uses pool)
+            # Simple query to test connection
             await client.query_raw("SELECT 1")
             return True
         except Exception as e:
             logger.error(f"Database health check failed: {e}")
             return False
-    
-    def get_pool_stats(self) -> dict:
-        """
-        Get connection pool statistics.
-        Note: Prisma doesn't expose pool stats directly, but this provides
-        configuration information.
-        """
-        return {
-            "pool_size": int(os.getenv("DB_POOL_SIZE", "20")),
-            "pool_timeout": int(os.getenv("DB_POOL_TIMEOUT", "30")),
-            "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "10")),
-            "connected": self.client is not None
-        }
 
 
 # Global instance

@@ -9,80 +9,45 @@ logger = logging.getLogger(__name__)
 
 
 class RedisClient:
-    """Redis client wrapper with connection pooling for optimal performance"""
+    """Redis client wrapper for caching"""
     
     def __init__(self, host: Optional[str] = None, port: Optional[int] = None, db: Optional[int] = None):
         # Use environment variables (common across services) with defaults
         self.host = host or os.getenv("REDIS_HOST", "localhost")
         self.port = port or int(os.getenv("REDIS_PORT", "6379"))
         self.db = db if db is not None else int(os.getenv("REDIS_DB", "0"))
-        
-        # Connection pool configuration
-        self.pool_size = int(os.getenv("REDIS_POOL_SIZE", "50"))
-        self.pool_timeout = int(os.getenv("REDIS_POOL_TIMEOUT", "5"))
-        self.max_connections = int(os.getenv("REDIS_MAX_CONNECTIONS", "100"))
-        
         self.client: Optional[redis.Redis] = None
-        self.connection_pool: Optional[redis.ConnectionPool] = None
     
     async def connect(self):
-        """Connect to Redis with connection pooling"""
-        if not self.connection_pool:
+        """Connect to Redis"""
+        if not self.client:
             try:
-                # Create connection pool for optimal performance
-                self.connection_pool = redis.ConnectionPool(
+                self.client = redis.Redis(
                     host=self.host,
                     port=self.port,
                     db=self.db,
-                    max_connections=self.max_connections,
-                    decode_responses=True,
-                    socket_connect_timeout=5,
-                    socket_keepalive=True,
-                    socket_keepalive_options={},
-                    health_check_interval=30,  # Check connection health every 30s
-                )
-                
-                # Create Redis client using the connection pool
-                self.client = redis.Redis(
-                    connection_pool=self.connection_pool,
                     decode_responses=True
                 )
-                
                 # Test connection
                 await self.client.ping()
-                logger.info(
-                    f"Connected to Redis at {self.host}:{self.port} "
-                    f"with connection pooling (max_connections={self.max_connections})"
-                )
+                logger.info(f"Connected to Redis at {self.host}:{self.port}")
             except Exception as e:
                 logger.error(f"Failed to connect to Redis: {e}")
-                self.connection_pool = None
-                self.client = None
                 raise
     
     async def disconnect(self):
-        """Disconnect from Redis and close connection pool"""
+        """Disconnect from Redis"""
         if self.client:
             try:
                 await self.client.close()
                 self.client = None
+                logger.info("Disconnected from Redis")
             except Exception as e:
-                logger.error(f"Error closing Redis client: {e}")
-        
-        if self.connection_pool:
-            try:
-                await self.connection_pool.aclose()
-                self.connection_pool = None
-                logger.info("Disconnected from Redis and closed connection pool")
-            except Exception as e:
-                logger.error(f"Error closing Redis connection pool: {e}")
+                logger.error(f"Error disconnecting from Redis: {e}")
     
     async def get_client(self) -> redis.Redis:
-        """
-        Get Redis client instance (reuses connections from pool).
-        Connection pooling ensures efficient connection reuse across requests.
-        """
-        if not self.client or not self.connection_pool:
+        """Get Redis client instance"""
+        if not self.client:
             await self.connect()
         return self.client
     
@@ -120,10 +85,7 @@ class RedisClient:
             return False
     
     async def health_check(self) -> bool:
-        """
-        Check Redis connection health and pool status.
-        This validates that connections can be acquired from the pool.
-        """
+        """Check Redis connection health"""
         try:
             client = await self.get_client()
             await client.ping()
@@ -131,28 +93,6 @@ class RedisClient:
         except Exception as e:
             logger.error(f"Redis health check failed: {e}")
             return False
-    
-    def get_pool_stats(self) -> dict:
-        """
-        Get connection pool statistics (only serializable configuration values).
-        Note: Redis ConnectionPool doesn't expose reliable runtime connection counts
-        in a serializable format, so we only return configuration values.
-        """
-        if self.connection_pool:
-            return {
-                "max_connections": self.max_connections,
-                "pool_size": self.pool_size,
-                "pool_timeout": self.pool_timeout,
-                "connected": self.client is not None,
-                "host": self.host,
-                "port": self.port,
-                "db": self.db,
-            }
-        return {
-            "max_connections": self.max_connections,
-            "pool_size": self.pool_size,
-            "connected": False
-        }
 
 
 # Global instance
