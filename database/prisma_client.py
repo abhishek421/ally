@@ -20,22 +20,23 @@ class PrismaClient:
     def _ensure_connection_pool_config(self):
         """
         Ensure DATABASE_URL has connection pool parameters.
-        Adds them if missing to optimize connection reuse.
+        Adds them if missing to optimize connection reuse and prevent idle timeout.
         """
         database_url = os.getenv("DATABASE_URL", "")
         if not database_url:
             return
-        
+
         try:
             # Parse the URL
             parsed = urlparse(database_url)
             query_params = parse_qs(parsed.query)
-            
+
             # Default pool configuration (can be overridden via env vars)
             pool_size = int(os.getenv("DB_POOL_SIZE", "20"))
             pool_timeout = int(os.getenv("DB_POOL_TIMEOUT", "30"))
             max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "10"))
-            
+            connect_timeout = int(os.getenv("DB_CONNECT_TIMEOUT", "10"))
+
             # Add connection pool parameters if not present
             updated = False
             if "connection_limit" not in query_params:
@@ -47,22 +48,31 @@ class PrismaClient:
             if "max_overflow" not in query_params:
                 query_params["max_overflow"] = [str(max_overflow)]
                 updated = True
-            
+            # Add connect_timeout to prevent idle connection issues
+            if "connect_timeout" not in query_params:
+                query_params["connect_timeout"] = [str(connect_timeout)]
+                updated = True
+            # Add pgbouncer parameter to handle connection pooling better
+            if "pgbouncer" not in query_params:
+                query_params["pgbouncer"] = ["true"]
+                updated = True
+
             if updated:
                 # Reconstruct URL with pool parameters
                 new_query = urlencode(query_params, doseq=True)
                 new_parsed = parsed._replace(query=new_query)
                 new_url = urlunparse(new_parsed)
-                
+
                 # Update environment variable
                 os.environ["DATABASE_URL"] = new_url
                 logger.info(
                     f"Enhanced DATABASE_URL with connection pool settings: "
-                    f"connection_limit={pool_size}, pool_timeout={pool_timeout}, max_overflow={max_overflow}"
+                    f"connection_limit={pool_size}, pool_timeout={pool_timeout}, "
+                    f"max_overflow={max_overflow}, connect_timeout={connect_timeout}"
                 )
             else:
                 logger.debug("DATABASE_URL already has connection pool parameters")
-                
+
         except Exception as e:
             logger.warning(f"Could not enhance DATABASE_URL with pool config: {e}")
     
@@ -100,9 +110,21 @@ class PrismaClient:
         """
         Get Prisma client instance (reuses pooled connection).
         Connection pooling is handled automatically by Prisma via DATABASE_URL.
+        Automatically reconnects if connection is lost.
         """
         if not self.client:
             await self.connect()
+        else:
+            # Validate connection is still alive
+            try:
+                await self.client.query_raw("SELECT 1")
+            except Exception as e:
+                logger.warning(f"Connection validation failed: {e}. Reconnecting...")
+                try:
+                    await self.disconnect()
+                except Exception:
+                    pass
+                await self.connect()
         return self.client
     
     async def health_check(self) -> bool:
