@@ -11,6 +11,8 @@ class CompanySearchParams(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     privacy_level: Optional[str] = None
+    created_from: Optional[datetime] = None
+    created_to: Optional[datetime] = None
     limit: int = 50
     offset: int = 0
 
@@ -77,7 +79,16 @@ class CompanyTool(BaseTool):
 
             if params.privacy_level:
                 where_clause["privacyLevel"] = params.privacy_level
-            
+
+            # Add date range filters
+            if params.created_from or params.created_to:
+                date_filter = {}
+                if params.created_from:
+                    date_filter["gte"] = params.created_from
+                if params.created_to:
+                    date_filter["lte"] = params.created_to
+                where_clause["createdAt"] = date_filter
+
             # Execute search with pagination
             companies = await client.company.find_many(
                 where=where_clause,

@@ -171,10 +171,10 @@ Output:
                 "company_id": "<company_id_from_previous_call>",
                 "limit": 50
             }},
-            "reason": "List all emails associated with Acme Corp"
+            "reason": "List all emails associated with Acme Corp (depends on company being found)"
         }}
     ],
-    "execution_plan": "First find Acme Corp's company_id, then list all emails associated with that company for the year 2024"
+    "execution_plan": "First find Acme Corp's company_id using SEARCH, then list all emails associated with that company. Note: If company is not found, the email LIST call will fail gracefully with a 'not found' error."
 }}
 
 Example 4 - Get by ID with Related Data:

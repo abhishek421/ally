@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from graph.pipeline import AnalystPipeline
-from api.v1 import query, health, admin, conversations
+from api.v1 import query, health, conversations
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
@@ -96,16 +96,6 @@ app.add_middleware(
 app.include_router(health.router, tags=["Health"])
 app.include_router(query.router, prefix="/api/v1", tags=["Query"])
 app.include_router(conversations.router, prefix="/api/v1", tags=["Conversations"])
-app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
-
-# Mount static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Admin panel route
-@app.get("/admin")
-async def admin_panel():
-    """Serve the admin panel HTML"""
-    return FileResponse("static/admin.html")
 
 
 # Exception handlers
