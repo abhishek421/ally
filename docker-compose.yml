@@ -57,7 +57,8 @@ services:
       # Database Configuration (Common - shared across services)
       # Override DATABASE_URL to use host.docker.internal instead of localhost
       # This allows the container to connect to PostgreSQL running on the host
-      DATABASE_URL: postgresql://postgres:postgres@host.docker.internal:5433/softsync?schema=public
+      # Added connection_limit, pool_timeout, and connect_timeout to prevent idle timeout issues
+      DATABASE_URL: postgresql://postgres:postgres@host.docker.internal:5433/softsync?schema=public&connection_limit=20&pool_timeout=30&connect_timeout=10&pgbouncer=true
 
       # Redis Configuration (Common - shared across services)
       REDIS_HOST: redis
