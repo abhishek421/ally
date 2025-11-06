@@ -33,7 +33,7 @@ class QueryResponse(BaseModel):
     execution_time_ms: int = Field(..., description="Query execution time in milliseconds")
     workspace_id: str = Field(..., description="Workspace identifier")
     user_id: str = Field(..., description="User identifier")
-    conversation_id: str | None = Field(None, description="Conversation identifier")
+    conversation_id: Optional[str] = Field(None, description="Conversation identifier")
 
 
 class ErrorResponse(BaseModel):
