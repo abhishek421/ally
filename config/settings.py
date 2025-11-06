@@ -128,6 +128,25 @@ DATA_EXTRACTOR_CONFIG = _get_env_agent_config("DATA_EXTRACTOR")
 RESPONSE_FORMATTER_CONFIG = _get_env_agent_config("RESPONSE_FORMATTER")
 
 # ============================================================================
+# Database Connection Pool Configuration
+# ============================================================================
+
+# PostgreSQL Connection Pool Settings
+DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))  # Default pool size
+DB_POOL_TIMEOUT = int(os.getenv("DB_POOL_TIMEOUT", "30"))  # Connection timeout in seconds
+DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "10"))  # Max connections beyond pool_size
+
+# Redis Connection Pool Settings
+REDIS_POOL_SIZE = int(os.getenv("REDIS_POOL_SIZE", "50"))  # Redis pool size
+REDIS_POOL_TIMEOUT = int(os.getenv("REDIS_POOL_TIMEOUT", "5"))  # Redis pool timeout
+REDIS_MAX_CONNECTIONS = int(os.getenv("REDIS_MAX_CONNECTIONS", "100"))  # Max Redis connections
+
+# DynamoDB Connection Pool Settings
+DYNAMODB_MAX_POOL_CONNECTIONS = int(os.getenv("DYNAMODB_MAX_POOL_CONNECTIONS", "50"))  # Max pool connections
+DYNAMODB_CONNECT_TIMEOUT = int(os.getenv("DYNAMODB_CONNECT_TIMEOUT", "10"))  # Connect timeout
+DYNAMODB_READ_TIMEOUT = int(os.getenv("DYNAMODB_READ_TIMEOUT", "30"))  # Read timeout
+
+# ============================================================================
 # Conversation Context Configuration
 # ============================================================================
 
