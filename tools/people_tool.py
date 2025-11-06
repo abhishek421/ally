@@ -107,13 +107,7 @@ class PeopleTool(BaseTool):
                     "url": True,
                     "metaData": {
                         "include": {
-                            "company": {
-                                "select": {
-                                    "id": True,
-                                    "name": True,
-                                    "description": True
-                                }
-                            }
+                            "company": True
                         }
                     }
                 },
@@ -157,14 +151,7 @@ class PeopleTool(BaseTool):
                     "url": True,
                     "metaData": {
                         "include": {
-                            "company": {
-                                "select": {
-                                    "id": True,
-                                    "name": True,
-                                    "description": True,
-                                    "privacyLevel": True
-                                }
-                            }
+                            "company": True
                         }
                     }
                 }
@@ -207,13 +194,7 @@ class PeopleTool(BaseTool):
                     "url": True,
                     "metaData": {
                         "include": {
-                            "company": {
-                                "select": {
-                                    "id": True,
-                                    "name": True,
-                                    "description": True
-                                }
-                            }
+                            "company": True
                         }
                     }
                 },
@@ -255,7 +236,7 @@ class PeopleTool(BaseTool):
             privacy_levels = await client.people.group_by(
                 by=["privacyLevel"],
                 where={"workspaceId": self.workspace_id},
-                _count={"id": True}
+                count={"id": True}
             )
 
             # Get people by job title (top 10)
@@ -265,7 +246,7 @@ class PeopleTool(BaseTool):
                     "workspaceId": self.workspace_id,
                     "jobTitle": {"not": None}
                 },
-                _count={"id": True},
+                count={"id": True},
                 order={"_count": {"id": "desc"}},
                 take=10
             )
