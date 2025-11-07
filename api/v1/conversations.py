@@ -1,9 +1,10 @@
 """
 Conversation management endpoints
 """
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Depends
 from typing import Optional
 from database.prisma_client import prisma_client
+from api.dependencies import get_current_user_id
 
 router = APIRouter()
 
@@ -11,7 +12,7 @@ router = APIRouter()
 @router.get("/conversations")
 async def list_conversations(
     workspace_id: str = Header(..., alias="X-Workspace-ID"),
-    user_id: str = Header(..., alias="X-User-ID"),
+    user_id: str = Depends(get_current_user_id),
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ):
@@ -50,7 +51,7 @@ async def list_conversations(
 async def get_conversation(
     conversation_id: str,
     workspace_id: str = Header(..., alias="X-Workspace-ID"),
-    user_id: str = Header(..., alias="X-User-ID"),
+    user_id: str = Depends(get_current_user_id),
 ):
     """
     Get conversation details with basic info
@@ -92,7 +93,7 @@ async def get_conversation(
 async def get_conversation_messages(
     conversation_id: str,
     workspace_id: str = Header(..., alias="X-Workspace-ID"),
-    user_id: str = Header(..., alias="X-User-ID"),
+    user_id: str = Depends(get_current_user_id),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
@@ -142,7 +143,7 @@ async def get_conversation_messages(
 async def delete_conversation(
     conversation_id: str,
     workspace_id: str = Header(..., alias="X-Workspace-ID"),
-    user_id: str = Header(..., alias="X-User-ID"),
+    user_id: str = Depends(get_current_user_id),
 ):
     """
     Delete a conversation (and all its messages via cascade)

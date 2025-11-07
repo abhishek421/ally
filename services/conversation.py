@@ -49,7 +49,7 @@ async def ensure_conversation(workspace_id: str, user_id: str, conversation_id: 
 
 
 async def create_message(conversation_id: str, role: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> str:
-    """Persist a message and (optionally) upsert its embedding to a vector store."""
+    """Persist a message to the database."""
     client: Prisma = await prisma_client.get_client()
 
     message_id = str(uuid4())
@@ -66,7 +66,7 @@ async def create_message(conversation_id: str, role: str, content: str, metadata
             }
         }
     }
-    
+
     # Handle metadata: convert to Prisma Json type or omit entirely
     if metadata:
         safe_meta = _json_safe(metadata)
@@ -82,22 +82,6 @@ async def create_message(conversation_id: str, role: str, content: str, metadata
             data={"updatedAt": datetime.utcnow()},
         )
     except Exception:
-        pass
-
-    # Best-effort vector upsert
-    try:
-        from services.vector_store import upsert_message_embedding
-        await upsert_message_embedding(
-            message_id=message_id,
-            conversation_id=conversation_id,
-            workspace_id=(metadata or {}).get("workspace_id") if isinstance(metadata, dict) else None,
-            user_id=(metadata or {}).get("user_id") if isinstance(metadata, dict) else None,
-            role=role.upper(),
-            content=content,
-            created_at=datetime.utcnow().isoformat(),
-        )
-    except Exception:
-        # Do not block core path on vector errors
         pass
 
     return message_id

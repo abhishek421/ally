@@ -85,12 +85,6 @@ models/
 checkpoints/
 weights/
 
-# Vector databases and embeddings
-*.faiss
-*.index
-embeddings/
-vectors/
-
 # LangChain cache
 .langchain/
 

@@ -1,32 +1,6 @@
 version: '3.8'
 
 services:
-  # Qdrant Vector DB
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: analyst-ai-qdrant
-    ports:
-      - "6333:6333"
-    volumes:
-      - qdrant_data:/qdrant/storage
-    environment:
-      - QDRANT__SERVICE__MAX_REQUEST_SIZE_MB=32
-      - QDRANT__STORAGE__PERFORMANCE__MAX_SEARCH_THREADS=4
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: '2'
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:6333/healthz"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    networks:
-      - analyst-ai-network
-    restart: unless-stopped
-
   # FastAPI Application
   app:
     build:
@@ -66,20 +40,6 @@ AWS_SECRET_ACCESS_KEY=REDACTED
 
       # Application Configuration
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      # Vector DB (Qdrant)
-      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
-      QDRANT_API_KEY: ${QDRANT_API_KEY}
-      QDRANT_COLLECTION_NAME: ${QDRANT_COLLECTION_NAME:-conversation_messages}
-      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-sentence-transformers/paraphrase-MiniLM-L3-v2}
-      QDRANT_VECTOR_SIZE: ${QDRANT_VECTOR_SIZE:-384}
-      QDRANT_SCORE_THRESHOLD: ${QDRANT_SCORE_THRESHOLD:-0.3}
-      # Conversation Context Configuration
-      CONTEXT_K_RECENT: ${CONTEXT_K_RECENT:-10}
-      CONTEXT_R_RETRIEVED: ${CONTEXT_R_RETRIEVED:-5}
-
-    depends_on:
-      qdrant:
-        condition: service_started
     networks:
       - analyst-ai-network
     volumes:
@@ -99,7 +59,3 @@ AWS_SECRET_ACCESS_KEY=REDACTED
 networks:
   analyst-ai-network:
     driver: bridge
-
-volumes:
-  qdrant_data:
-    driver: local
