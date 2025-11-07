@@ -2,6 +2,8 @@
 Health check endpoints
 """
 import logging
+import os
+import re
 from datetime import datetime
 from fastapi import APIRouter
 from api.v1.schemas import HealthResponse, ReadyResponse
@@ -11,6 +13,21 @@ from database.prisma_client import prisma_client
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def mask_database_url(url: str) -> str:
+    """
+    Mask password in database URL for secure logging
+    Example: postgresql://user:password@host:5432/db -> postgresql://user:****@host:5432/db
+    """
+    if not url:
+        return "NOT_SET"
+
+    # Pattern to match password in connection string
+    # Matches: protocol://user:password@host or protocol://user:password@host:port
+    pattern = r'(://[^:]+:)([^@]+)(@)'
+    masked = re.sub(pattern, r'\1****\3', url)
+    return masked
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -34,13 +51,19 @@ async def readiness_check():
     """
     services = {}
 
+    # Log database URL
+    db_url = os.getenv("DATABASE_URL", "NOT_SET")
+    logger.info(f"Database URL: {db_url}")
+
     # Check database connection
     try:
         # Try a simple query to verify database is accessible
         await prisma_client.connect()
         services["database"] = "ready"
+        logger.info(f"Database connection successful to: {db_url}")
     except Exception as e:
         logger.error(f"Database not ready: {e}")
+        logger.error(f"Failed to connect to: {db_url}")
         services["database"] = "not_ready"
 
     # Check config manager

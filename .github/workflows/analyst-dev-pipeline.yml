@@ -37,17 +37,6 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Free up disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: false  # Keep Docker, we need it
-          swap-storage: false
-
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -117,14 +106,6 @@ jobs:
             .
 
           echo "✅ Successfully pushed ${ECR_IMAGE}:${IMAGE_TAG} and ${ECR_IMAGE}:latest"
-
-          # Clean up build cache to free disk space
-          echo "🧹 Cleaning up build artifacts..."
-          docker buildx prune -af || true
-          docker system prune -af || true
-
-          echo "📊 Final disk space:"
-          df -h
 
   notify_dev:
     name: Notify Discord (completed)
