@@ -99,13 +99,17 @@ async def get_conversation_messages(
     """
     Get messages for a conversation (chronological order)
     """
+    # Validate conversation_id is not "null" or empty
+    if not conversation_id or conversation_id.lower() in ["null", "undefined", "none"]:
+        raise HTTPException(status_code=400, detail="Invalid conversation_id")
+
     client = await prisma_client.get_client()
-    
+
     # Verify conversation exists and user has access
     conversation = await client.conversation.find_unique(
         where={"id": conversation_id},
     )
-    
+
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
     

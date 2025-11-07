@@ -22,6 +22,16 @@ async def ensure_conversation(workspace_id: str, user_id: str, conversation_id: 
 
     client: Prisma = await prisma_client.get_client()
 
+    # Validate that the user exists before creating conversation
+    user = await client.user.find_unique(where={"id": user_id})
+    if not user:
+        raise ValueError(f"User with id {user_id} does not exist")
+
+    # Validate that the workspace exists
+    workspace = await client.workspace.find_unique(where={"id": workspace_id})
+    if not workspace:
+        raise ValueError(f"Workspace with id {workspace_id} does not exist")
+
     new_id = str(uuid4())
     title = (title_hint or "New chat")[:80]
 
