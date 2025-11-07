@@ -84,14 +84,7 @@ async def readiness_check():
         logger.error(f"Config manager not ready: {e}")
         services["config_manager"] = "not_ready"
 
-    # Check embedding model (optional - don't fail if not loaded)
-    try:
-        from services.vector_store import _embedding_model
-        services["embedding_model"] = "ready" if _embedding_model is not None else "not_loaded"
-    except Exception:
-        services["embedding_model"] = "not_loaded"
-
-    # Determine overall status (embedding model is optional)
+    # Determine overall status
     critical_services_ready = all(
         services.get(service) == "ready"
         for service in ["database", "config_manager"]
@@ -108,36 +101,12 @@ async def readiness_check():
 @router.get("/warmup")
 async def warmup():
     """
-    Warmup endpoint to trigger lazy-loaded components
-    Useful for avoiding cold start on first real query
+    Warmup endpoint (deprecated - no lazy-loaded components to warm up)
     No authentication required
     """
-    from services.vector_store import get_embedding_model, get_qdrant_client
-
-    result = {
-        "embedding_model": "not_loaded",
-        "qdrant_client": "not_loaded"
-    }
-
-    # Load embedding model
-    try:
-        get_embedding_model()
-        result["embedding_model"] = "loaded"
-    except Exception as e:
-        logger.error(f"Failed to load embedding model: {e}")
-        result["embedding_model"] = f"error: {str(e)}"
-
-    # Initialize Qdrant client
-    try:
-        get_qdrant_client()
-        result["qdrant_client"] = "initialized"
-    except Exception as e:
-        logger.error(f"Failed to initialize Qdrant: {e}")
-        result["qdrant_client"] = f"error: {str(e)}"
-
     return {
         "status": "warmup_complete",
-        "components": result,
+        "message": "No components to warm up (vector DB removed)",
         "timestamp": datetime.utcnow().isoformat()
     }
 

@@ -4,12 +4,11 @@ Main query endpoint for processing natural language queries
 import time
 import logging
 import uuid
-from fastapi import APIRouter, HTTPException, status, Header, BackgroundTasks
+from fastapi import APIRouter, HTTPException, status, Header, BackgroundTasks, Depends, Response
 from typing import Optional
 from api.v1.schemas import QueryRequest, QueryResponse, ErrorResponse
-# from api.dependencies import verify_token_dependency  # Commented out for now
+from api.dependencies import get_current_user_id
 from graph.pipeline import AnalystPipeline
-from config.settings import CONTEXT_K_RECENT, CONTEXT_R_RETRIEVED
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +67,9 @@ def _clean_response(result: dict) -> dict:
 async def process_query(
     request: QueryRequest,
     background_tasks: BackgroundTasks,
+    response: Response,
     workspace_id: str = Header(..., alias="X-Workspace-ID", description="Workspace identifier"),
-    user_id: str = Header(..., alias="X-User-ID", description="User identifier"),
-    # token_claims: dict = Depends(verify_token_dependency)  # Commented out - JWT auth disabled
+    user_id: str = Depends(get_current_user_id),
 ):
     """
     Process a natural language query through the AI Analyst pipeline
@@ -78,17 +77,13 @@ async def process_query(
     Args:
         request: QueryRequest containing the query text
         workspace_id: Workspace identifier from header (X-Workspace-ID)
-        user_id: User identifier from header (X-User-ID)
+        user_id: User identifier from Cognito token (automatically extracted)
 
     Returns:
         QueryResponse with formatted results
 
     Raises:
-        HTTPException: If query processing fails
-
-    Note:
-        JWT authentication is currently disabled. workspace_id and user_id
-        are read directly from headers for simplified testing.
+        HTTPException: If query processing fails or authentication fails
     """
     # Generate request ID for tracing
     request_id = str(uuid.uuid4())
@@ -102,62 +97,8 @@ async def process_query(
     start_time = time.time()
 
     try:
-        # Fast-path routing for meta queries (help, greetings, etc.)
-        from agents.query_router import QueryRouter
-        router = QueryRouter()
-        fast_response = router.route(request.query)
-
-        if fast_response:
-            # Meta query - handle conversation if provided
-            from services.conversation import ensure_conversation, create_message
-
-            # Only create/use conversation if conversation_id was provided
-            conversation_id_to_return = request.conversation_id
-
-            if request.conversation_id:
-                # Ensure the conversation exists
-                conversation_id = await ensure_conversation(
-                    workspace_id=workspace_id,
-                    user_id=user_id,
-                    conversation_id=request.conversation_id,
-                    title_hint=request.query
-                )
-
-                # Store messages in the conversation
-                await create_message(
-                    conversation_id=conversation_id,
-                    role="USER",
-                    content=request.query,
-                    metadata={"workspace_id": workspace_id, "user_id": user_id}
-                )
-
-                await create_message(
-                    conversation_id=conversation_id,
-                    role="ASSISTANT",
-                    content=fast_response["response"],
-                    metadata=fast_response.get("metadata", {})
-                )
-
-                conversation_id_to_return = conversation_id
-
-            execution_time_ms = int((time.time() - start_time) * 1000)
-            logger.info(
-                f"Fast-path response delivered (request_id={request_id}, "
-                f"conversation_id={conversation_id_to_return or 'none'}, "
-                f"execution_time_ms={execution_time_ms})"
-            )
-            return QueryResponse(
-                success=True,
-                query=request.query,
-                result=fast_response,
-                execution_time_ms=execution_time_ms,
-                workspace_id=workspace_id,
-                user_id=user_id,
-                conversation_id=conversation_id_to_return
-            )
-
-        # Regular data query - continue with full pipeline
-        # Ensure conversation exists and store messages
+        # Create conversation and store user message IMMEDIATELY
+        # This allows frontend to get conversation_id right away via response headers
         from services.conversation import ensure_conversation, create_message
 
         conversation_id = await ensure_conversation(
@@ -167,7 +108,7 @@ async def process_query(
             title_hint=request.query
         )
 
-        # Store user message
+        # Store user message immediately
         await create_message(
             conversation_id=conversation_id,
             role="USER",
@@ -175,35 +116,77 @@ async def process_query(
             metadata={"workspace_id": workspace_id, "user_id": user_id}
         )
 
-        # Conditionally retrieve conversation context (only if needed)
-        # This saves 500-800ms for most queries
-        from agents.query_router import QueryRouter
-        from services.conversation import get_message_count
+        # Set conversation_id in response headers immediately
+        # Frontend can read this header without waiting for full response body
+        response.headers["X-Conversation-ID"] = conversation_id
 
-        router = QueryRouter()
+        # Fast-path routing for meta queries (help, greetings, etc.)
+        from agents.query_router import QueryRouter
+        from config.config_manager import ConfigManager
+
+        config_manager = ConfigManager()
+        router = QueryRouter(config_manager=config_manager)
+        fast_response = await router.route(request.query)
+
+        if fast_response:
+            # Meta query - store assistant message and return quickly
+            await create_message(
+                conversation_id=conversation_id,
+                role="ASSISTANT",
+                content=fast_response["response"],
+                metadata=fast_response.get("metadata", {})
+            )
+
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            logger.info(
+                f"Fast-path response delivered (request_id={request_id}, "
+                f"conversation_id={conversation_id}, "
+                f"execution_time_ms={execution_time_ms})"
+            )
+            return QueryResponse(
+                success=True,
+                query=request.query,
+                result=fast_response,
+                execution_time_ms=execution_time_ms,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                conversation_id=conversation_id
+            )
+
+        # Regular data query - continue with full pipeline
+
+        # Retrieve recent conversation history from database
+        from database.prisma_client import prisma_client
+        from services.conversation import get_message_count
 
         # Check if this is the first message
         message_count = await get_message_count(conversation_id)
         is_first = (message_count == 1)  # Just the user message we stored above
 
-        # Only retrieve context if query needs it
-        if router.needs_context(request.query, is_first_message=is_first):
-            from services.vector_store import retrieve_conversation_context
-
+        # Retrieve recent messages from database for context
+        context_messages = []
+        if not is_first:
             try:
-                context_messages = await retrieve_conversation_context(
-                    conversation_id=conversation_id,
-                    current_query=request.query,
-                    k_recent=CONTEXT_K_RECENT,
-                    r_retrieved=CONTEXT_R_RETRIEVED
+                client = await prisma_client.get_client()
+                # Get last 10 messages (excluding the current user message we just stored)
+                messages = await client.conversationmessage.find_many(
+                    where={"conversationId": conversation_id},
+                    order={"timestamp": "desc"},
+                    take=11  # Get 11 to exclude the current one
                 )
-                logger.info(f"Retrieved {len(context_messages)} context messages (K={CONTEXT_K_RECENT}, R={CONTEXT_R_RETRIEVED})")
+
+                # Skip the first one (current user message) and reverse to chronological order
+                if messages:
+                    context_messages = [
+                        {"role": msg.role, "content": msg.content}
+                        for msg in reversed(messages[1:])
+                    ]
+                    logger.info(f"Retrieved {len(context_messages)} messages from conversation history")
             except Exception as e:
                 logger.warning(f"Context retrieval failed: {e}, continuing without context")
                 context_messages = []
         else:
-            context_messages = []
-            logger.info("Context retrieval skipped (not needed for this query)")
+            logger.info("First message in conversation - no context to retrieve")
 
         # Create pipeline instance with orchestrator enabled
         from graph.pipeline import create_pipeline
