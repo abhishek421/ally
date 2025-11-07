@@ -148,7 +148,7 @@ CONTEXT_R_RETRIEVED = int(os.getenv("CONTEXT_R_RETRIEVED", "2"))
 QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "conversation_messages")
 
 # Embedding model name (sentence-transformers model)
-EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "sentence-transformers/paraphrase-MiniLM-L3-v2")
 
 # Vector dimension (must match the embedding model)
 # all-MiniLM-L6-v2 = 384, all-mpnet-base-v2 = 768, etc.

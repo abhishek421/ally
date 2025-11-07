@@ -55,10 +55,10 @@ services:
       - "${ANALYST_AI_PORT:-8000}:8000"
     environment:
       # Database Configuration (Common - shared across services)
-      # Override DATABASE_URL to use host.docker.internal instead of localhost
-      # This allows the container to connect to PostgreSQL running on the host
-      # Added connection_limit, pool_timeout, and connect_timeout to prevent idle timeout issues
-      DATABASE_URL: postgresql://postgres:postgres@host.docker.internal:5433/softsync?schema=public&connection_limit=20&pool_timeout=30&connect_timeout=10&pgbouncer=true
+      # Uses DATABASE_URL from .env file
+      # For Docker environments, ensure your .env file uses host.docker.internal instead of localhost
+      # Example: postgresql://user:password@host.docker.internal:5433/dbname?schema=public&connection_limit=20&pool_timeout=30&connect_timeout=10
+      DATABASE_URL: ${DATABASE_URL}
 
       # Redis Configuration (Common - shared across services)
       REDIS_HOST: redis
@@ -87,7 +87,7 @@ services:
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       QDRANT_API_KEY: ${QDRANT_API_KEY}
       QDRANT_COLLECTION_NAME: ${QDRANT_COLLECTION_NAME:-conversation_messages}
-      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-sentence-transformers/all-MiniLM-L6-v2}
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-sentence-transformers/paraphrase-MiniLM-L3-v2}
       QDRANT_VECTOR_SIZE: ${QDRANT_VECTOR_SIZE:-384}
       QDRANT_SCORE_THRESHOLD: ${QDRANT_SCORE_THRESHOLD:-0.3}
       # Conversation Context Configuration
