@@ -178,7 +178,11 @@ async def process_query(
                 # Skip the first one (current user message) and reverse to chronological order
                 if messages:
                     context_messages = [
-                        {"role": msg.role, "content": msg.content}
+                        {
+                            "role": msg.role,
+                            "content": msg.content,
+                            "metadata": msg.metadata if hasattr(msg, 'metadata') and msg.metadata else None
+                        }
                         for msg in reversed(messages[1:])
                     ]
                     logger.info(f"Retrieved {len(context_messages)} messages from conversation history")

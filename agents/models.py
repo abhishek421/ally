@@ -138,6 +138,9 @@ class ExecutionState(BaseModel):
 
     # Refinement (for retry loops from validator)
     refinement_feedback: Optional[Dict] = Field(None, description="Feedback from validator for refinement")
+    
+    # Context (for reference resolution)
+    context_messages: Optional[List[Dict[str, Any]]] = Field(None, description="Previous conversation messages for context")
 
     class Config:
         arbitrary_types_allowed = True

@@ -118,7 +118,7 @@ class OrchestratorAgent:
             # Phase 0: PRE-ROUTE - Fast-path for meta queries
             from agents.query_router import QueryRouter
             router = QueryRouter()
-            fast_response = router.route(user_query)
+            fast_response = await router.route(user_query, context_messages)
 
             if fast_response:
                 # Meta query detected - return instant response
@@ -135,7 +135,7 @@ class OrchestratorAgent:
                         filters_detected=[],
                         clarity_score=1.0,
                         requires_optimization=False,
-                        estimated_steps=0,
+                        estimated_steps=1,  # Must be >= 1 (validation requirement)
                         reasoning="Meta query - instant response"
                     ),
                     execution_plan=ExecutionPlan(
@@ -240,6 +240,7 @@ class OrchestratorAgent:
             elapsed_ms = int((time.time() - start_time) * 1000)
 
             # Return error result
+            # Ensure estimated_steps is at least 1 (validation requirement)
             return OrchestrationResult(
                 success=False,
                 data={"_error": str(e)},
@@ -248,7 +249,7 @@ class OrchestratorAgent:
                     intent=QueryIntent.SEARCH,
                     clarity_score=0.0,
                     requires_optimization=False,
-                    estimated_steps=1,
+                    estimated_steps=1,  # Must be >= 1
                     reasoning=f"Error during orchestration: {e}"
                 ),
                 execution_plan=ExecutionPlan(
@@ -322,6 +323,9 @@ class OrchestratorAgent:
             parsed = json.loads(json_text)
 
             # Convert to QueryAnalysis model
+            # Ensure estimated_steps is at least 1 (validation requirement)
+            estimated_steps = max(1, parsed.get("estimated_steps", 1))
+            
             analysis = QueryAnalysis(
                 complexity=QueryComplexity(parsed["complexity"]),
                 intent=QueryIntent(parsed["intent"]),
@@ -329,7 +333,7 @@ class OrchestratorAgent:
                 filters_detected=parsed.get("filters_detected", []),
                 clarity_score=parsed.get("clarity_score", 0.5),
                 requires_optimization=parsed.get("requires_optimization", True),
-                estimated_steps=parsed.get("estimated_steps", 1),
+                estimated_steps=estimated_steps,
                 reasoning=parsed.get("reasoning", "No reasoning provided")
             )
 
@@ -583,6 +587,7 @@ class OrchestratorAgent:
                 workspace_id,
                 user_id,
                 validation_result,  # Pass validation feedback for refinement
+                context_messages,  # Pass context for resolving references
                 agents_executed
             )
 
@@ -718,6 +723,7 @@ class OrchestratorAgent:
         workspace_id: str,
         user_id: str,
         refinement_feedback: Optional[Dict],
+        context_messages: Optional[List[Dict]],
         agents_executed: List[AgentExecution]
     ) -> Dict[str, Any]:
         """
@@ -747,7 +753,8 @@ class OrchestratorAgent:
                     optimized_query=optimized_query,
                     workspace_id=workspace_id,
                     user_id=user_id,
-                    refinement_feedback=refinement_feedback
+                    refinement_feedback=refinement_feedback,
+                    context_messages=context_messages
                 )
 
                 duration_ms = int((time.time() - agent_start) * 1000)
@@ -788,7 +795,8 @@ class OrchestratorAgent:
                 result = await self._static_extractor.extract(
                     optimized_query=optimized_query,
                     workspace_id=workspace_id,
-                    user_id=user_id
+                    user_id=user_id,
+                    context_messages=context_messages
                 )
 
                 duration_ms = int((time.time() - agent_start) * 1000)

@@ -74,17 +74,45 @@ class QueryOptimizerAgent:
         return optimized
     
     def _build_context_string(self, context_messages: List[Dict[str, Any]]) -> str:
-        """Build a formatted string from context messages"""
+        """Build a formatted string from context messages with enhanced entity information"""
         if not context_messages:
             return ""
         
-        context_lines = ["Previous conversation context:"]
-        for msg in context_messages:
+        # Use enhanced context builder if available
+        try:
+            from utils.context_builder import build_enhanced_context, build_context_string_for_llm
+            
+            enhanced_context = build_enhanced_context(context_messages, max_messages=10)
+            context_str = build_context_string_for_llm(enhanced_context)
+            
+            self._logger.debug(f"Built enhanced context with {len(enhanced_context.get('entities', {}))} entity types")
+            return context_str
+            
+        except ImportError:
+            # Fallback to basic context building if enhanced builder not available
+            self._logger.warning("Enhanced context builder not available, using basic context")
+            return self._build_basic_context_string(context_messages)
+    
+    def _build_basic_context_string(self, context_messages: List[Dict[str, Any]]) -> str:
+        """Build basic context string (fallback method)"""
+        context_lines = ["PREVIOUS CONVERSATION CONTEXT (for reference resolution):"]
+        for msg in context_messages[-5:]:  # Last 5 messages for context
             role = msg.get("role", "UNKNOWN")
             content = msg.get("content", "")
             context_lines.append(f"{role}: {content}")
         
-        return "\n".join(context_lines)
+        context_str = "\n".join(context_lines)
+        context_str += "\n\nCRITICAL INSTRUCTIONS FOR REFERENCE RESOLUTION:"
+        context_str += "\n- If the current query contains references like 'the first one', 'that company', 'the second one', 'it', 'them', etc.:"
+        context_str += "\n  1. Find the ASSISTANT response in the context above that contains the data"
+        context_str += "\n  2. Look for numbered lists (1., 2., etc.) or explicit mentions of company/people names"
+        context_str += "\n  3. Extract the EXACT name as it appears in the context (do NOT abbreviate or infer)"
+        context_str += "\n  4. If the context says '1. Acme Corporation, 2. Tech Solutions Inc', then 'the second one' refers to 'Tech Solutions Inc' (exact name)"
+        context_str += "\n  5. Use the EXACT name/ID from the context in your optimized query - do NOT use abbreviations or inferred names"
+        context_str += "\n  6. In the 'optimized_query' field, replace references with the EXACT names from context"
+        context_str += "\n  7. In the 'entities' field, use the EXACT names/IDs from context, not the references"
+        
+        return context_str
     
     def _get_current_date_context(self) -> str:
         """

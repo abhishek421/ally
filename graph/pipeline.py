@@ -112,7 +112,8 @@ class AnalystPipeline:
                 optimized_query=state['optimized_query'],
                 workspace_id=state['workspace_id'],
                 user_id=state['user_id'],
-                refinement_feedback=refinement_feedback
+                refinement_feedback=refinement_feedback,
+                context_messages=state.get('context_messages', [])
             )
 
             # Convert ExtractionResult to dict
@@ -146,7 +147,8 @@ class AnalystPipeline:
             extracted = await data_extractor.extract(
                 optimized_query=state['optimized_query'],
                 workspace_id=state['workspace_id'],
-                user_id=state['user_id']
+                user_id=state['user_id'],
+                context_messages=state.get('context_messages', [])
             )
             return {"extracted_data": extracted}
     

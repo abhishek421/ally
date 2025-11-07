@@ -10,6 +10,8 @@ Analyze this optimized query and create a strategic execution plan.
 OPTIMIZED QUERY:
 {optimized_query}
 
+{conversation_context}
+
 YOUR TASK:
 Create a strategic plan for answering this query. Do NOT plan specific tool calls yet -
 just understand what we need to accomplish and set success criteria.
@@ -72,6 +74,8 @@ CURRENT DATA SUMMARY:
 {data_summary}
 
 {refinement_feedback}
+
+{conversation_context}
 
 ═══════════════════════════════════════════════════════════════
 DECISION TIME: What should I do next?
