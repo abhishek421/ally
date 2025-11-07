@@ -41,6 +41,18 @@ AMBIGUITY RESOLUTION:
 - If entities lack identifiers, specify search by name
 - If metrics are mentioned, determine aggregation type (sum, average, count)
 
+REFERENCE RESOLUTION (if conversation context is provided):
+- If query contains references like "the first one", "that company", "the second one", "it", "them", etc.:
+  - Look at the conversation context to find what was mentioned previously
+  - Find the ASSISTANT response that contains the data (companies, people, etc.)
+  - Extract the specific names, IDs, or identifiers from that response
+  - Replace vague references with concrete identifiers in your optimized query
+  - Example: If previous ASSISTANT message says "I found 2 companies: Acme Corp and TechCorp", then "the first one" refers to "Acme Corp" and "the second one" refers to "TechCorp"
+  - Example: If previous ASSISTANT message lists companies as "1. Acme Corp, 2. TechCorp", then "the second one" refers to "TechCorp"
+  - CRITICAL: You MUST extract the actual name/ID from the context and use it in your optimized query. Do NOT use phrases like "second one" or "first one" in the optimized query - use the actual names/IDs.
+  - In the "optimized_query" field, replace references with actual names/IDs from context
+  - In the "entities" field, use the actual names/IDs, not the references
+
 OUTPUT FORMAT (Structured):
 {{
   "intent": "[search|analyze|compare|summarize|list|get]",

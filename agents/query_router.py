@@ -9,7 +9,7 @@ Uses LLM-based intent classification to avoid false positives from pattern match
 import logging
 import re
 import json
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from config.config_manager import ConfigManager
 from adapters.provider_factory import LLMProviderFactory
 
@@ -105,8 +105,12 @@ User query: {query}"""
         if self._llm_provider is None:
             if self.config_manager:
                 # Use query_router agent config (or fall back to global)
-                llm_config = await self.config_manager.get_agent_llm_config("query_router")
-                config_dict = llm_config.to_dict()
+                llm_config = await self.config_manager.get_agent_config("query_router")
+                config_dict = {
+                    "provider": llm_config.provider,
+                    "model": llm_config.model,
+                    "api_key": llm_config.api_key
+                }
             else:
                 # Fallback to default configuration
                 import os
@@ -121,12 +125,13 @@ User query: {query}"""
 
         return self._llm_provider
 
-    async def route(self, query: str) -> Optional[Dict[str, Any]]:
+    async def route(self, query: str, context_messages: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
         """
         Route a query using LLM-based intent classification
 
         Args:
             query: User query string
+            context_messages: Previous conversation messages for context (optional)
 
         Returns:
             Response dict for meta queries, None for data queries
@@ -137,8 +142,8 @@ User query: {query}"""
             return None
 
         try:
-            # Get intent from LLM
-            intent_result = await self._classify_intent(query_stripped)
+            # Get intent from LLM (with context for reference resolution)
+            intent_result = await self._classify_intent(query_stripped, context_messages)
             intent = intent_result.get("intent")
             confidence = intent_result.get("confidence", 0.0)
 
@@ -159,20 +164,39 @@ User query: {query}"""
             logger.warning("Falling back to full pipeline due to classification error")
             return None
 
-    async def _classify_intent(self, query: str) -> Dict[str, Any]:
+    async def _classify_intent(self, query: str, context_messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Classify query intent using LLM
 
         Args:
             query: User query string
+            context_messages: Previous conversation messages for context (optional)
 
         Returns:
             Dict with "intent" and "confidence" keys
         """
         provider = await self._get_llm_provider()
 
+        # Build context string if available
+        context_str = ""
+        if context_messages and len(context_messages) > 0:
+            context_lines = ["PREVIOUS CONVERSATION CONTEXT:"]
+            for msg in context_messages[-3:]:  # Last 3 messages
+                role = msg.get("role", "UNKNOWN")
+                content = msg.get("content", "")
+                context_lines.append(f"{role}: {content}")
+            context_str = "\n".join(context_lines)
+            context_str += "\n\nIMPORTANT: If the query contains references like 'the first one', 'that company', 'the second one', 'it', 'them', etc., it is a DATA query, not a meta query. Classify it as 'data'."
+
         # Build the prompt
-        prompt = self.INTENT_CLASSIFIER_PROMPT.format(query=query)
+        if context_str:
+            prompt = f"{self.INTENT_CLASSIFIER_PROMPT}\n\n{context_str}"
+        else:
+            prompt = self.INTENT_CLASSIFIER_PROMPT.format(query=query)
+        
+        # Format query if not already formatted
+        if "{query}" in prompt:
+            prompt = prompt.format(query=query)
 
         messages = [
             {"role": "user", "content": prompt}

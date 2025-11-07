@@ -157,16 +157,22 @@ def _extract_record_ids(tool_name: str, tool_data: Dict[str, Any], summary: Dict
             ]
             summary["count"] = len(deals)
 
-    # Contact tool results
-    elif "contacts" in tool_data:
-        contacts = tool_data["contacts"]
-        if isinstance(contacts, list) and contacts:
-            summary["contact_ids"] = [
-                contact.get("id")
-                for contact in contacts
-                if isinstance(contact, dict) and contact.get("id")
+    # Contact/People tool results
+    elif "contacts" in tool_data or "people" in tool_data:
+        people_data = tool_data.get("contacts") or tool_data.get("people", [])
+        if isinstance(people_data, list) and people_data:
+            summary["people_ids"] = [
+                person.get("id")
+                for person in people_data
+                if isinstance(person, dict) and person.get("id")
             ]
-            summary["count"] = len(contacts)
+            # Extract people names for better context resolution
+            summary["people_names"] = [
+                person.get("name")
+                for person in people_data
+                if isinstance(person, dict) and person.get("name")
+            ]
+            summary["count"] = len(people_data)
 
     # Company tool results
     elif "companies" in tool_data:
@@ -176,6 +182,12 @@ def _extract_record_ids(tool_name: str, tool_data: Dict[str, Any], summary: Dict
                 company.get("id")
                 for company in companies
                 if isinstance(company, dict) and company.get("id")
+            ]
+            # Extract company names for better context resolution
+            summary["company_names"] = [
+                company.get("name")
+                for company in companies
+                if isinstance(company, dict) and company.get("name")
             ]
             summary["count"] = len(companies)
 

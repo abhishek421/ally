@@ -83,6 +83,7 @@ class ReActiveDataExtractor:
         workspace_id: str,
         user_id: str,
         refinement_feedback: Optional[Dict] = None,
+        context_messages: Optional[List[Dict[str, Any]]] = None,
         max_iterations: int = 5
     ) -> ExtractionResult:
         """
@@ -93,6 +94,7 @@ class ReActiveDataExtractor:
             workspace_id: Workspace identifier
             user_id: User identifier
             refinement_feedback: Optional feedback from validator for refinement
+            context_messages: Previous conversation messages for context (optional)
             max_iterations: Maximum iterations (default: 5)
 
         Returns:
@@ -101,6 +103,8 @@ class ReActiveDataExtractor:
         self._logger.info("Starting reactive data extraction")
         self._logger.debug(f"Query: {optimized_query}")
         self._logger.debug(f"Max iterations: {max_iterations}")
+        if context_messages:
+            self._logger.debug(f"Using {len(context_messages)} context messages for reference resolution")
 
         start_time = time.time()
 
@@ -111,6 +115,7 @@ class ReActiveDataExtractor:
                 workspace_id,
                 user_id,
                 refinement_feedback,
+                context_messages,
                 max_iterations
             )
             self._logger.info(f"Initialized state: intent={state.original_intent}")
@@ -194,6 +199,7 @@ class ReActiveDataExtractor:
         workspace_id: str,
         user_id: str,
         refinement_feedback: Optional[Dict],
+        context_messages: Optional[List[Dict[str, Any]]],
         max_iterations: int
     ) -> ExecutionState:
         """
@@ -215,9 +221,21 @@ class ReActiveDataExtractor:
         """
         self._logger.debug("Initializing execution state")
 
+        # Build conversation context if available
+        conversation_context = ""
+        if context_messages and len(context_messages) > 0:
+            context_lines = ["PREVIOUS CONVERSATION CONTEXT:"]
+            for msg in context_messages[-5:]:  # Last 5 messages
+                role = msg.get("role", "UNKNOWN")
+                content = msg.get("content", "")
+                context_lines.append(f"{role}: {content}")
+            conversation_context = "\n".join(context_lines)
+            conversation_context += "\n\nIMPORTANT: If the query contains references like 'the first one', 'that company', 'the second one', etc., use the context above to understand what they refer to."
+
         # Format prompt
         prompt = INITIAL_PLANNING_PROMPT.format(
-            optimized_query=optimized_query
+            optimized_query=optimized_query,
+            conversation_context=conversation_context
         )
 
         # Call LLM for strategic planning
@@ -264,7 +282,8 @@ class ReActiveDataExtractor:
             success_criteria=plan.get("success_criteria", {}),
             original_intent=plan.get("intent", "search"),
             max_iterations=max_iterations,
-            refinement_feedback=refinement_feedback
+            refinement_feedback=refinement_feedback,
+            context_messages=context_messages
         )
 
         return state
@@ -314,6 +333,17 @@ Issues: {json.dumps(state.refinement_feedback.get('issues', []), indent=2)}
 Recommendations: {json.dumps(state.refinement_feedback.get('recommendations', []), indent=2)}
 """
 
+        # Add conversation context if present (for reference resolution)
+        conversation_context = ""
+        if state.context_messages and len(state.context_messages) > 0:
+            context_lines = ["PREVIOUS CONVERSATION CONTEXT:"]
+            for msg in state.context_messages[-5:]:  # Last 5 messages
+                role = msg.get("role", "UNKNOWN")
+                content = msg.get("content", "")
+                context_lines.append(f"{role}: {content}")
+            conversation_context = "\n".join(context_lines)
+            conversation_context += "\n\nIMPORTANT: If the query contains references like 'the first one', 'that company', 'the second one', etc., use the context above to resolve what they refer to. Extract specific names, IDs, or identifiers from the context and use them in your tool calls."
+
         # Format prompt
         prompt = THINK_PROMPT.format(
             query=state.query,
@@ -326,7 +356,8 @@ Recommendations: {json.dumps(state.refinement_feedback.get('recommendations', []
             recent_reasoning=recent_reasoning,
             tools_executed=tools_executed,
             data_summary=data_summary,
-            refinement_feedback=refinement_context
+            refinement_feedback=refinement_context,
+            conversation_context=conversation_context
         )
 
         # Call LLM

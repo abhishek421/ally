@@ -75,7 +75,7 @@ class DataExtractorAgent:
 
         self._logger.debug("Email tool configuration validated")
 
-    async def extract(self, optimized_query: str, workspace_id: str, user_id: str) -> Dict[str, Any]:
+    async def extract(self, optimized_query: str, workspace_id: str, user_id: str, context_messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Main entry point to extract data based on optimized query
 
@@ -83,6 +83,7 @@ class DataExtractorAgent:
             optimized_query: Optimized query string from QueryOptimizerAgent
             workspace_id: Workspace identifier for data isolation
             user_id: User identifier for access control
+            context_messages: Previous conversation messages for context (optional)
 
         Returns:
             Dictionary with extracted data grouped by tool:
@@ -101,6 +102,8 @@ class DataExtractorAgent:
         self._logger.info("Starting data extraction")
         self._logger.debug(f"Optimized query: {optimized_query}")
         self._logger.debug(f"Workspace: {workspace_id}, User: {user_id}")
+        if context_messages:
+            self._logger.debug(f"Using {len(context_messages)} context messages for reference resolution")
 
         start_time = time.time()
 
@@ -108,8 +111,8 @@ class DataExtractorAgent:
         self.reasoning_traces = []
 
         try:
-            # Step 1: Parse optimized query using LLM
-            parsed_query = self._parse_optimized_query(optimized_query)
+            # Step 1: Parse optimized query using LLM (with context for reference resolution)
+            parsed_query = self._parse_optimized_query(optimized_query, context_messages)
             self._logger.debug(f"Parsed query: {parsed_query}")
 
             # NEW: Log parsing decision
@@ -151,20 +154,38 @@ class DataExtractorAgent:
             # Return empty structure on error
             return self._get_empty_result_structure()
     
-    def _parse_optimized_query(self, optimized_query: str) -> Dict[str, Any]:
+    def _parse_optimized_query(self, optimized_query: str, context_messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Use LLM to parse optimized query into structured tool calls
         
         Args:
             optimized_query: Optimized query string
+            context_messages: Previous conversation messages for context (optional)
             
         Returns:
             Dictionary with parsed tool calls
         """
         self._logger.info("Parsing optimized query with LLM")
         
-        # Format prompt template with optimized_query
-        prompt = self.template.format(optimized_query=optimized_query)
+        # Build context string if available
+        context_str = ""
+        if context_messages and len(context_messages) > 0:
+            context_lines = ["Previous conversation context:"]
+            for msg in context_messages[-5:]:  # Last 5 messages for context
+                role = msg.get("role", "UNKNOWN")
+                content = msg.get("content", "")
+                context_lines.append(f"{role}: {content}")
+            context_str = "\n".join(context_lines)
+            self._logger.debug(f"Using {len(context_messages)} context messages for reference resolution")
+        
+        # Format prompt template with optimized_query and context
+        if context_str:
+            # Add context to the prompt - format the template first, then append context
+            base_prompt = self.template.format(optimized_query=optimized_query)
+            prompt = f"{base_prompt}\n\nCONVERSATION CONTEXT:\n{context_str}\n\nIMPORTANT: If the query contains references like 'the first one', 'that company', 'the second one', etc., use the context above to resolve what they refer to. For example, if previous messages mention companies, 'the first one' refers to the first company from the previous results. Extract the specific name, ID, or identifier from the context and use it in your tool calls."
+        else:
+            prompt = self.template.format(optimized_query=optimized_query)
+        
         self._logger.debug(f"Prompt prepared (length={len(prompt)})")
         
         # Prepare messages for LLM
