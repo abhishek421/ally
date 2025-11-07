@@ -13,8 +13,13 @@ class DynamoDBClient:
     
     def __init__(self):
         self.client: Optional[boto3.resource] = None
-        # Use AWS_REGION environment variable (common across services)
-        region = os.getenv("AWS_REGION", "us-east-1")
+        # Use AWS_REGION environment variable (common across services) - no defaults
+        region = os.getenv("AWS_REGION")
+
+        # Validate required configuration
+        if not region:
+            raise ValueError("AWS_REGION environment variable is required")
+
         self.config = Config(
             retries={'max_attempts': 3},
             region_name=region

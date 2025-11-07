@@ -54,22 +54,26 @@ jobs:
           aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1 || \
             aws ecr create-repository --repository-name "$ECR_REPOSITORY" --region "$AWS_REGION"
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:latest
+            network=host
+
       - name: Build and Push Docker Image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
           set -euo pipefail
-          
+
           # Generate date tag in DDMMYYYY format (e.g., 25122024)
           DATE_TAG=$(date +'%d%m%Y')
           IMAGE_TAG="analyst_dev_${DATE_TAG}"
           ECR_IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}"
-          
-          echo "🔨 Building image: ${ECR_IMAGE}:${IMAGE_TAG}"
-          
-          # Build the Docker image
-          docker build -f Dockerfile -t "${ECR_IMAGE}:${IMAGE_TAG}" .
-          
+
+          echo "🔨 Building image with BuildKit cache: ${ECR_IMAGE}:${IMAGE_TAG}"
+
           # Check if latest tag exists and remove it from the previous image
           echo "🔄 Handling latest tag..."
           LATEST_EXISTS=$(aws ecr describe-images \
@@ -78,7 +82,7 @@ jobs:
             --region "$AWS_REGION" \
             --query 'length(imageDetails)' \
             --output text 2>/dev/null || echo "0")
-          
+
           if [ "$LATEST_EXISTS" != "0" ] && [ "$LATEST_EXISTS" != "None" ]; then
             echo "🗑️ Removing latest tag from previous image"
             aws ecr batch-delete-image \
@@ -88,16 +92,19 @@ jobs:
           else
             echo "ℹ️ No existing latest tag found"
           fi
-          
-          # Tag the new image as latest
-          echo "🏷️ Tagging new image as latest"
-          docker tag "${ECR_IMAGE}:${IMAGE_TAG}" "${ECR_IMAGE}:latest"
-          
-          # Push both tags
-          echo "📤 Pushing images to ECR..."
-          docker push "${ECR_IMAGE}:${IMAGE_TAG}"
-          docker push "${ECR_IMAGE}:latest"
-          
+
+          # Build with buildx using cache from ECR and GitHub Actions cache
+          # This dramatically speeds up builds by reusing layers
+          docker buildx build \
+            --file Dockerfile \
+            --tag "${ECR_IMAGE}:${IMAGE_TAG}" \
+            --tag "${ECR_IMAGE}:latest" \
+            --cache-from type=registry,ref="${ECR_IMAGE}:buildcache" \
+            --cache-to type=registry,ref="${ECR_IMAGE}:buildcache",mode=max \
+            --push \
+            --provenance=false \
+            .
+
           echo "✅ Successfully pushed ${ECR_IMAGE}:${IMAGE_TAG} and ${ECR_IMAGE}:latest"
 
   notify_dev:

@@ -47,10 +47,12 @@ def verify_cognito_token(token: str) -> Dict[str, Any]:
     """
     # Get configuration from environment
     user_pool_id = os.getenv("AWS_COGNITO_USER_POOL_ID")
-    region = os.getenv("AWS_REGION", "us-east-1")
-    
+    region = os.getenv("AWS_REGION")
+
     if not user_pool_id:
         raise ValueError("AWS_COGNITO_USER_POOL_ID environment variable is not set")
+    if not region:
+        raise ValueError("AWS_REGION environment variable is not set")
     
     # Remove 'Bearer ' prefix if present
     if token.startswith("Bearer "):

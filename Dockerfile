@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Multi-stage build for smaller image size
 FROM python:3.11-slim AS builder
 
@@ -5,48 +6,21 @@ FROM python:3.11-slim AS builder
 WORKDIR /app
 
 # Install system dependencies required for building Python packages
-RUN apt-get update && apt-get install -y \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y \
     gcc \
     g++ \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Upgrade pip to latest version
-RUN pip install --no-cache-dir --upgrade pip
+    libpq-dev
 
 # Copy requirements first for better layer caching
 COPY requirements.txt .
 
-# Install Python dependencies with increased timeout and retries
-# Split installation to avoid memory/pipe issues with large packages
-RUN pip install --no-cache-dir --user --timeout=300 --retries=5 \
-    langgraph>=1.0.0 \
-    openai>=1.0.0 \
-    anthropic>=0.34.0 \
-    google-generativeai>=0.3.0
-
-RUN pip install --no-cache-dir --user --timeout=300 --retries=5 \
-    prisma>=0.11.0 \
-    psycopg2-binary>=2.9.0 \
-    boto3>=1.28.0 \
-    redis>=5.0.0
-
-RUN pip install --no-cache-dir --user --timeout=300 --retries=5 \
-    "qdrant-client>=1.7.0" \
-    "sentence-transformers>=2.2.0" \
-    "rank-bm25>=0.2.2"
-
-RUN pip install --no-cache-dir --user --timeout=300 --retries=5 \
-    "pydantic>=2.0.0,<3.0.0" \
-    python-dotenv>=1.0.0
-
-RUN pip install --no-cache-dir --user --timeout=300 --retries=5 \
-    fastapi>=0.100.0 \
-    uvicorn>=0.23.0 \
-    python-multipart>=0.0.6 \
-    aiofiles>=23.0.0 \
-    "python-jose[cryptography]>=3.3.0" \
-    requests>=2.31.0
+# Install Python dependencies with cache mount for speed
+# Cache mount dramatically speeds up rebuilds by reusing downloaded packages
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip && \
+    pip install --user -r requirements.txt
 
 # Final stage
 FROM python:3.11-slim
@@ -55,13 +29,14 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install runtime dependencies including Node.js for Prisma
-RUN apt-get update && apt-get install -y \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y \
     libpq5 \
     curl \
     libatomic1 \
     nodejs \
-    npm \
-    && rm -rf /var/lib/apt/lists/*
+    npm
 
 # Copy Python dependencies from builder
 COPY --from=builder /root/.local /root/.local

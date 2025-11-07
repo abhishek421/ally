@@ -56,7 +56,9 @@ class EmailTool(BaseTool):
 
     def __init__(self, workspace_id: str, user_id: str):
         super().__init__(workspace_id, user_id)
-        self.table_name = os.getenv("DYNAMODB_TABLE", "prod-softsync")
+        self.table_name = os.getenv("DYNAMODB_TABLE")
+        if not self.table_name:
+            raise ValueError("DYNAMODB_TABLE environment variable is required")
 
     def get_supported_operations(self) -> List[QueryType]:
         return [

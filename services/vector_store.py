@@ -21,10 +21,14 @@ from config.settings import (
 
 logger = logging.getLogger(__name__)
 
-# Initialize clients
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", None)
+# Initialize clients - require env vars, no fallbacks
+QDRANT_URL = os.getenv("QDRANT_URL")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 COLLECTION_NAME = QDRANT_COLLECTION_NAME
+
+# Validate required configuration
+if not QDRANT_URL:
+    raise ValueError("QDRANT_URL environment variable is required")
 
 # Global instances (lazy loaded)
 _qdrant_client: Optional[QdrantClient] = None

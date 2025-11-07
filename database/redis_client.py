@@ -12,10 +12,19 @@ class RedisClient:
     """Redis client wrapper for caching"""
     
     def __init__(self, host: Optional[str] = None, port: Optional[int] = None, db: Optional[int] = None):
-        # Use environment variables (common across services) with defaults
-        self.host = host or os.getenv("REDIS_HOST", "localhost")
-        self.port = port or int(os.getenv("REDIS_PORT", "6379"))
-        self.db = db if db is not None else int(os.getenv("REDIS_DB", "0"))
+        # Use environment variables (common across services) - no defaults, require explicit config
+        self.host = host or os.getenv("REDIS_HOST")
+        self.port = port or (int(os.getenv("REDIS_PORT")) if os.getenv("REDIS_PORT") else None)
+        self.db = db if db is not None else (int(os.getenv("REDIS_DB")) if os.getenv("REDIS_DB") else None)
+
+        # Validate required configuration
+        if not self.host:
+            raise ValueError("REDIS_HOST environment variable is required")
+        if self.port is None:
+            raise ValueError("REDIS_PORT environment variable is required")
+        if self.db is None:
+            raise ValueError("REDIS_DB environment variable is required")
+
         self.client: Optional[redis.Redis] = None
     
     async def connect(self):
