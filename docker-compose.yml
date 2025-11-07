@@ -27,24 +27,6 @@ services:
       - analyst-ai-network
     restart: unless-stopped
 
-  # Redis Cache
-  redis:
-    image: redis:7-alpine
-    container_name: analyst-ai-redis
-    ports:
-      - "${REDIS_EXTERNAL_PORT:-6380}:6379"  # Service-specific: Redis external port
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - analyst-ai-network
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-
   # FastAPI Application
   app:
     build:
@@ -61,8 +43,9 @@ services:
       DATABASE_URL: ${DATABASE_URL}
 
       # Redis Configuration (Common - shared across services)
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
+      # Uses external Redis via environment variables
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT:-6379}
       REDIS_DB: ${REDIS_DB:-0}
 
       # LLM Provider API Keys (Common - shared across services)
@@ -97,8 +80,6 @@ AWS_SECRET_ACCESS_KEY=REDACTED
     depends_on:
       qdrant:
         condition: service_started
-      redis:
-        condition: service_healthy
     networks:
       - analyst-ai-network
     volumes:
@@ -120,7 +101,5 @@ networks:
     driver: bridge
 
 volumes:
-  redis_data:
-    driver: local
   qdrant_data:
     driver: local
