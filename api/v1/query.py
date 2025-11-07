@@ -102,44 +102,48 @@ async def process_query(
     start_time = time.time()
 
     try:
-        # Ensure conversation exists for all queries (fast-path and regular)
-        from services.conversation import ensure_conversation, create_message
-
-        conversation_id = await ensure_conversation(
-            workspace_id=workspace_id,
-            user_id=user_id,
-            conversation_id=request.conversation_id,
-            title_hint=request.query
-        )
-
         # Fast-path routing for meta queries (help, greetings, etc.)
         from agents.query_router import QueryRouter
         router = QueryRouter()
         fast_response = router.route(request.query)
 
         if fast_response:
-            # Meta query - return instant response with proper conversation_id
+            # Meta query - handle conversation if provided
+            from services.conversation import ensure_conversation, create_message
+
+            # Only create/use conversation if conversation_id was provided
+            conversation_id_to_return = request.conversation_id
+
+            if request.conversation_id:
+                # Ensure the conversation exists
+                conversation_id = await ensure_conversation(
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    conversation_id=request.conversation_id,
+                    title_hint=request.query
+                )
+
+                # Store messages in the conversation
+                await create_message(
+                    conversation_id=conversation_id,
+                    role="USER",
+                    content=request.query,
+                    metadata={"workspace_id": workspace_id, "user_id": user_id}
+                )
+
+                await create_message(
+                    conversation_id=conversation_id,
+                    role="ASSISTANT",
+                    content=fast_response["response"],
+                    metadata=fast_response.get("metadata", {})
+                )
+
+                conversation_id_to_return = conversation_id
+
             execution_time_ms = int((time.time() - start_time) * 1000)
-
-            # Store user message for fast-path queries too
-            await create_message(
-                conversation_id=conversation_id,
-                role="USER",
-                content=request.query,
-                metadata={"workspace_id": workspace_id, "user_id": user_id}
-            )
-
-            # Store assistant response
-            await create_message(
-                conversation_id=conversation_id,
-                role="ASSISTANT",
-                content=fast_response["response"],
-                metadata=fast_response.get("metadata", {})
-            )
-
             logger.info(
                 f"Fast-path response delivered (request_id={request_id}, "
-                f"conversation_id={conversation_id}, "
+                f"conversation_id={conversation_id_to_return or 'none'}, "
                 f"execution_time_ms={execution_time_ms})"
             )
             return QueryResponse(
@@ -149,10 +153,19 @@ async def process_query(
                 execution_time_ms=execution_time_ms,
                 workspace_id=workspace_id,
                 user_id=user_id,
-                conversation_id=conversation_id
+                conversation_id=conversation_id_to_return
             )
 
         # Regular data query - continue with full pipeline
+        # Ensure conversation exists and store messages
+        from services.conversation import ensure_conversation, create_message
+
+        conversation_id = await ensure_conversation(
+            workspace_id=workspace_id,
+            user_id=user_id,
+            conversation_id=request.conversation_id,
+            title_hint=request.query
+        )
 
         # Store user message
         await create_message(
