@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from graph.pipeline import AnalystPipeline
-from api.v1 import query, health, admin, conversations
+from api.v1 import query, health, conversations
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
@@ -56,6 +56,25 @@ async def initialize_application():
     except Exception as e:
         logger.error(f"Failed to initialize ConfigManager: {e}")
         raise
+
+    # Pre-load embedding model to avoid cold start penalty (~3-4s on first query)
+    from services.vector_store import get_embedding_model, get_qdrant_client
+    try:
+        logger.info("Pre-loading embedding model...")
+        get_embedding_model()
+        logger.info("Embedding model pre-loaded successfully")
+    except Exception as e:
+        logger.warning(f"Failed to pre-load embedding model: {e}")
+        # Don't raise - this is not critical for startup
+
+    # Initialize Qdrant client connection
+    try:
+        logger.info("Initializing Qdrant client...")
+        get_qdrant_client()
+        logger.info("Qdrant client initialized successfully")
+    except Exception as e:
+        logger.warning(f"Failed to initialize Qdrant client: {e}")
+        # Don't raise - this is not critical for startup
 
     logger.info("Application initialization complete (ENV-only)")
 
@@ -113,16 +132,6 @@ app.add_middleware(
 app.include_router(health.router, tags=["Health"])
 app.include_router(query.router, prefix="/api/v1", tags=["Query"])
 app.include_router(conversations.router, prefix="/api/v1", tags=["Conversations"])
-app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
-
-# Mount static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Admin panel route
-@app.get("/admin")
-async def admin_panel():
-    """Serve the admin panel HTML"""
-    return FileResponse("static/admin.html")
 
 
 # Exception handlers

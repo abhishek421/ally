@@ -84,7 +84,7 @@ class PrismaClient:
                 except Exception as e:
                     logger.error(f"Failed to connect to PostgreSQL: {e}")
                     raise
-    
+
     async def disconnect(self):
         """Disconnect from database"""
         async with self._connection_lock:
@@ -95,7 +95,7 @@ class PrismaClient:
                     logger.info("Disconnected from PostgreSQL database")
                 except Exception as e:
                     logger.error(f"Error disconnecting from PostgreSQL: {e}")
-    
+
     async def get_client(self) -> Prisma:
         """
         Get Prisma client instance (reuses pooled connection).
@@ -103,8 +103,19 @@ class PrismaClient:
         """
         if not self.client:
             await self.connect()
+        else:
+            # Validate connection is still alive
+            try:
+                await self.client.query_raw("SELECT 1")
+            except Exception as e:
+                logger.warning(f"Connection validation failed: {e}. Reconnecting...")
+                try:
+                    await self.disconnect()
+                except Exception:
+                    pass
+                await self.connect()
         return self.client
-    
+
     async def health_check(self) -> bool:
         """
         Check database connection health and pool status.

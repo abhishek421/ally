@@ -12,6 +12,7 @@ class PeopleSearchParams(BaseModel):
     last_name: Optional[str] = None
     job_title: Optional[str] = None
     email: Optional[str] = None
+    company_id: Optional[str] = None
     privacy_level: Optional[str] = None
     limit: int = 50
     offset: int = 0
@@ -86,7 +87,14 @@ class PeopleTool(BaseTool):
             
             if params.privacy_level:
                 where_clause["privacyLevel"] = params.privacy_level
-            
+
+            if params.company_id:
+                where_clause["metaData"] = {
+                    "some": {
+                        "companyId": params.company_id
+                    }
+                }
+
             # Execute search with pagination
             people = await client.people.find_many(
                 where=where_clause,
@@ -99,13 +107,7 @@ class PeopleTool(BaseTool):
                     "url": True,
                     "metaData": {
                         "include": {
-                            "company": {
-                                "select": {
-                                    "id": True,
-                                    "name": True,
-                                    "description": True
-                                }
-                            }
+                            "company": True
                         }
                     }
                 },
@@ -149,14 +151,7 @@ class PeopleTool(BaseTool):
                     "url": True,
                     "metaData": {
                         "include": {
-                            "company": {
-                                "select": {
-                                    "id": True,
-                                    "name": True,
-                                    "description": True,
-                                    "privacyLevel": True
-                                }
-                            }
+                            "company": True
                         }
                     }
                 }
@@ -199,13 +194,7 @@ class PeopleTool(BaseTool):
                     "url": True,
                     "metaData": {
                         "include": {
-                            "company": {
-                                "select": {
-                                    "id": True,
-                                    "name": True,
-                                    "description": True
-                                }
-                            }
+                            "company": True
                         }
                     }
                 },
@@ -247,7 +236,7 @@ class PeopleTool(BaseTool):
             privacy_levels = await client.people.group_by(
                 by=["privacyLevel"],
                 where={"workspaceId": self.workspace_id},
-                _count={"id": True}
+                count={"id": True}
             )
 
             # Get people by job title (top 10)
@@ -257,7 +246,7 @@ class PeopleTool(BaseTool):
                     "workspaceId": self.workspace_id,
                     "jobTitle": {"not": None}
                 },
-                _count={"id": True},
+                count={"id": True},
                 order={"_count": {"id": "desc"}},
                 take=10
             )
