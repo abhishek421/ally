@@ -75,10 +75,11 @@ OPENAI_API_KEY=REDACTED
       GLOBAL_LLM_MODEL: ${GLOBAL_LLM_MODEL:-gpt-4}
 
       # AWS Configuration (Common - shared across services)
-      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_REGION: ${AWS_REGION}
 AWS_ACCESS_KEY_ID=REDACTED
 AWS_SECRET_ACCESS_KEY=REDACTED
       AWS_COGNITO_USER_POOL_ID: ${AWS_COGNITO_USER_POOL_ID}
+      DYNAMODB_TABLE: ${DYNAMODB_TABLE}
 
       # Application Configuration
       LOG_LEVEL: ${LOG_LEVEL:-INFO}

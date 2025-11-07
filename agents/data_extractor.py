@@ -57,20 +57,20 @@ class DataExtractorAgent:
         """
         import os
 
-        # Check DynamoDB table name
+        # Check DynamoDB table name - now required
         dynamodb_table = os.getenv("DYNAMODB_TABLE")
         if not dynamodb_table:
-            self._logger.warning(
-                "DYNAMODB_TABLE environment variable not set. "
-                "Email tool queries will use default table 'prod-softsync'. "
-                "Set DYNAMODB_TABLE in .env to override."
+            raise ValueError(
+                "DYNAMODB_TABLE environment variable is required. "
+                "Set DYNAMODB_TABLE in .env or environment."
             )
 
-        # Check AWS region (optional but recommended)
+        # Check AWS region - now required
         aws_region = os.getenv("AWS_REGION")
         if not aws_region:
-            self._logger.debug(
-                "AWS_REGION not set, will default to 'us-east-1' for DynamoDB connections"
+            raise ValueError(
+                "AWS_REGION environment variable is required. "
+                "Set AWS_REGION in .env or environment."
             )
 
         self._logger.debug("Email tool configuration validated")
