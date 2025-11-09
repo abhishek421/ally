@@ -6,6 +6,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from agents.query_optimizer import QueryOptimizerAgent
 from agents.models import NextAction
+from services.conversation_state import ConversationState
 
 
 class AgentState(TypedDict):
@@ -21,6 +22,7 @@ class AgentState(TypedDict):
     needs_clarification: bool
     clarification_question: Optional[str]
     final_response: dict
+    conversation_state: Optional[ConversationState]
 
 
 class AnalystPipeline:
@@ -85,7 +87,8 @@ class AnalystPipeline:
         """QueryOptimizerAgent: Converts user query to defined query with context"""
         optimized_query = self.query_optimizer.optimize(
             user_query=state['user_query'],
-            context_messages=state.get('context_messages', [])
+            context_messages=state.get('context_messages', []),
+            conversation_state=state.get('conversation_state')
         )
         return {"optimized_query": optimized_query}
     
@@ -269,6 +272,10 @@ class AnalystPipeline:
 
         else:
             # Use legacy graph-based pipeline
+            # Initialize conversation state
+            conversation_state = ConversationState()
+            conversation_state.set_last_query(user_query)
+
             initial_state = {
                 "user_query": user_query,
                 "workspace_id": workspace_id,
@@ -280,10 +287,15 @@ class AnalystPipeline:
                 "retry_count": 0,
                 "needs_clarification": False,
                 "clarification_question": None,
-                "final_response": {}
+                "final_response": {},
+                "conversation_state": conversation_state
             }
 
             result = await self.graph.ainvoke(initial_state)
+
+            # Update conversation state with extracted data
+            if result.get('extracted_data'):
+                conversation_state.update_from_results(result['extracted_data'])
 
             # Check if clarification is needed
             if result.get('needs_clarification', False):

@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timedelta
 from adapters.llm_provider import LLMProvider
 from config.settings import QUERY_OPTIMIZATION_TEMPLATE
+from services.conversation_state import ConversationState
 
 
 class QueryOptimizerAgent:
@@ -43,36 +44,102 @@ class QueryOptimizerAgent:
         
         self._logger.debug(f"QueryOptimizerAgent initialized with provider: {self.llm_provider}")
     
-    def optimize(self, user_query: str, context_messages: List[Dict[str, Any]] = None) -> str:
+    def optimize(self, user_query: str, context_messages: List[Dict[str, Any]] = None,
+                 conversation_state: Optional[ConversationState] = None) -> str:
         """
         Optimize a user query to make it more structured and actionable
-        
+
         Args:
             user_query: Natural language query from the user
             context_messages: Previous conversation messages for context
-            
+            conversation_state: Conversation state for reference resolution
+
         Returns:
             Optimized query with clear intent and structure
         """
-        
+
         self._logger.info("Optimizing query")
         self._logger.debug("User query received: %s", user_query)
-        
+
+        # Resolve references in query using conversation state
+        resolved_query = user_query
+        if conversation_state:
+            resolved_query = self._resolve_references(user_query, conversation_state)
+            if resolved_query != user_query:
+                self._logger.info(f"Resolved references: '{user_query}' -> '{resolved_query}'")
+
         # Build context if available
         context_str = ""
         if context_messages:
             self._logger.info(f"Using {len(context_messages)} context messages")
             context_str = self._build_context_string(context_messages)
-        
+
+        # Add conversation state context summary
+        if conversation_state:
+            context_summary = conversation_state.get_context_summary()
+            if context_summary != "No entities tracked yet":
+                context_str = f"Context: {context_summary}\n\n{context_str}" if context_str else f"Context: {context_summary}"
+                self._logger.debug(f"Added conversation context: {context_summary}")
+
         # for LLM-based optimization with exact date replacements
         start_time = time.time()
-        optimized = self._llm_optimization(user_query, context_str)
+        optimized = self._llm_optimization(resolved_query, context_str)
         elapsed_ms = int((time.time() - start_time) * 1000)
         self._logger.info("Query optimized in %d ms", elapsed_ms)
         self._logger.debug("Optimized query: %s", optimized)
-        
+
         return optimized
-    
+
+    def _resolve_references(self, user_query: str, conversation_state: ConversationState) -> str:
+        """
+        Resolve references in the user query using conversation state
+
+        Args:
+            user_query: Original user query
+            conversation_state: Conversation state with tracked entities
+
+        Returns:
+            Query with references replaced by actual entity names
+        """
+        # Check if query contains reference words
+        reference_words = ["first", "second", "third", "that", "it", "them", "this", "those", "these"]
+        query_lower = user_query.lower()
+
+        has_reference = any(word in query_lower for word in reference_words)
+        if not has_reference:
+            return user_query
+
+        # Try to resolve the reference
+        resolved = conversation_state.resolve_reference(user_query)
+        if resolved and resolved.get("name"):
+            entity_name = resolved["name"]
+            entity_type = resolved.get("type", "")
+
+            # Replace common reference patterns with the actual name
+            import re
+            patterns = [
+                (r'\bthe first one\b', entity_name),
+                (r'\bfirst one\b', entity_name),
+                (r'\bthe second one\b', entity_name),
+                (r'\bsecond one\b', entity_name),
+                (r'\bthe third one\b', entity_name),
+                (r'\bthird one\b', entity_name),
+                (r'\bthat company\b', entity_name),
+                (r'\bthat person\b', entity_name),
+                (r'\bthat one\b', entity_name),
+                (r'\bthis one\b', entity_name),
+                (r'\bit\b', entity_name),
+                (r'\btheir\b', entity_name + "'s"),
+            ]
+
+            resolved_query = user_query
+            for pattern, replacement in patterns:
+                resolved_query = re.sub(pattern, replacement, resolved_query, flags=re.IGNORECASE)
+
+            return resolved_query
+
+        return user_query
+
     def _build_context_string(self, context_messages: List[Dict[str, Any]]) -> str:
         """Build a formatted string from context messages with enhanced entity information"""
         if not context_messages:
