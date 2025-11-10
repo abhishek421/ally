@@ -7,39 +7,14 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: analyst-ai-app
+    env_file:
+      - .env
     ports:
       - "${ANALYST_AI_PORT:-8000}:8000"
-    environment:
-      # Database Configuration (Common - shared across services)
-      # Uses DATABASE_URL from .env file
-      # For Docker environments, ensure your .env file uses host.docker.internal instead of localhost
-      # Example: postgresql://user:password@host.docker.internal:5433/dbname?schema=public&connection_limit=20&pool_timeout=30&connect_timeout=10
-      DATABASE_URL: ${DATABASE_URL}
-
-      # Redis Configuration (Common - shared across services)
-      # Uses external Redis via environment variables
-      REDIS_HOST: ${REDIS_HOST}
-      REDIS_PORT: ${REDIS_PORT:-6379}
-      REDIS_DB: ${REDIS_DB:-0}
-
-      # LLM Provider API Keys (Common - shared across services)
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-
-      # Global LLM Configuration
-      GLOBAL_LLM_PROVIDER: ${GLOBAL_LLM_PROVIDER:-openai}
-      GLOBAL_LLM_MODEL: ${GLOBAL_LLM_MODEL:-gpt-4}
-
-      # AWS Configuration (Common - shared across services)
-      AWS_REGION: ${AWS_REGION}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
-      AWS_COGNITO_USER_POOL_ID: ${AWS_COGNITO_USER_POOL_ID}
-      DYNAMODB_TABLE: ${DYNAMODB_TABLE}
-
-      # Application Configuration
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    # All environment variables are loaded from .env file via env_file above
+    # You can override specific variables here if needed:
+    # environment:
+    #   - LOG_LEVEL=INFO
     networks:
       - analyst-ai-network
     volumes:
