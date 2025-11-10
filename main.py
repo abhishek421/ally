@@ -29,6 +29,15 @@ async def initialize_application():
     """
     logger.info("Initializing application (ENV-only config)...")
 
+    # Fix DATABASE_URL for Docker: replace localhost with host.docker.internal
+    import os
+    database_url = os.getenv("DATABASE_URL", "")
+    if database_url and "localhost" in database_url and os.path.exists("/.dockerenv"):
+        # We're in Docker and DATABASE_URL uses localhost - replace with host.docker.internal
+        database_url = database_url.replace("localhost", "host.docker.internal")
+        os.environ["DATABASE_URL"] = database_url
+        logger.info("Updated DATABASE_URL to use host.docker.internal for Docker environment")
+
     # Initialize database connection
     from database.prisma_client import prisma_client
     try:

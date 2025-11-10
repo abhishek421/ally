@@ -154,18 +154,80 @@ class DataExtractorAgent:
             # Return empty structure on error
             return self._get_empty_result_structure()
     
+    def _parse_simple_format(self, optimized_query: str) -> Dict[str, Any]:
+        """
+        Parse the new simple 3-line format from query optimizer
+
+        Format:
+            Intent: emails
+            Filters: from=John Smith
+            Time Period: October 2025
+
+        Args:
+            optimized_query: Simple formatted query string
+
+        Returns:
+            Dictionary with parsed intent, filters, and time_period
+        """
+        lines = optimized_query.strip().split('\n')
+        parsed = {
+            "intent": "",
+            "filters": {},
+            "time_period": ""
+        }
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            if line.startswith("Intent:"):
+                parsed["intent"] = line.replace("Intent:", "").strip()
+            elif line.startswith("Filters:"):
+                filters_str = line.replace("Filters:", "").strip()
+                if filters_str.lower() != "none":
+                    # Parse key=value pairs separated by commas
+                    for filter_part in filters_str.split(','):
+                        filter_part = filter_part.strip()
+                        if '=' in filter_part:
+                            key, value = filter_part.split('=', 1)
+                            parsed["filters"][key.strip()] = value.strip()
+            elif line.startswith("Time Period:"):
+                time_period = line.replace("Time Period:", "").strip()
+                if time_period.lower() != "none":
+                    parsed["time_period"] = time_period
+
+        self._logger.debug(f"Parsed simple format: {parsed}")
+        return parsed
+
     def _parse_optimized_query(self, optimized_query: str, context_messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Use LLM to parse optimized query into structured tool calls
-        
+
         Args:
             optimized_query: Optimized query string
             context_messages: Previous conversation messages for context (optional)
-            
+
         Returns:
             Dictionary with parsed tool calls
         """
         self._logger.info("Parsing optimized query with LLM")
+
+        # Check if this is the new simple format (3 lines starting with Intent/Filters/Time Period)
+        if optimized_query.strip().startswith("Intent:"):
+            self._logger.info("Detected new simple format, using simple parser")
+            simple_parsed = self._parse_simple_format(optimized_query)
+
+            # Convert simple format to tool calls format
+            # This is a basic conversion - you may need to expand this based on your needs
+            tool_calls = self._convert_simple_to_tool_calls(simple_parsed)
+            return {
+                "tool_calls": tool_calls,
+                "execution_plan": f"Execute {simple_parsed['intent']} query with filters"
+            }
+
+        # Fall back to LLM-based parsing for complex queries
+        self._logger.info("Using LLM-based parsing for complex query")
         
         # Build context string if available
         context_str = ""
@@ -221,6 +283,127 @@ class DataExtractorAgent:
             self._logger.exception(f"LLM parsing failed: {exc}")
             raise
     
+    def _convert_simple_to_tool_calls(self, parsed: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Convert simple parsed format to tool calls format
+
+        Args:
+            parsed: Dictionary with intent, filters, time_period
+
+        Returns:
+            List of tool call dictionaries
+        """
+        intent = parsed.get("intent", "").lower()
+        filters = parsed.get("filters", {})
+        time_period = parsed.get("time_period", "")
+
+        tool_calls = []
+
+        # Map intents to tools and query types
+        if "email" in intent:
+            tool_calls.append({
+                "tool": "email",
+                "query_type": "search" if "search" in intent else "list",
+                "params": self._build_email_params(filters, time_period)
+            })
+        elif "compan" in intent:  # matches "company" or "companies"
+            if "count" in intent:
+                tool_calls.append({
+                    "tool": "company",
+                    "query_type": "analytics",
+                    "params": {"metric": "count"}
+                })
+            else:
+                tool_calls.append({
+                    "tool": "company",
+                    "query_type": "search" if filters else "list",
+                    "params": self._build_company_params(filters, time_period)
+                })
+        elif "people" in intent or "person" in intent:
+            if "count" in intent:
+                tool_calls.append({
+                    "tool": "people",
+                    "query_type": "analytics",
+                    "params": {"metric": "count"}
+                })
+            else:
+                tool_calls.append({
+                    "tool": "people",
+                    "query_type": "search" if filters else "list",
+                    "params": self._build_people_params(filters, time_period)
+                })
+        elif "deal" in intent:
+            tool_calls.append({
+                "tool": "company",  # Deals are stored with companies
+                "query_type": "search",
+                "params": self._build_deal_params(filters, time_period)
+            })
+        elif "interaction" in intent:
+            tool_calls.append({
+                "tool": "interaction",
+                "query_type": "search" if filters else "list",
+                "params": self._build_interaction_params(filters, time_period)
+            })
+
+        return tool_calls
+
+    def _build_email_params(self, filters: Dict[str, Any], time_period: str) -> Dict[str, Any]:
+        """Build parameters for email tool"""
+        params = {}
+        if "from" in filters:
+            params["from_email"] = filters["from"]
+        if "to" in filters:
+            params["to_email"] = filters["to"]
+        if "subject" in filters or "content" in filters:
+            params["query"] = filters.get("subject", filters.get("content", ""))
+        if time_period:
+            params["date_range"] = time_period
+        return params
+
+    def _build_company_params(self, filters: Dict[str, Any], time_period: str) -> Dict[str, Any]:
+        """Build parameters for company tool"""
+        params = {}
+        if "name" in filters:
+            params["name"] = filters["name"]
+        if "domain" in filters:
+            params["domain"] = filters["domain"]
+        if "status" in filters:
+            params["status"] = filters["status"]
+        return params
+
+    def _build_people_params(self, filters: Dict[str, Any], time_period: str) -> Dict[str, Any]:
+        """Build parameters for people tool"""
+        params = {}
+        if "name" in filters:
+            params["name"] = filters["name"]
+        if "email" in filters:
+            params["email"] = filters["email"]
+        if "company" in filters:
+            params["company_name"] = filters["company"]
+        return params
+
+    def _build_deal_params(self, filters: Dict[str, Any], time_period: str) -> Dict[str, Any]:
+        """Build parameters for deal queries"""
+        params = {}
+        if "stage" in filters:
+            params["deal_stage"] = filters["stage"]
+        if "status" in filters:
+            params["deal_status"] = filters["status"]
+        if time_period:
+            params["date_range"] = time_period
+        return params
+
+    def _build_interaction_params(self, filters: Dict[str, Any], time_period: str) -> Dict[str, Any]:
+        """Build parameters for interaction tool"""
+        params = {}
+        if "company" in filters:
+            params["company_name"] = filters["company"]
+        if "type" in filters:
+            params["interaction_type"] = filters["type"]
+        if time_period:
+            params["date_range"] = time_period
+        return params
+
     def _extract_json_from_response(self, response: str) -> str:
         """
         Extract JSON from LLM response (might be wrapped in code blocks)

@@ -85,7 +85,8 @@ class OrchestratorAgent:
         user_query: str,
         workspace_id: str,
         user_id: str,
-        context_messages: Optional[List[Dict]] = None
+        context_messages: Optional[List[Dict]] = None,
+        conversation_state: Optional['ConversationState'] = None
     ) -> OrchestrationResult:
         """
         Main entry point - orchestrates entire query execution
@@ -102,6 +103,7 @@ class OrchestratorAgent:
             workspace_id: Workspace identifier
             user_id: User identifier
             context_messages: Optional conversation context
+            conversation_state: Optional conversation state for reference resolution
 
         Returns:
             OrchestrationResult with data and execution metadata
@@ -211,7 +213,8 @@ class OrchestratorAgent:
                 workspace_id,
                 user_id,
                 context_messages,
-                agents_executed
+                agents_executed,
+                conversation_state
             )
 
             # Phase 4: EVALUATE AND FINALIZE
@@ -532,7 +535,8 @@ class OrchestratorAgent:
         workspace_id: str,
         user_id: str,
         context_messages: Optional[List[Dict]],
-        agents_executed: List[AgentExecution]
+        agents_executed: List[AgentExecution],
+        conversation_state: Optional['ConversationState'] = None
     ) -> Dict[str, Any]:
         """
         Phase 3: COORDINATE
@@ -553,6 +557,7 @@ class OrchestratorAgent:
             user_id: User ID
             context_messages: Context messages
             agents_executed: List to track executed agents
+            conversation_state: Optional conversation state for reference resolution
 
         Returns:
             Dictionary with execution results
@@ -568,7 +573,8 @@ class OrchestratorAgent:
             optimized_query = await self._run_query_optimizer(
                 user_query,
                 context_messages,
-                agents_executed
+                agents_executed,
+                conversation_state
             )
             self._logger.info(f"Optimized query: {optimized_query[:100]}...")
         else:
@@ -649,6 +655,14 @@ class OrchestratorAgent:
         if retry_count > plan.max_retries:
             self._logger.warning(f"Max retries ({plan.max_retries}) reached, accepting best result")
 
+        # Update conversation state with extracted entities
+        if conversation_state and extraction_result:
+            try:
+                conversation_state.update_from_results(extraction_result)
+                self._logger.debug("Updated conversation state with extraction results")
+            except Exception as e:
+                self._logger.warning(f"Failed to update conversation state: {e}")
+
         return {
             "status": "complete",
             "extraction_result": extraction_result,
@@ -660,7 +674,8 @@ class OrchestratorAgent:
         self,
         user_query: str,
         context_messages: Optional[List[Dict]],
-        agents_executed: List[AgentExecution]
+        agents_executed: List[AgentExecution],
+        conversation_state: Optional['ConversationState'] = None
     ) -> str:
         """
         Run QueryOptimizerAgent
@@ -669,6 +684,7 @@ class OrchestratorAgent:
             user_query: Raw user query
             context_messages: Context messages
             agents_executed: List to track execution
+            conversation_state: Optional conversation state for reference resolution
 
         Returns:
             Optimized query string
@@ -681,10 +697,11 @@ class OrchestratorAgent:
                 from agents.query_optimizer import QueryOptimizerAgent
                 self._query_optimizer = QueryOptimizerAgent()
 
-            # Run optimizer
+            # Run optimizer with conversation_state
             optimized = self._query_optimizer.optimize(
                 user_query=user_query,
-                context_messages=context_messages or []
+                context_messages=context_messages or [],
+                conversation_state=conversation_state
             )
 
             duration_ms = int((time.time() - agent_start) * 1000)

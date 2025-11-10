@@ -20,12 +20,11 @@ class ResponseFormatterAgent:
             llm_provider: LLM provider instance (injected dependency)
                          If None, will be created from config
         """
-        # Import templates here to avoid circular imports
+        # Import template here to avoid circular imports
         from prompts.response_formatter_prompt import RESPONSE_FORMATTER_TEMPLATE
-        from prompts.business_analyst_persona import BUSINESS_ANALYST_PERSONA
 
-        # Combine Business Analyst Persona with agent-specific template
-        self.template = f"{BUSINESS_ANALYST_PERSONA}\n\n{RESPONSE_FORMATTER_TEMPLATE}"
+        # Use template directly (persona is now inlined in the template)
+        self.template = RESPONSE_FORMATTER_TEMPLATE
 
         # Logger initialization
         self._logger = logging.getLogger(__name__)
@@ -42,7 +41,6 @@ class ResponseFormatterAgent:
             self.llm_provider = LLMProviderFactory.create(RESPONSE_FORMATTER_CONFIG)
 
         self._logger.debug(f"ResponseFormatterAgent initialized with provider: {self.llm_provider}")
-        self._logger.debug("Business Analyst Persona integrated with Response Formatter")
 
     def format(self, optimized_query: str, extracted_data: Dict[str, Any]) -> Dict[str, Any]:
         """

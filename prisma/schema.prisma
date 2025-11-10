@@ -285,7 +285,7 @@ model conversationMessage {
   conversationId String           @db.Uuid
   content        String
   metadata       Json?
-  functionCalls  Json?
+  functionCalls  Json? //
   timestamp      DateTime         @default(now()) @db.Timestamp(6)
   role           ConversationRole
   conversation   conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
