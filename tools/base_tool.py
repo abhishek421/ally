@@ -196,6 +196,11 @@ class BaseTool(ABC):
 
             # Get Redis client
             redis_conn = await redis_client.get_client()
+            
+            # If Redis is not configured, return 0 (no cache to clear)
+            if redis_conn is None:
+                self.logger.debug("Redis not configured - no cache to clear")
+                return 0
 
             # Use SCAN to find matching keys (more efficient than KEYS for production)
             deleted_count = 0

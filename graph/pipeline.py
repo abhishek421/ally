@@ -260,11 +260,21 @@ class AnalystPipeline:
         """
         if self.enable_orchestrator:
             # Use orchestrator-based pipeline
+            # Initialize conversation state for reference resolution
+            conversation_state = ConversationState()
+
+            # Rebuild state from previous messages if available
+            if context_messages:
+                conversation_state.rebuild_from_messages(context_messages)
+
+            conversation_state.set_last_query(user_query)
+
             result = await self.orchestrator.orchestrate(
                 user_query=user_query,
                 workspace_id=workspace_id,
                 user_id=user_id,
-                context_messages=context_messages
+                context_messages=context_messages,
+                conversation_state=conversation_state
             )
 
             # Convert OrchestrationResult to dict for compatibility

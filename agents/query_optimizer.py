@@ -64,9 +64,15 @@ class QueryOptimizerAgent:
         # Resolve references in query using conversation state
         resolved_query = user_query
         if conversation_state:
+            # Debug logging for reference resolution
+            num_companies = len(conversation_state.companies) if conversation_state.companies else 0
+            num_people = len(conversation_state.people) if conversation_state.people else 0
+            self._logger.info(f"Checking for references in query: {user_query}")
+            self._logger.info(f"Conversation state has {num_companies} companies, {num_people} people")
+
             resolved_query = self._resolve_references(user_query, conversation_state)
             if resolved_query != user_query:
-                self._logger.info(f"Resolved references: '{user_query}' -> '{resolved_query}'")
+                self._logger.info(f"✓ Resolved references: '{user_query}' -> '{resolved_query}'")
 
         # Build context if available
         context_str = ""
@@ -107,13 +113,21 @@ class QueryOptimizerAgent:
 
         has_reference = any(word in query_lower for word in reference_words)
         if not has_reference:
+            self._logger.debug("No reference words detected in query")
             return user_query
+
+        self._logger.info(f"Reference words detected in query, attempting resolution...")
 
         # Try to resolve the reference
         resolved = conversation_state.resolve_reference(user_query)
+        self._logger.info(f"Attempting to resolve: {user_query}")
+        self._logger.info(f"Resolved to: {resolved}")
+
         if resolved and resolved.get("name"):
             entity_name = resolved["name"]
             entity_type = resolved.get("type", "")
+
+            self._logger.info(f"✓ Reference resolved to {entity_type}: '{entity_name}'")
 
             # Replace common reference patterns with the actual name
             import re
@@ -137,6 +151,8 @@ class QueryOptimizerAgent:
                 resolved_query = re.sub(pattern, replacement, resolved_query, flags=re.IGNORECASE)
 
             return resolved_query
+        else:
+            self._logger.warning("Could not resolve reference - no matching entity found")
 
         return user_query
 

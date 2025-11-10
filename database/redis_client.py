@@ -8,6 +8,38 @@ import os
 logger = logging.getLogger(__name__)
 
 
+class NoOpRedisClient:
+    """No-op Redis client for when Redis is not configured"""
+    
+    async def connect(self):
+        """No-op connect"""
+        pass
+    
+    async def disconnect(self):
+        """No-op disconnect"""
+        pass
+    
+    async def get_client(self):
+        """No-op get_client"""
+        return None
+    
+    async def get(self, key: str) -> Optional[Any]:
+        """No-op get - returns None (cache miss)"""
+        return None
+    
+    async def set(self, key: str, value: Any, ttl: int = 300) -> bool:
+        """No-op set - returns False (not cached)"""
+        return False
+    
+    async def delete(self, key: str) -> bool:
+        """No-op delete - returns False"""
+        return False
+    
+    async def health_check(self) -> bool:
+        """No-op health check - returns False"""
+        return False
+
+
 class RedisClient:
     """Redis client wrapper for caching"""
     
@@ -104,5 +136,13 @@ class RedisClient:
             return False
 
 
-# Global instance
-redis_client = RedisClient()
+# Global instance - create RedisClient if configured, otherwise use NoOpRedisClient
+def _create_redis_client():
+    """Create Redis client if configured, otherwise return no-op client"""
+    try:
+        return RedisClient()
+    except ValueError:
+        logger.warning("Redis not configured - caching will be disabled")
+        return NoOpRedisClient()
+
+redis_client = _create_redis_client()

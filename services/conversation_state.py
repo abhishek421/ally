@@ -8,6 +8,7 @@ from typing import Dict, List, Any, Optional
 from collections import deque
 from threading import Lock
 from datetime import datetime
+import logging
 
 
 class ConversationState:
@@ -28,6 +29,7 @@ class ConversationState:
         self.last_query: str = ""
         self.current_turn: int = 0
         self._lock = Lock()
+        self._logger = logging.getLogger(__name__)
 
     def update_from_results(self, results: Dict[str, Any]) -> None:
         """
@@ -274,3 +276,95 @@ class ConversationState:
         """
         with self._lock:
             self.last_query = query
+
+    def rebuild_from_messages(self, messages: List[Dict[str, Any]]) -> None:
+        """
+        Rebuild conversation state from previous conversation messages.
+
+        Args:
+            messages: List of conversation messages with role, content, and metadata
+                     Messages should be in chronological order (oldest first)
+
+        Example:
+            messages = [
+                {
+                    "role": "USER",
+                    "content": "Show me drone companies",
+                    "metadata": {"query_context": {...}}
+                },
+                {
+                    "role": "ASSISTANT",
+                    "content": "Here are the companies...",
+                    "metadata": {"query_context": {"result_summary": {...}}}
+                }
+            ]
+            state.rebuild_from_messages(messages)
+        """
+        with self._lock:
+            # Clear existing state
+            self.companies.clear()
+            self.people.clear()
+            self.emails.clear()
+            self.current_turn = 0
+
+            # Process each assistant message to extract entities
+            for msg in messages:
+                # Only process assistant messages with metadata
+                if msg.get("role") != "ASSISTANT":
+                    continue
+
+                metadata = msg.get("metadata", {})
+                query_context = metadata.get("query_context", {})
+                result_summary = query_context.get("result_summary", {})
+
+                # Increment turn for each assistant message
+                self.current_turn += 1
+
+                # Extract entities from result_summary
+                # The metadata_extractor stores company_names, people_names, email_ids etc.
+                for tool_name, tool_summary in result_summary.items():
+                    if not isinstance(tool_summary, dict):
+                        continue
+
+                    # Extract companies
+                    if "company_names" in tool_summary and "company_ids" in tool_summary:
+                        company_names = tool_summary["company_names"]
+                        company_ids = tool_summary["company_ids"]
+                        for idx, name in enumerate(company_names):
+                            company_id = company_ids[idx] if idx < len(company_ids) else None
+                            self.companies.append({
+                                "id": company_id,
+                                "name": name,
+                                "turn_number": self.current_turn
+                            })
+
+                    # Extract people
+                    if "people_names" in tool_summary and "people_ids" in tool_summary:
+                        people_names = tool_summary["people_names"]
+                        people_ids = tool_summary["people_ids"]
+                        for idx, name in enumerate(people_names):
+                            person_id = people_ids[idx] if idx < len(people_ids) else None
+                            self.people.append({
+                                "id": person_id,
+                                "name": name,
+                                "turn_number": self.current_turn
+                            })
+
+                    # Extract emails
+                    if "email_ids" in tool_summary:
+                        email_ids = tool_summary["email_ids"]
+                        for email_id in email_ids:
+                            self.emails.append({
+                                "message_id": email_id,
+                                "subject": "",  # Subject not stored in compact metadata
+                                "turn_number": self.current_turn
+                            })
+
+            # Log rebuild results
+            self._logger.info(
+                f"Rebuilt conversation state: {len(self.companies)} companies, "
+                f"{len(self.people)} people, {len(self.emails)} emails from {len(messages)} messages"
+            )
+            if self.companies:
+                company_names = [c["name"] for c in list(self.companies)[:5]]
+                self._logger.info(f"Companies in state: {company_names}")

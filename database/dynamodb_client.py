@@ -8,6 +8,25 @@ import os
 logger = logging.getLogger(__name__)
 
 
+class NoOpDynamoDBClient:
+    """No-op DynamoDB client for when AWS is not configured"""
+    
+    def __init__(self):
+        self.client = None
+    
+    def get_client(self):
+        """No-op get_client"""
+        return None
+    
+    def get_table(self, table_name: str):
+        """No-op get_table - raises error when used"""
+        raise RuntimeError(f"DynamoDB not configured - cannot access table {table_name}")
+    
+    async def health_check(self) -> bool:
+        """No-op health check - returns False"""
+        return False
+
+
 class DynamoDBClient:
     """DynamoDB client wrapper"""
     
@@ -59,5 +78,13 @@ class DynamoDBClient:
             return False
 
 
-# Global instance
-dynamodb_client = DynamoDBClient()
+# Global instance - create DynamoDBClient if configured, otherwise use NoOpDynamoDBClient
+def _create_dynamodb_client():
+    """Create DynamoDB client if configured, otherwise return no-op client"""
+    try:
+        return DynamoDBClient()
+    except ValueError:
+        logger.warning("DynamoDB not configured - email functionality will be disabled")
+        return NoOpDynamoDBClient()
+
+dynamodb_client = _create_dynamodb_client()
