@@ -63,7 +63,6 @@ class LangGraphStorage(StorageInterface):
 
     def __init__(self):
         """Initialize LangGraph storage."""
-        self.checkpointer = MemorySaver()
         # In-memory storage for conversation data
         # Key: conversation_id, Value: dict with 'messages' and 'summary'
         self._storage: dict[str, dict] = {}
