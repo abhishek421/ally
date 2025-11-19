@@ -10,8 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
-from graph.pipeline import AnalystPipeline
-from api.v1 import query, health, conversations
+from src.core.workflows.graphs.pipeline import AnalystPipeline
+from src.interfaces.api.v1.routes import query, health, conversations
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
@@ -39,7 +39,7 @@ async def initialize_application():
         logger.info("Updated DATABASE_URL to use host.docker.internal for Docker environment")
 
     # Initialize database connection
-    from database.prisma_client import prisma_client
+    from src.infrastructure.database.prisma_client import prisma_client
     try:
         await prisma_client.connect()
         logger.info("Database connection initialized successfully")
@@ -48,7 +48,7 @@ async def initialize_application():
         raise
 
     # Initialize config manager
-    from config.config_manager import get_config_manager
+    from src.shared.config.config_manager import get_config_manager
     try:
         config_manager = get_config_manager()
         await config_manager.initialize()
@@ -62,7 +62,7 @@ async def initialize_application():
 
 async def cleanup_application():
     """Cleanup on shutdown."""
-    from database.prisma_client import prisma_client
+    from src.infrastructure.database.prisma_client import prisma_client
     try:
         await prisma_client.disconnect()
         logger.info("Database connection closed successfully")

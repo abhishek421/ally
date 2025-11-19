@@ -1,12 +1,60 @@
 generator client {
-  provider                    = "prisma-client-py"
-  enable_experimental_decimal = true
-  recursive_type_depth        = -1
+  provider             = "prisma-client-py"
+  recursive_type_depth = "5"
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+model EnrichmentRequest {
+  id                String             @id @db.Uuid
+  workspaceId       String             @db.Uuid
+  groupId           String?            @db.Uuid
+  requestedBy       String             @db.Uuid
+  status            EnrichmentStatus   @default(PENDING)
+  provider          String             @default("fullenrich")
+  externalRequestId String?            @db.VarChar(255)
+  totalItems        Int
+  processedItems    Int                @default(0)
+  failedItems       Int                @default(0)
+  metadata          Json?
+  startedAt         DateTime?          @db.Timestamp(6)
+  completedAt       DateTime?          @db.Timestamp(6)
+  createdAt         DateTime           @default(now()) @db.Timestamp(6)
+  updatedAt         DateTime           @default(now()) @db.Timestamp(6)
+  EnrichmentResult  EnrichmentResult[]
+
+  @@index([createdAt])
+  @@index([requestedBy])
+  @@index([status])
+  @@index([workspaceId])
+}
+
+model EnrichmentResult {
+  id                String            @id @db.Uuid
+  requestId         String            @db.Uuid
+  personId          String?           @db.Uuid
+  externalId        String?
+  status            EnrichmentStatus  @default(PENDING)
+  inputData         Json
+  outputData        Json?
+  error             String?
+  retryCount        Int               @default(0)
+  metadata          Json?
+  startedAt         DateTime?         @db.Timestamp(6)
+  completedAt       DateTime?         @db.Timestamp(6)
+  createdAt         DateTime          @default(now()) @db.Timestamp(6)
+  updatedAt         DateTime          @default(now()) @db.Timestamp(6)
+  people            people?           @relation(fields: [personId], references: [id])
+  EnrichmentRequest EnrichmentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+  @@index([externalId])
+  @@index([personId])
+  @@index([requestId])
+  @@index([status])
 }
 
 model address {
@@ -27,92 +75,6 @@ model address {
   @@index([value])
 }
 
-model aiAnalytics {
-  id                  String    @id @db.Uuid
-  workspaceId         String    @db.Uuid
-  userId              String?   @db.Uuid
-  date                DateTime  @db.Date
-  totalQueries        Int       @default(0)
-  successfulQueries   Int       @default(0)
-  failedQueries       Int       @default(0)
-  totalTokens         Int       @default(0)
-  totalCost           Decimal   @default(0) @db.Decimal(10, 4)
-  averageResponseTime Int?
-  functionCalls       Int       @default(0)
-  createdAt           DateTime  @default(now()) @db.Timestamp(6)
-  updatedAt           DateTime  @db.Timestamp(6)
-  user                user?     @relation(fields: [userId], references: [id])
-  workspace           workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-
-  @@unique([workspaceId, userId, date])
-  @@index([date])
-  @@index([userId, date])
-  @@index([workspaceId, date])
-}
-
-model aiCache {
-  id          String    @id @db.Uuid
-  workspaceId String    @db.Uuid
-  cacheKey    String
-  cacheValue  Json
-  expiresAt   DateTime  @db.Timestamp(6)
-  createdAt   DateTime  @default(now()) @db.Timestamp(6)
-  workspace   workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-
-  @@unique([workspaceId, cacheKey])
-  @@index([cacheKey])
-  @@index([expiresAt])
-  @@index([workspaceId])
-}
-
-model aiFunctionCall {
-  id            String             @id @db.Uuid
-  interactionId String             @db.Uuid
-  functionName  String
-  parameters    Json
-  status        FunctionCallStatus @default(PENDING)
-  result        Json?
-  errorMessage  String?
-  executionTime Int?
-  createdAt     DateTime           @default(now()) @db.Timestamp(6)
-  updatedAt     DateTime           @db.Timestamp(6)
-  aiInteraction aiInteraction      @relation(fields: [interactionId], references: [id], onDelete: Cascade)
-
-  @@index([functionName, status])
-  @@index([interactionId])
-  @@index([status, createdAt])
-}
-
-model aiInteraction {
-  id             String              @id @db.Uuid
-  workspaceId    String              @db.Uuid
-  userId         String              @db.Uuid
-  conversationId String?             @db.Uuid
-  provider       AIProvider
-  status         AIInteractionStatus @default(PENDING)
-  userQuery      String
-  aiResponse     String?
-  errorMessage   String?
-  tokensUsed     Int?
-  cost           Decimal?            @db.Decimal(10, 4)
-  responseTime   Int?
-  functionCalls  Json?
-  metadata       Json?
-  createdAt      DateTime            @default(now()) @db.Timestamp(6)
-  updatedAt      DateTime            @db.Timestamp(6)
-  aiFunctionCall aiFunctionCall[]
-  conversation   conversation?       @relation(fields: [conversationId], references: [id])
-  user           user                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  workspace      workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-
-  @@index([createdAt])
-  @@index([provider, status])
-  @@index([status, createdAt])
-  @@index([userId])
-  @@index([workspaceId])
-  @@index([workspaceId, userId])
-}
-
 model column {
   id                        String                      @id @db.Uuid
   groupId                   String                      @db.Uuid
@@ -127,6 +89,7 @@ model column {
   selectOptions             Json?                       @db.Json
   dealId                    String?                     @db.Uuid
   group                     group                       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  columnValueMember         columnValueMember[]
   columnValueSelectOption   columnValueSelectOption[]
   columnViewSettings        columnViewSettings[]
   column_values             column_values[]
@@ -141,6 +104,39 @@ model column {
   @@index([groupId, isDefault, isDeleted])
   @@index([groupId, type, isDeleted])
   @@index([name])
+}
+
+model columnValueMember {
+  id                                     String   @id @db.Uuid
+  memberId                               String   @db.Uuid
+  createdAt                              DateTime @default(now())
+  columnId                               String   @db.Uuid
+  companyId                              String?  @db.Uuid
+  peopleId                               String?  @db.Uuid
+  dealId                                 String?  @db.Uuid
+  createdBy                              String   @db.Uuid
+  column                                 column   @relation(fields: [columnId], references: [id], onDelete: Cascade)
+  company                                company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user_columnValueMember_createdByTouser user     @relation("columnValueMember_createdByTouser", fields: [createdBy], references: [id])
+  deal                                   deal?    @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  user_columnValueMember_memberIdTouser  user     @relation("columnValueMember_memberIdTouser", fields: [memberId], references: [id], onDelete: Cascade)
+  people                                 people?  @relation(fields: [peopleId], references: [id], onDelete: Cascade)
+
+  @@unique([columnId, memberId, companyId])
+  @@unique([columnId, memberId, dealId])
+  @@unique([columnId, memberId, peopleId])
+  @@index([columnId])
+  @@index([columnId, memberId, companyId])
+  @@index([columnId, memberId])
+  @@index([columnId, memberId, peopleId])
+  @@index([companyId, columnId])
+  @@index([companyId])
+  @@index([dealId])
+  @@index([memberId, companyId])
+  @@index([memberId])
+  @@index([memberId, peopleId])
+  @@index([peopleId, columnId])
+  @@index([peopleId])
 }
 
 model columnValueSelectOption {
@@ -235,6 +231,7 @@ model company {
   avatarEtag              String?
   avatarUpdatedAt         DateTime?
   address                 address[]
+  columnValueMember       columnValueMember[]
   columnValueSelectOption columnValueSelectOption[]
   column_values           column_values[]
   user                    user                      @relation(fields: [createdBy], references: [id])
@@ -266,10 +263,8 @@ model conversation {
   workspaceId         String                @db.Uuid
   userId              String                @db.Uuid
   title               String?
-  context             Json?
   createdAt           DateTime              @default(now()) @db.Timestamp(6)
   updatedAt           DateTime              @db.Timestamp(6)
-  aiInteraction       aiInteraction[]
   user                user                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   workspace           workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   conversationMessage conversationMessage[]
@@ -283,12 +278,10 @@ model conversation {
 model conversationMessage {
   id             String           @id @db.Uuid
   conversationId String           @db.Uuid
-  content        String
-  metadata       Json?
-  functionCalls  Json? //
   timestamp      DateTime         @default(now()) @db.Timestamp(6)
   role           ConversationRole
   conversation   conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  messageBlock   messageBlock[]
 
   @@index([conversationId])
   @@index([conversationId, timestamp])
@@ -302,6 +295,7 @@ model deal {
   createdAt               DateTime                  @default(now()) @db.Timestamp(6)
   updatedAt               DateTime                  @db.Timestamp(6)
   createdBy               String?                   @db.Uuid
+  columnValueMember       columnValueMember[]
   columnValueSelectOption columnValueSelectOption[]
   column_values           column_values[]
   column                  column                    @relation(fields: [columnId], references: [id], onDelete: Cascade)
@@ -354,25 +348,6 @@ model defaultColumn {
   @@index([type, order])
 }
 
-model dismissedDuplicatePair {
-  id                                              String    @id @db.Uuid
-  workspaceId                                     String    @db.Uuid
-  personId1                                       String    @db.Uuid
-  personId2                                       String    @db.Uuid
-  dismissedBy                                     String    @db.Uuid
-  dismissedAt                                     DateTime  @default(now()) @db.Timestamp(6)
-  user                                            user      @relation(fields: [dismissedBy], references: [id], onDelete: Cascade)
-  people_dismissedDuplicatePair_personId1Topeople people    @relation("dismissedDuplicatePair_personId1Topeople", fields: [personId1], references: [id], onDelete: Cascade)
-  people_dismissedDuplicatePair_personId2Topeople people    @relation("dismissedDuplicatePair_personId2Topeople", fields: [personId2], references: [id], onDelete: Cascade)
-  workspace                                       workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-
-  @@unique([workspaceId, personId1, personId2])
-  @@index([personId1])
-  @@index([personId2])
-  @@index([workspaceId, dismissedAt(sort: Desc)])
-  @@index([workspaceId])
-}
-
 model domainVerificationLog {
   id        String   @id @db.Uuid
   senderId  String   @db.Uuid
@@ -385,6 +360,40 @@ model domainVerificationLog {
   @@index([senderId, checkedAt(sort: Desc)])
   @@index([senderId])
   @@index([status, checkedAt(sort: Desc)])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model duplicatePair {
+  id                                     String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId                            String          @db.Uuid
+  personId1                              String          @db.Uuid
+  personId2                              String          @db.Uuid
+  detectionType                          DetectionType
+  confidenceScore                        Int
+  matchReasons                           String[]
+  detectedAt                             DateTime        @default(now()) @db.Timestamp(6)
+  detectedBy                             String?
+  createdBy                              String          @db.Uuid
+  status                                 DuplicateStatus @default(PENDING)
+  actionedAt                             DateTime?       @db.Timestamp(6)
+  actionedBy                             String?         @db.Uuid
+  actionReason                           String?
+  user_duplicatePair_actionedByTouser    user?           @relation("duplicatePair_actionedByTouser", fields: [actionedBy], references: [id])
+  user_duplicatePair_createdByTouser     user            @relation("duplicatePair_createdByTouser", fields: [createdBy], references: [id], onDelete: Cascade)
+  people_duplicatePair_personId1Topeople people          @relation("duplicatePair_personId1Topeople", fields: [personId1], references: [id], onDelete: Cascade)
+  people_duplicatePair_personId2Topeople people          @relation("duplicatePair_personId2Topeople", fields: [personId2], references: [id], onDelete: Cascade)
+  workspace                              workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, personId1, personId2], map: "unique_duplicate_pair")
+  @@index([createdBy])
+  @@index([detectedAt])
+  @@index([personId1])
+  @@index([personId2])
+  @@index([workspaceId, createdBy, status])
+  @@index([workspaceId, detectionType, status])
+  @@index([workspaceId, status, confidenceScore(sort: Desc)])
+  @@index([workspaceId, status, detectedAt(sort: Desc)])
+  @@index([workspaceId, status])
 }
 
 model email {
@@ -577,6 +586,20 @@ model interaction {
   @@index([workspaceId, type, direction, date(sort: Desc)])
 }
 
+model messageBlock {
+  id                  String              @id @db.Uuid
+  messageId           String              @db.Uuid
+  blockType           BlockType
+  content             String
+  metadata            Json?
+  order               Int
+  entityMentions      Json?
+  createdAt           DateTime            @default(now()) @db.Timestamp(6)
+  conversationMessage conversationMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId, order])
+}
+
 model metaData {
   id               String   @id @db.Uuid
   isPeoplePrimary  Boolean  @default(false)
@@ -597,40 +620,42 @@ model metaData {
 }
 
 model people {
-  id                                                              String                    @id @db.Uuid
-  firstName                                                       String                    @db.VarChar(100)
-  lastName                                                        String?                   @db.VarChar(100)
-  jobTitle                                                        String?                   @db.VarChar(1000)
-  description                                                     String?
-  dateOfBirth                                                     DateTime?                 @db.Date
-  gender                                                          String?
-  imageUrl                                                        String?
-  privacyLevel                                                    PrivacyLevel?             @default(PRIVATE)
-  createdAt                                                       DateTime                  @default(now()) @db.Timestamp(6)
-  updatedAt                                                       DateTime                  @db.Timestamp(6)
-  workspaceId                                                     String                    @db.Uuid
-  createdBy                                                       String                    @db.Uuid
-  avatarKey                                                       String?
-  avatarContentType                                               String?
-  avatarSize                                                      Int?
-  avatarEtag                                                      String?
-  avatarUpdatedAt                                                 DateTime?
-  address                                                         address[]
-  columnValueSelectOption                                         columnValueSelectOption[]
-  column_values                                                   column_values[]
-  dealMetaData                                                    dealMetaData[]
-  dismissedDuplicatePair_dismissedDuplicatePair_personId1Topeople dismissedDuplicatePair[]  @relation("dismissedDuplicatePair_personId1Topeople")
-  dismissedDuplicatePair_dismissedDuplicatePair_personId2Topeople dismissedDuplicatePair[]  @relation("dismissedDuplicatePair_personId2Topeople")
-  email                                                           email[]
-  groupPeople                                                     groupPeople[]
-  interaction                                                     interaction[]
-  metaData                                                        metaData[]
-  user                                                            user                      @relation(fields: [createdBy], references: [id])
-  workspace                                                       workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  phoneNumber                                                     phoneNumber[]
-  reminder                                                        reminder[]
-  url                                                             url[]
-  userIntraction                                                  userIntraction[]
+  id                                            String                    @id @db.Uuid
+  firstName                                     String                    @db.VarChar(100)
+  lastName                                      String?                   @db.VarChar(100)
+  jobTitle                                      String?                   @db.VarChar(1000)
+  description                                   String?
+  dateOfBirth                                   DateTime?                 @db.Date
+  gender                                        String?
+  imageUrl                                      String?
+  privacyLevel                                  PrivacyLevel?             @default(PRIVATE)
+  createdAt                                     DateTime                  @default(now()) @db.Timestamp(6)
+  updatedAt                                     DateTime                  @db.Timestamp(6)
+  workspaceId                                   String                    @db.Uuid
+  createdBy                                     String                    @db.Uuid
+  avatarKey                                     String?
+  avatarContentType                             String?
+  avatarSize                                    Int?
+  avatarEtag                                    String?
+  avatarUpdatedAt                               DateTime?
+  EnrichmentResult                              EnrichmentResult[]
+  address                                       address[]
+  columnValueMember                             columnValueMember[]
+  columnValueSelectOption                       columnValueSelectOption[]
+  column_values                                 column_values[]
+  dealMetaData                                  dealMetaData[]
+  duplicatePair_duplicatePair_personId1Topeople duplicatePair[]           @relation("duplicatePair_personId1Topeople")
+  duplicatePair_duplicatePair_personId2Topeople duplicatePair[]           @relation("duplicatePair_personId2Topeople")
+  email                                         email[]
+  groupPeople                                   groupPeople[]
+  interaction                                   interaction[]
+  metaData                                      metaData[]
+  user                                          user                      @relation(fields: [createdBy], references: [id])
+  workspace                                     workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  phoneNumber                                   phoneNumber[]
+  reminder                                      reminder[]
+  url                                           url[]
+  userIntraction                                userIntraction[]
 
   @@index([createdBy])
   @@index([dateOfBirth])
@@ -671,6 +696,7 @@ model profileColumnViewSettings {
   defaultColumnId String?        @db.Uuid
   createdAt       DateTime       @default(now())
   updatedAt       DateTime
+  type            TargetEntity?
   column          column?        @relation(fields: [columnId], references: [id], onDelete: Cascade)
   defaultColumn   defaultColumn? @relation(fields: [defaultColumnId], references: [id], onDelete: Cascade)
   group           group          @relation(fields: [groupId], references: [id], onDelete: Cascade)
@@ -835,39 +861,40 @@ model url {
 }
 
 model user {
-  id                                      String                   @id @db.Uuid
-  email                                   String                   @unique
-  firstName                               String
-  lastName                                String?
-  cognitoSub                              String                   @unique
-  metaData                                Json?                    @db.Json
-  createdAt                               DateTime                 @default(now()) @db.Timestamp(6)
-  updatedAt                               DateTime                 @db.Timestamp(6)
-  avatarKey                               String?
-  avatarContentType                       String?
-  avatarSize                              Int?
-  avatarEtag                              String?
-  avatarUpdatedAt                         DateTime?
-  aiAnalytics                             aiAnalytics[]
-  aiInteraction                           aiInteraction[]
-  company                                 company[]
-  conversation                            conversation[]
-  deal                                    deal[]
-  dismissedDuplicatePair                  dismissedDuplicatePair[]
-  emailIntegration                        emailIntegration[]
-  group                                   group[]
-  groupCompany                            groupCompany[]
-  groupPeople                             groupPeople[]
-  importJob                               importJob[]
-  interaction                             interaction[]
-  people                                  people[]
-  reminder                                reminder[]
-  session                                 session[]
-  userIntraction                          userIntraction[]
-  userInvitation                          userInvitation[]
-  userReminder_userReminder_addedByTouser userReminder[]           @relation("userReminder_addedByTouser")
-  userReminder_userReminder_userIdTouser  userReminder[]           @relation("userReminder_userIdTouser")
-  workspaceMember                         workspaceMember[]
+  id                                                  String              @id @db.Uuid
+  email                                               String              @unique
+  firstName                                           String
+  lastName                                            String?
+  cognitoSub                                          String              @unique
+  metaData                                            Json?               @db.Json
+  createdAt                                           DateTime            @default(now()) @db.Timestamp(6)
+  updatedAt                                           DateTime            @db.Timestamp(6)
+  avatarKey                                           String?
+  avatarContentType                                   String?
+  avatarSize                                          Int?
+  avatarEtag                                          String?
+  avatarUpdatedAt                                     DateTime?
+  columnValueMember_columnValueMember_createdByTouser columnValueMember[] @relation("columnValueMember_createdByTouser")
+  columnValueMember_columnValueMember_memberIdTouser  columnValueMember[] @relation("columnValueMember_memberIdTouser")
+  company                                             company[]
+  conversation                                        conversation[]
+  deal                                                deal[]
+  duplicatePair_duplicatePair_actionedByTouser        duplicatePair[]     @relation("duplicatePair_actionedByTouser")
+  duplicatePair_duplicatePair_createdByTouser         duplicatePair[]     @relation("duplicatePair_createdByTouser")
+  emailIntegration                                    emailIntegration[]
+  group                                               group[]
+  groupCompany                                        groupCompany[]
+  groupPeople                                         groupPeople[]
+  importJob                                           importJob[]
+  interaction                                         interaction[]
+  people                                              people[]
+  reminder                                            reminder[]
+  session                                             session[]
+  userIntraction                                      userIntraction[]
+  userInvitation                                      userInvitation[]
+  userReminder_userReminder_addedByTouser             userReminder[]      @relation("userReminder_addedByTouser")
+  userReminder_userReminder_userIdTouser              userReminder[]      @relation("userReminder_userIdTouser")
+  workspaceMember                                     workspaceMember[]
 
   @@index([createdAt])
   @@index([firstName, lastName])
@@ -939,6 +966,7 @@ model view {
   createdAt           DateTime              @default(now())
   updatedAt           DateTime
   condition           String?
+  order               Int                   @default(100)
   columnViewSettings  columnViewSettings[]
   selectOptionSetting selectOptionSetting[]
   column              column?               @relation(fields: [dealColumnId], references: [id], onDelete: Cascade)
@@ -952,31 +980,28 @@ model view {
 }
 
 model workspace {
-  id                     String                   @id @db.Uuid
-  name                   String
-  createdAt              DateTime                 @default(now()) @db.Timestamp(6)
-  updatedAt              DateTime                 @db.Timestamp(6)
-  avatarKey              String?
-  avatarContentType      String?
-  avatarSize             Int?
-  avatarEtag             String?
-  avatarUpdatedAt        DateTime?
-  aiAnalytics            aiAnalytics[]
-  aiCache                aiCache[]
-  aiInteraction          aiInteraction[]
-  company                company[]
-  conversation           conversation[]
-  dismissedDuplicatePair dismissedDuplicatePair[]
-  emailIntegration       emailIntegration[]
-  group                  group[]
-  importJob              importJob[]
-  interaction            interaction[]
-  people                 people[]
-  reminder               reminder[]
-  session                session[]
-  userInvitation         userInvitation[]
-  view                   view[]
-  workspaceMember        workspaceMember[]
+  id                String             @id @db.Uuid
+  name              String
+  createdAt         DateTime           @default(now()) @db.Timestamp(6)
+  updatedAt         DateTime           @db.Timestamp(6)
+  avatarKey         String?
+  avatarContentType String?
+  avatarSize        Int?
+  avatarEtag        String?
+  avatarUpdatedAt   DateTime?
+  company           company[]
+  conversation      conversation[]
+  duplicatePair     duplicatePair[]
+  emailIntegration  emailIntegration[]
+  group             group[]
+  importJob         importJob[]
+  interaction       interaction[]
+  people            people[]
+  reminder          reminder[]
+  session           session[]
+  userInvitation    userInvitation[]
+  view              view[]
+  workspaceMember   workspaceMember[]
 
   @@index([createdAt])
   @@index([name])
@@ -998,24 +1023,16 @@ model workspaceMember {
   @@index([workspaceId, role])
 }
 
-enum AIInteractionStatus {
-  PENDING
-  PROCESSING
-  COMPLETED
-  FAILED
-  CANCELLED
-}
-
-enum AIProvider {
-  GEMINI
-  OPENAI
-  ANTHROPIC
-}
-
 enum AddressType {
   home
   work
   other
+}
+
+enum BlockType {
+  TEXT
+  TABLE
+  THINKING
 }
 
 enum ColumnDataType {
@@ -1052,13 +1069,22 @@ enum ColumnType {
 enum ConversationRole {
   USER
   ASSISTANT
-  SYSTEM
-  FUNCTION
+}
+
+enum DetectionType {
+  AUTO_MERGE
+  SUGGESTED_MERGE
 }
 
 enum Direction {
   INBOUND
   OUTBOUND
+}
+
+enum DuplicateStatus {
+  PENDING
+  AUTO_MERGED
+  DISMISSED
 }
 
 enum EmailType {
@@ -1067,12 +1093,13 @@ enum EmailType {
   other
 }
 
-enum FunctionCallStatus {
+enum EnrichmentStatus {
   PENDING
-  EXECUTING
+  SUBMITTED
+  PROCESSING
   COMPLETED
   FAILED
-  TIMEOUT
+  PARTIALLY_COMPLETED
 }
 
 enum GroupType {
@@ -1096,13 +1123,6 @@ enum InteractionType {
   SMS
   LINKEDIN_MESSAGE
   SOCIAL_MEDIA
-}
-
-enum MessageType {
-  TEXT
-  FUNCTION_CALL
-  FUNCTION_RESULT
-  ERROR
 }
 
 enum PhoneNumberType {

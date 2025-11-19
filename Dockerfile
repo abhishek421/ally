@@ -48,7 +48,9 @@ ENV PATH=/root/.local/bin:$PATH
 COPY . .
 
 # Generate Prisma client during build
-RUN python -m prisma generate
+# Cache Prisma CLI downloads to avoid re-downloading on every build
+RUN --mount=type=cache,target=/root/.cache/prisma \
+    python -m prisma generate
 
 # Expose the FastAPI port
 EXPOSE 8000
