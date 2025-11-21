@@ -18,9 +18,13 @@ class GraphState(TypedDict):
     conversation_id: NotRequired[str]
     conversation_history: NotRequired[list[Message]]
     context_summary: NotRequired[str]
+    workspace_id: NotRequired[str]
 
     # Intermediate results
     query_builder_result: NotRequired[str]
+    query_processing_result: NotRequired[str]
+    query_processing_metadata: NotRequired[dict[str, Any]]
+    tool_calls: NotRequired[list[dict[str, Any]]]
 
     # Metadata
     execution_path: Annotated[list[str], lambda x, y: x + [y] if y else x]

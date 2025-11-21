@@ -4,7 +4,7 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from ..nodes import query_builder_node
+from ..nodes import query_builder_node, query_processing_node
 from ..utils.exceptions import GraphExecutionError
 from ..utils.logger import get_logger
 from .state import GraphState
@@ -26,15 +26,17 @@ def build_graph() -> Any:
 
         # Add nodes to the graph
         graph.add_node("query_builder", query_builder_node)
+        graph.add_node("query_processing", query_processing_node)
 
-        # Define the flow: query_builder -> END
+        # Define the flow: query_builder -> query_processing -> END
         graph.set_entry_point("query_builder")
-        graph.add_edge("query_builder", END)
+        graph.add_edge("query_builder", "query_processing")
+        graph.add_edge("query_processing", END)
 
         # Compile the graph
         app = graph.compile()
 
-        logger.info("Graph built successfully", nodes=["query_builder"])
+        logger.info("Graph built successfully", nodes=["query_builder", "query_processing"])
 
         return app
 
