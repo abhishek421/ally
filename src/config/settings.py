@@ -33,6 +33,7 @@ openai_api_key="REDACTED"
     # LLM Configuration
     llm_model: str = "gpt-4.1-nano"
     summary_model: str = "gpt-4o-mini"
+    query_processing_model: str = "gpt-4o"
     llm_context_limit: int = 128000
     context_threshold_percentage: int = 70
 
@@ -47,9 +48,18 @@ openai_api_key="REDACTED"
 
     # Node Configuration
     query_builder_timeout: int = 30
+    query_processing_timeout: int = 60
+    max_react_iterations: int = 10
+    enable_tools: bool = True
 
     # Graph Configuration
     max_iterations: int = 100
+
+    # Database Configuration
+    database_url: Optional[str] = None
+
+    # Workspace Configuration
+    workspace_id: Optional[str] = None
 
 
 @lru_cache()
