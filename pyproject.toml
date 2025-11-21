@@ -1,0 +1,251 @@
+[project]
+name = "analyst-ai"
+version = "1.0.0"
+description = "CRM AI Copilot - Conversational AI assistant for CRM operations"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Your Team", email = "team@example.com" }
+]
+keywords = ["ai", "crm", "copilot", "langgraph", "fastapi", "assistant"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    # Core Framework
+    "fastapi>=0.109.0,<0.110.0",
+    "uvicorn[standard]>=0.27.0,<0.28.0",
+    "pydantic>=2.5.0,<3.0.0",
+    "pydantic-settings>=2.1.0,<3.0.0",
+    
+    # LangGraph & LangChain
+    "langgraph>=0.0.20,<0.1.0",
+    "langchain-core>=0.1.10,<0.2.0",
+    "langchain-openai>=0.0.5,<0.1.0",
+    
+    # LLM Provider SDKs (multi-provider support)
+    "openai>=1.10.0,<2.0.0",
+    "anthropic>=0.18.0,<1.0.0",
+    "google-generativeai>=0.3.0,<1.0.0",
+    
+    # HTTP Client
+    "httpx>=0.26.0,<0.27.0",
+    
+    # Redis (Session Storage)
+    "redis>=5.0.1,<6.0.0",
+    
+    # Data Processing
+    "python-dateutil>=2.8.2,<3.0.0",
+    
+    # Async Support
+    "asyncio>=3.4.3,<4.0.0",
+]
+
+[project.optional-dependencies]
+# Development dependencies
+dev = [
+    "pytest>=7.4.0,<8.0.0",
+    "pytest-asyncio>=0.21.0,<0.22.0",
+    "pytest-cov>=4.1.0,<5.0.0",
+    "pytest-mock>=3.12.0,<4.0.0",
+    "black>=23.12.0,<24.0.0",
+    "isort>=5.13.0,<6.0.0",
+    "flake8>=7.0.0,<8.0.0",
+    "mypy>=1.8.0,<2.0.0",
+    "pre-commit>=3.6.0,<4.0.0",
+]
+
+# Testing dependencies
+test = [
+    "pytest>=7.4.0,<8.0.0",
+    "pytest-asyncio>=0.21.0,<0.22.0",
+    "pytest-cov>=4.1.0,<5.0.0",
+    "pytest-mock>=3.12.0,<4.0.0",
+    "httpx>=0.26.0,<0.27.0",  # For testing HTTP endpoints
+    "faker>=22.0.0,<23.0.0",  # For generating test data
+]
+
+# Production dependencies (additional monitoring/observability)
+prod = [
+    "sentry-sdk[fastapi]>=1.39.0,<2.0.0",  # Error tracking
+    "prometheus-fastapi-instrumentator>=6.1.0,<7.0.0",  # Metrics
+]
+
+# All optional dependencies
+all = [
+    "analyst-ai[dev,test,prod]",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/analyst-ai"
+Documentation = "https://github.com/yourusername/analyst-ai/docs"
+Repository = "https://github.com/yourusername/analyst-ai"
+Issues = "https://github.com/yourusername/analyst-ai/issues"
+
+[build-system]
+requires = ["setuptools>=68.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["src"]
+
+[tool.setuptools.package-data]
+src = ["py.typed"]
+
+# ========================================
+# Black Configuration (Code Formatting)
+# ========================================
+[tool.black]
+line-length = 100
+target-version = ['py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+# ========================================
+# isort Configuration (Import Sorting)
+# ========================================
+[tool.isort]
+profile = "black"
+line_length = 100
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+skip_gitignore = true
+
+# ========================================
+# pytest Configuration
+# ========================================
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--cov=src",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "--cov-report=xml",
+]
+asyncio_mode = "auto"
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "e2e: End-to-end tests",
+    "slow: Slow-running tests",
+]
+
+# ========================================
+# Coverage Configuration
+# ========================================
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
+
+# ========================================
+# mypy Configuration (Type Checking)
+# ========================================
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false  # Set to true for stricter checking
+disallow_incomplete_defs = false
+check_untyped_defs = true
+disallow_untyped_decorators = false
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+follow_imports = "normal"
+ignore_missing_imports = true
+strict_optional = true
+pretty = true
+show_error_codes = true
+show_error_context = true
+
+[[tool.mypy.overrides]]
+module = [
+    "langgraph.*",
+    "langchain_core.*",
+    "redis.*",
+]
+ignore_missing_imports = true
+
+# ========================================
+# Ruff Configuration (Fast Linting)
+# ========================================
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+]
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"]  # Allow unused imports in __init__.py
+
+[tool.ruff.isort]
+known-first-party = ["src"]
+
+# ========================================
+# Bandit Configuration (Security Linting)
+# ========================================
+[tool.bandit]
+exclude_dirs = ["tests", "test_*.py"]
+tests = ["B201", "B301"]
+skips = ["B101", "B601"]
+

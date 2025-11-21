@@ -1,61 +1,51 @@
-# syntax=docker/dockerfile:1
-# Multi-stage build for smaller image size
-FROM python:3.11-slim AS builder
+# Build stage
+FROM python:3.13-slim as builder
 
-# Set working directory
 WORKDIR /app
 
-# Install system dependencies required for building Python packages
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    libpq-dev
+# Install build dependencies
+# git is often needed for installing deps from git
+# build-essential/gcc for compiling C extensions if wheels aren't available
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better layer caching
+# Copy requirements first to leverage layer caching
 COPY requirements.txt .
 
-# Install Python dependencies with cache mount for speed
-# Cache mount dramatically speeds up rebuilds by reusing downloaded packages
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --upgrade pip && \
-    pip install --user -r requirements.txt
+# Install python dependencies
+# --user install to easy copy to final stage
+# --no-warn-script-location to suppress path warnings
+RUN pip install --no-cache-dir --user -r requirements.txt
 
 # Final stage
-FROM python:3.11-slim
+FROM python:3.13-slim
 
-# Set working directory
 WORKDIR /app
 
-# Install runtime dependencies including Node.js for Prisma
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y \
-    libpq5 \
-    curl \
-    libatomic1 \
-    nodejs \
-    npm
-
-# Copy Python dependencies from builder
+# Copy installed packages from builder
 COPY --from=builder /root/.local /root/.local
 
-# Make sure scripts in .local are usable
+# Make sure scripts in .local are usable:
 ENV PATH=/root/.local/bin:$PATH
 
 # Copy application code
-COPY . .
+COPY src/ ./src/
+# We might need these if they are referenced, but usually src is enough if main is there.
+# The project structure has src/main.py, so usually we run from root.
 
-# Generate Prisma client during build
-RUN python -m prisma generate
+# Set environment variables to optimize python execution in container
+# PYTHONDONTWRITEBYTECODE: Prevents Python from writing pyc files
+# PYTHONUNBUFFERED: Ensures console output is streamed directly (good for logs)
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-# Expose the FastAPI port
+# Port configuration
+ENV PORT=8000
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+# Run the application
+# Using uvicorn directly. 
+# For EKS/production, this is often wrapped in a shell script or just the command.
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
-# Start the application (Prisma client already generated during build)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

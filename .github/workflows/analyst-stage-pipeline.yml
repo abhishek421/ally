@@ -62,7 +62,7 @@ jobs:
 
           # Generate date tag in DDMMYYYY format (e.g., 25122024)
           DATE_TAG=$(date +'%d%m%Y')
-          IMAGE_TAG="analyst_dev_${DATE_TAG}"
+          IMAGE_TAG="analyst_stage_${DATE_TAG}"
           ECR_IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}"
 
           echo "🔨 Building image with BuildKit cache: ${ECR_IMAGE}:${IMAGE_TAG}"
