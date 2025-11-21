@@ -23,6 +23,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+class HealthCheckFilter(logging.Filter):
+    """Filter out health check endpoint logs"""
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.getMessage().find("/health") == -1
+
+
+# Apply filter to uvicorn access logger
+logging.getLogger("uvicorn.access").addFilter(HealthCheckFilter())
+
+
 async def initialize_application():
     """
     Initialize application (ENV-only configuration).

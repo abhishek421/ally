@@ -140,7 +140,7 @@ class PeopleTool(BaseTool):
                     "first_name": first_name,  # Keep for backwards compatibility
                     "last_name": last_name,    # Keep for backwards compatibility
                     "job_title": person.jobTitle,
-                    "privacy_level": person.privacyLevel.value if person.privacyLevel else None,
+                    "privacy_level": person.privacyLevel.value if hasattr(person.privacyLevel, 'value') else person.privacyLevel,
                     "company_name": company_name,  # New: extracted company names
                     "description": person.description,
                     "date_of_birth": person.dateOfBirth.isoformat() if person.dateOfBirth else None,
@@ -266,7 +266,7 @@ class PeopleTool(BaseTool):
                     "first_name": first_name,  # Keep for backwards compatibility
                     "last_name": last_name,    # Keep for backwards compatibility
                     "job_title": person.jobTitle,
-                    "privacy_level": person.privacyLevel.value if person.privacyLevel else None,
+                    "privacy_level": person.privacyLevel.value if hasattr(person.privacyLevel, 'value') else person.privacyLevel,
                     "company_name": company_name,  # New: extracted company names
                     "description": person.description,
                     "date_of_birth": person.dateOfBirth.isoformat() if person.dateOfBirth else None,

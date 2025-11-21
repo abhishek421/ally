@@ -51,10 +51,25 @@ async def save_message_with_blocks(
 
             # Build block data with proper types
             # Use messageId directly (required field in schema)
+            
+            # Handle BlockType compatibility
+            # The DB enum only supports TEXT, TABLE, THINKING
+            # If we have ENTITY_LIST or others, we map to TABLE/TEXT and store original type in metadata
+            block_type_value = block.block_type.value
+            metadata = block.metadata or {}
+            
+            if block.block_type not in [BlockType.TEXT, BlockType.TABLE, BlockType.THINKING]:
+                # Map unsupported types to TEXT (safe fallback)
+                block_type_value = BlockType.TEXT.value
+                metadata["original_block_type"] = block.block_type.value
+                
+                # If it's structured data (ENTITY_LIST), TABLE might be better but content is NDJSON
+                # so TEXT is safer to avoid CSV parsing errors in older clients
+            
             create_data = {
                 "id": block.block_id,
                 "messageId": message_id,
-                "blockType": block.block_type.value,
+                "blockType": block_type_value,
                 "content": str(block.content),
                 "order": block.order,
                 "createdAt": datetime.utcnow()
@@ -63,12 +78,12 @@ async def save_message_with_blocks(
             # Only add metadata if it's not None and is a valid NON-EMPTY dict
             # Prisma JSON fields need to be wrapped with Json() type
             # We should NOT include the field at all if it's None or empty
-            if block.metadata is not None:
-                if isinstance(block.metadata, dict) and block.metadata:  # Only add if non-empty dict
+            if metadata:
+                if isinstance(metadata, dict):  # Only add if non-empty dict
                     # Wrap with Json() type for Prisma Python client
-                    create_data["metadata"] = Json(block.metadata)
-                elif not isinstance(block.metadata, dict):
-                    logger.warning(f"Block {block.block_id} - Invalid metadata type: {type(block.metadata)}, skipping")
+                    create_data["metadata"] = Json(metadata)
+                elif not isinstance(metadata, dict):
+                    logger.warning(f"Block {block.block_id} - Invalid metadata type: {type(metadata)}, skipping")
 
             # Add entity mentions if present and valid NON-EMPTY list
             # Prisma JSON fields need to be wrapped with Json() type
@@ -121,17 +136,33 @@ async def get_message_blocks(message_id: str) -> List[Block]:
             order={"order": "asc"}
         )
 
-        return [
-            Block(
-                block_id=block.id,
-                block_type=BlockType(block.blockType),
-                content=block.content,
-                order=block.order,
-                metadata=block.metadata if block.metadata else None,
-                entity_mentions=block.entityMentions if hasattr(block, 'entityMentions') and block.entityMentions else None
+        result_blocks = []
+        for block in blocks:
+            # Restore original block type if present in metadata
+            block_type = BlockType(block.blockType)
+            metadata = block.metadata if block.metadata else None
+            
+            if metadata and isinstance(metadata, dict) and "original_block_type" in metadata:
+                try:
+                    original_type = metadata["original_block_type"]
+                    # Verify it's a valid enum value
+                    block_type = BlockType(original_type)
+                except Exception:
+                    # Keep DB type if invalid/unknown
+                    pass
+            
+            result_blocks.append(
+                Block(
+                    block_id=block.id,
+                    block_type=block_type,
+                    content=block.content,
+                    order=block.order,
+                    metadata=metadata,
+                    entity_mentions=block.entityMentions if hasattr(block, 'entityMentions') and block.entityMentions else None
+                )
             )
-            for block in blocks
-        ]
+
+        return result_blocks
 
     except Exception as e:
         logger.error(f"Failed to retrieve blocks for message {message_id}: {e}")

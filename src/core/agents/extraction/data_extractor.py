@@ -238,13 +238,97 @@ class DataExtractorAgent:
         # Build context string if available
         context_str = ""
         if context_messages and len(context_messages) > 0:
-            context_lines = ["Previous conversation context:"]
+            context_lines = ["Previous conversation context (with all blocks):"]
+            
             for msg in context_messages[-5:]:  # Last 5 messages for context
                 role = msg.get("role", "UNKNOWN")
-                content = msg.get("content", "")
-                context_lines.append(f"{role}: {content}")
+                blocks = msg.get("blocks", [])
+                
+                context_lines.append(f"\n{role}:")
+                
+                # Include ALL blocks from the message
+                for block in blocks:
+                    block_type = block.get("block_type", "UNKNOWN")
+                    content = block.get("content", "")
+                    
+                    if block_type == "TEXT":
+                        # Include text content
+                        context_lines.append(f"  [TEXT] {content}")
+                    
+                    elif block_type == "TABLE":
+                        # Include table data (truncate if too long)
+                        if content:
+                            lines = content.split('\n')
+                            if len(lines) > 10:
+                                # Include header + first few rows + summary
+                                preview = '\n    '.join(lines[:10])
+                                context_lines.append(f"  [TABLE] {len(lines)-1} rows:")
+                                context_lines.append(f"    {preview}")
+                                context_lines.append(f"    ... ({len(lines)-10} more rows)")
+                            else:
+                                # Include full table
+                                formatted_content = '\n    '.join(lines)
+                                context_lines.append(f"  [TABLE]:")
+                                context_lines.append(f"    {formatted_content}")
+                    
+                    elif block_type == "ENTITY_LIST":
+                        # Parse NDJSON and show entity IDs/names
+                        if content:
+                            try:
+                                entities = []
+                                for line in content.strip().split('\n'):
+                                    if line:
+                                        entity = json.loads(line)
+                                        entity_id = entity.get("id", "")
+                                        entity_name = entity.get("name", "")
+                                        entities.append(f"{entity_name} (ID: {entity_id})")
+                                
+                                metadata = block.get("metadata", {})
+                                entity_type = metadata.get("entity_type", "entities")
+                                context_lines.append(f"  [ENTITY_LIST] {len(entities)} {entity_type}:")
+                                # Show all entities with IDs
+                                for entity in entities:
+                                    context_lines.append(f"    - {entity}")
+                            except Exception as e:
+                                self._logger.warning(f"Failed to parse ENTITY_LIST block: {e}")
+                                context_lines.append(f"  [ENTITY_LIST] (parse error)")
+                    
+                    elif block_type == "THINKING":
+                        # Skip thinking blocks to reduce noise
+                        continue
+                    
+                    else:
+                        # Unknown block type
+                        context_lines.append(f"  [{block_type}] {content[:100]}...")
+                
+                # Also extract structured metadata for conversation state
+                if role == "ASSISTANT":
+                    metadata = msg.get("metadata") or {}
+                    query_context = metadata.get("query_context", {})
+                    result_summary = query_context.get("result_summary", {})
+                    
+                    # Add summary info if not already visible in blocks
+                    if result_summary and not any(b.get("block_type") == "ENTITY_LIST" for b in blocks):
+                        context_lines.append("  [METADATA] Entities in result:")
+                        
+                        for tool_name, tool_data in result_summary.items():
+                            if isinstance(tool_data, dict):
+                                if "company_names" in tool_data and "company_ids" in tool_data:
+                                    company_names = tool_data["company_names"]
+                                    company_ids = tool_data["company_ids"]
+                                    context_lines.append(f"    - Companies: {', '.join([f'{name} (ID: {cid})' for name, cid in zip(company_names, company_ids)])}")
+                                
+                                if "people_names" in tool_data and "people_ids" in tool_data:
+                                    people_names = tool_data["people_names"]
+                                    people_ids = tool_data["people_ids"]
+                                    context_lines.append(f"    - People: {', '.join([f'{name} (ID: {pid})' for name, pid in zip(people_names, people_ids)])}")
+                                
+                                if "email_ids" in tool_data:
+                                    email_ids = tool_data["email_ids"]
+                                    context_lines.append(f"    - Emails: {len(email_ids)} messages")
+            
             context_str = "\n".join(context_lines)
-            self._logger.debug(f"Using {len(context_messages)} context messages for reference resolution")
+            self._logger.debug(f"Using {len(context_messages)} context messages with all blocks for reference resolution")
 
         # Build entity mentions context if available
         entity_context_str = ""
@@ -271,7 +355,44 @@ class DataExtractorAgent:
 
         # Add conversation context
         if context_str:
-            prompt = f"{base_prompt}\n\nCONVERSATION CONTEXT:\n{context_str}\n\nIMPORTANT: If the query contains references like 'the first one', 'that company', 'the second one', etc., use the context above to resolve what they refer to. For example, if previous messages mention companies, 'the first one' refers to the first company from the previous results. Extract the specific name, ID, or identifier from the context and use it in your tool calls."
+            prompt = f"""{base_prompt}
+
+CONVERSATION CONTEXT:
+{context_str}
+
+CRITICAL INSTRUCTIONS FOR FOLLOW-UP QUERIES:
+When the query contains references to previous results (e.g., "them", "those", "which of them", "the first one"), you MUST:
+
+1. **Identify the reference**: Look for words like "them", "those", "these", "which of them", "the first one", "that company", etc.
+
+2. **Find the entities in context**: Look at the "Entities returned" section above to see what companies, people, or emails were previously mentioned with their IDs.
+
+3. **Use the entity IDs**: When filtering or searching the previous results:
+   - If the query asks to filter previous people (e.g., "which of them work at OpenAI"), use the people IDs from context
+   - If the query asks about a specific entity (e.g., "the first one"), extract its ID from context
+   - If the query references "that company", use the company ID from context
+
+4. **Create the right tool calls**:
+   - For "which of [people] work at [Company]": 
+     * First, search for the company to get its company_id
+     * Then, use people.get_by_id for EACH person ID from context to check if they're linked to that company
+     * OR use people.search with company_id and then filter results to only include the person IDs from context
+   - For "show me emails from [them]":
+     * Use the person IDs from context in email.search queries
+   - For ordinal references ("the first one"):
+     * Extract the first entity's ID from the context and use it
+
+EXAMPLES:
+- Query: "which of them work with OpenAI?" (after listing 9 people)
+  → Context shows: People: Alice (ID: p1), Bob (ID: p2), ...
+  → Solution: Search for "OpenAI" company, then filter the 9 people IDs by checking which ones have that company_id
+
+- Query: "show me the first one" (after listing companies)  
+  → Context shows: Companies: Acme (ID: c1), ...
+  → Solution: Use company.get_by_id with c1
+
+Remember: The user is asking about entities from the PREVIOUS conversation turn, not starting fresh!
+"""
         else:
             prompt = base_prompt
         
@@ -676,12 +797,16 @@ class DataExtractorAgent:
 
     async def _execute_tools_async(self, tool_calls: List[Dict], workspace_id: str, user_id: str) -> List[Dict[str, Any]]:
         """
-        Execute tools sequentially with parameter resolution support
+        Execute tools with intelligent parallel/sequential execution based on dependencies
 
-        This method now supports dependent tool calls where later tools can reference
-        results from earlier tools using placeholder syntax like:
+        This method analyzes tool calls to identify:
+        1. Independent calls that can run in parallel (marked with can_run_parallel: true)
+        2. Dependent calls that need sequential execution (use placeholders)
+
+        Dependent tool calls can reference results from earlier tools using placeholder syntax:
         - <company_id_from_previous_call>
         - <person_id_from_previous_call>
+        - <id_from_previous_call>
 
         Args:
             tool_calls: List of tool call specifications
@@ -693,107 +818,231 @@ class DataExtractorAgent:
         """
         results = []
 
-        for tool_index, tool_call in enumerate(tool_calls):
-            tool_name = tool_call.get("tool")
-            query_type_str = tool_call.get("query_type", "search")
-            params = tool_call.get("params", {})
+        # Group tool calls into batches based on dependencies
+        batches = self._group_into_execution_batches(tool_calls)
+        
+        self._logger.info(f"Grouped {len(tool_calls)} tool calls into {len(batches)} execution batch(es)")
 
-            if not tool_name:
-                self._logger.warning(f"Skipping tool call with no tool name: {tool_call}")
-                continue
-
-            try:
-                # Resolve parameters using previous results (for dependent tool calls)
-                resolved_params = self._resolve_parameters(params, results, tool_index)
-
-                # Check if parameter resolution failed (None means critical params failed)
-                if resolved_params is None:
-                    # Critical parameters failed to resolve
-                    self._logger.error(
-                        f"Tool {tool_index} ({tool_name}): Critical required parameters could not be resolved. "
-                        f"This likely means a previous tool call (e.g., company/person search) returned no results. "
-                        f"Skipping this tool call."
-                    )
-                    results.append({
-                        "tool": tool_name,
-                        "query_type": query_type_str,
-                        "result": None,
-                        "success": False,
-                        "error": "Required parameters (person_id, company_id, etc.) could not be resolved from previous tool results. The dependent entity may not exist in the system."
-                    })
-                    continue
-
-                # Also check if all params are empty (edge case)
-                if not resolved_params and params:
-                    # All parameters were placeholders and none could be resolved
-                    self._logger.error(
-                        f"Tool {tool_index} ({tool_name}): All parameters are unresolved placeholders. "
-                        f"Skipping this tool call."
-                    )
-                    results.append({
-                        "tool": tool_name,
-                        "query_type": query_type_str,
-                        "result": None,
-                        "success": False,
-                        "error": "Could not resolve any parameter placeholders from previous tool results"
-                    })
-                    continue
-
-                # Convert string query_type to enum
-                query_type = QueryType(query_type_str.lower())
-
-                # Normalize parameters (fix enum cases, etc.)
-                normalized_params = self._normalize_parameters(resolved_params)
-
-                # Execute tool with resolved and normalized parameters
-                result = await self._execute_single_tool(
-                    tool_name=tool_name,
-                    query_type=query_type,
-                    params=normalized_params,  # Use normalized parameters
-                    workspace_id=workspace_id,
-                    user_id=user_id
+        # Execute each batch (parallel within batch, sequential across batches)
+        for batch_index, batch in enumerate(batches):
+            self._logger.info(f"Executing batch {batch_index + 1}/{len(batches)} with {len(batch)} tool(s)")
+            
+            if len(batch) == 1:
+                # Single tool in batch - execute normally
+                tool_index, tool_call = batch[0]
+                result = await self._execute_single_tool_with_resolution(
+                    tool_call, tool_index, results, workspace_id, user_id
                 )
-
-                # NEW: Log tool execution reasoning
-                self.reasoning_traces.append({
-                    "step": f"execute_{tool_name}",
-                    "timestamp": datetime.now().isoformat(),
-                    "tool": tool_name,
-                    "query_type": query_type_str,
-                    "params": {k: v for k, v in resolved_params.items() if k not in ['workspace_id', 'user_id']},
-                    "success": result.success if hasattr(result, 'success') else False,
-                    "result_count": self._count_results(result) if result else 0,
-                    "error": result.error if hasattr(result, 'error') and result.error else None
-                })
-
-                results.append({
-                    "tool": tool_name,
-                    "query_type": query_type_str,
-                    "result": result,
-                    "success": result.success if hasattr(result, 'success') else False,
-                    "error": result.error if hasattr(result, 'error') and result.error else None
-                })
+                results.append(result)
+            else:
+                # Multiple independent tools - execute in parallel
+                self._logger.info(f"Executing {len(batch)} independent tools in parallel")
                 
-            except ValueError as e:
-                self._logger.error(f"Invalid query_type '{query_type_str}': {e}")
-                results.append({
-                    "tool": tool_name,
-                    "query_type": query_type_str,
-                    "result": None,
-                    "success": False,
-                    "error": f"Invalid query_type: {e}"
-                })
-            except Exception as e:
-                self._logger.exception(f"Error executing tool {tool_name}: {e}")
-                results.append({
-                    "tool": tool_name,
-                    "query_type": query_type_str,
-                    "result": None,
-                    "success": False,
-                    "error": str(e)
-                })
+                # Create tasks for parallel execution
+                tasks = []
+                for tool_index, tool_call in batch:
+                    task = self._execute_single_tool_with_resolution(
+                        tool_call, tool_index, results, workspace_id, user_id
+                    )
+                    tasks.append((tool_index, task))
+                
+                # Execute all tasks in parallel
+                parallel_results = await asyncio.gather(*[task for _, task in tasks], return_exceptions=True)
+                
+                # Collect results (preserving order)
+                for (tool_index, _), result in zip(tasks, parallel_results):
+                    if isinstance(result, Exception):
+                        self._logger.error(f"Tool {tool_index} failed in parallel execution: {result}")
+                        # Create error result
+                        tool_call = tool_calls[tool_index]
+                        results.append({
+                            "tool": tool_call.get("tool"),
+                            "query_type": tool_call.get("query_type", "search"),
+                            "result": None,
+                            "success": False,
+                            "error": str(result)
+                        })
+                    else:
+                        results.append(result)
         
         return results
+
+    def _group_into_execution_batches(self, tool_calls: List[Dict]) -> List[List[tuple]]:
+        """
+        Group tool calls into execution batches based on dependencies.
+        
+        Returns list of batches, where each batch is a list of (index, tool_call) tuples.
+        Tools in the same batch can run in parallel.
+        Batches must run sequentially.
+        
+        Args:
+            tool_calls: List of tool call specifications
+            
+        Returns:
+            List of batches, each batch contains (tool_index, tool_call) tuples
+        """
+        batches = []
+        current_batch = []
+        
+        for tool_index, tool_call in enumerate(tool_calls):
+            # Check if this tool has parameter dependencies (placeholders)
+            params = tool_call.get("params", {})
+            has_placeholders = self._has_placeholder_params(params)
+            
+            # Check if tool is marked as parallel-safe
+            can_run_parallel = tool_call.get("can_run_parallel", False)
+            
+            # If tool has dependencies OR is not marked parallel-safe, start new batch
+            if has_placeholders or (current_batch and not can_run_parallel):
+                # Finalize current batch
+                if current_batch:
+                    batches.append(current_batch)
+                    current_batch = []
+                
+                # This tool goes in its own batch (or starts a new one)
+                current_batch.append((tool_index, tool_call))
+                
+                # If it has dependencies, finalize immediately
+                if has_placeholders:
+                    batches.append(current_batch)
+                    current_batch = []
+            else:
+                # Add to current batch
+                current_batch.append((tool_index, tool_call))
+        
+        # Finalize last batch
+        if current_batch:
+            batches.append(current_batch)
+        
+        return batches
+    
+    def _has_placeholder_params(self, params: Dict[str, Any]) -> bool:
+        """Check if params contain any placeholder values"""
+        if not params:
+            return False
+        
+        for value in params.values():
+            if isinstance(value, str) and value.startswith('<') and value.endswith('>'):
+                return True
+        
+        return False
+
+    async def _execute_single_tool_with_resolution(
+        self,
+        tool_call: Dict,
+        tool_index: int,
+        previous_results: List[Dict[str, Any]],
+        workspace_id: str,
+        user_id: str
+    ) -> Dict[str, Any]:
+        """
+        Execute a single tool call with parameter resolution.
+        
+        This is extracted from the main loop to support both sequential and parallel execution.
+        """
+        tool_name = tool_call.get("tool")
+        query_type_str = tool_call.get("query_type", "search")
+        params = tool_call.get("params", {})
+
+        if not tool_name:
+            self._logger.warning(f"Skipping tool call with no tool name: {tool_call}")
+            return {
+                "tool": "unknown",
+                "query_type": query_type_str,
+                "result": None,
+                "success": False,
+                "error": "No tool name provided"
+            }
+
+        try:
+            # Resolve parameters using previous results (for dependent tool calls)
+            resolved_params = self._resolve_parameters(params, previous_results, tool_index)
+
+            # Check if parameter resolution failed (None means critical params failed)
+            if resolved_params is None:
+                # Critical parameters failed to resolve
+                self._logger.error(
+                    f"Tool {tool_index} ({tool_name}): Critical required parameters could not be resolved. "
+                    f"This likely means a previous tool call (e.g., company/person search) returned no results. "
+                    f"Skipping this tool call."
+                )
+                return {
+                    "tool": tool_name,
+                    "query_type": query_type_str,
+                    "result": None,
+                    "success": False,
+                    "error": "Required parameters (person_id, company_id, etc.) could not be resolved from previous tool results. The dependent entity may not exist in the system."
+                }
+
+            # Also check if all params are empty (edge case)
+            if not resolved_params and params:
+                # All parameters were placeholders and none could be resolved
+                self._logger.error(
+                    f"Tool {tool_index} ({tool_name}): All parameters are unresolved placeholders. "
+                    f"Skipping this tool call."
+                )
+                return {
+                    "tool": tool_name,
+                    "query_type": query_type_str,
+                    "result": None,
+                    "success": False,
+                    "error": "Could not resolve any parameter placeholders from previous tool results"
+                }
+
+            # Convert string query_type to enum
+            query_type = QueryType(query_type_str.lower())
+
+            # Normalize parameters (fix enum cases, etc.)
+            normalized_params = self._normalize_parameters(resolved_params)
+
+            # Execute tool with resolved and normalized parameters
+            result = await self._execute_single_tool(
+                tool_name=tool_name,
+                query_type=query_type,
+                params=normalized_params,  # Use normalized parameters
+                workspace_id=workspace_id,
+                user_id=user_id
+            )
+
+            # NEW: Log tool execution reasoning
+            self.reasoning_traces.append({
+                "step": f"execute_{tool_name}",
+                "timestamp": datetime.now().isoformat(),
+                "tool": tool_name,
+                "query_type": query_type_str,
+                "params": {k: v for k, v in resolved_params.items() if k not in ['workspace_id', 'user_id']},
+                "success": result.success if hasattr(result, 'success') else False,
+                "result_count": self._count_results(result) if result else 0,
+                "error": result.error if hasattr(result, 'error') and result.error else None
+            })
+
+            return {
+                "tool": tool_name,
+                "query_type": query_type_str,
+                "result": result,
+                "success": result.success if hasattr(result, 'success') else False,
+                "error": result.error if hasattr(result, 'error') and result.error else None
+            }
+            
+        except ValueError as e:
+            self._logger.error(f"Invalid query_type '{query_type_str}': {e}")
+            return {
+                "tool": tool_name,
+                "query_type": query_type_str,
+                "result": None,
+                "success": False,
+                "error": f"Invalid query_type: {e}"
+            }
+        except Exception as e:
+            self._logger.exception(f"Error executing tool {tool_name}: {e}")
+            return {
+                "tool": tool_name,
+                "query_type": query_type_str,
+                "result": None,
+                "success": False,
+                "error": str(e)
+            }
+
     
     async def _execute_single_tool(
         self,

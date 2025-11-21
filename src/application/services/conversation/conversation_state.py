@@ -9,6 +9,7 @@ from collections import deque
 from threading import Lock
 from datetime import datetime
 import logging
+import json
 
 
 class ConversationState:
@@ -282,19 +283,19 @@ class ConversationState:
         Rebuild conversation state from previous conversation messages.
 
         Args:
-            messages: List of conversation messages with role, content, and metadata
+            messages: List of conversation messages with role, blocks, and metadata
                      Messages should be in chronological order (oldest first)
 
         Example:
             messages = [
                 {
                     "role": "USER",
-                    "content": "Show me drone companies",
-                    "metadata": {"query_context": {...}}
+                    "blocks": [...],
+                    "metadata": None
                 },
                 {
                     "role": "ASSISTANT",
-                    "content": "Here are the companies...",
+                    "blocks": [...],
                     "metadata": {"query_context": {"result_summary": {...}}}
                 }
             ]
@@ -309,55 +310,94 @@ class ConversationState:
 
             # Process each assistant message to extract entities
             for msg in messages:
-                # Only process assistant messages with metadata
+                # Only process assistant messages
                 if msg.get("role") != "ASSISTANT":
                     continue
-
-                metadata = msg.get("metadata") or {}
-                query_context = metadata.get("query_context", {})
-                result_summary = query_context.get("result_summary", {})
 
                 # Increment turn for each assistant message
                 self.current_turn += 1
 
-                # Extract entities from result_summary
-                for tool_name, tool_summary in result_summary.items():
-                    if not isinstance(tool_summary, dict):
-                        continue
+                # Method 1: Extract from ENTITY_LIST blocks (preferred - most accurate)
+                blocks = msg.get("blocks", [])
+                for block in blocks:
+                    if block.get("block_type") == "ENTITY_LIST":
+                        content = block.get("content", "")
+                        metadata = block.get("metadata", {})
+                        entity_type = metadata.get("entity_type", "")
+                        
+                        # Parse NDJSON
+                        try:
+                            for line in content.strip().split('\n'):
+                                if line:
+                                    entity = json.loads(line)
+                                    entity_id = entity.get("id", "")
+                                    entity_name = entity.get("name", "")
+                                    
+                                    if entity_type == "companies":
+                                        self.companies.append({
+                                            "id": entity_id,
+                                            "name": entity_name,
+                                            "turn_number": self.current_turn
+                                        })
+                                    elif entity_type == "people":
+                                        self.people.append({
+                                            "id": entity_id,
+                                            "name": entity_name,
+                                            "turn_number": self.current_turn
+                                        })
+                        except Exception as e:
+                            self._logger.warning(f"Failed to parse ENTITY_LIST for state rebuild: {e}")
 
-                    # Extract companies
-                    if "company_names" in tool_summary and "company_ids" in tool_summary:
-                        company_names = tool_summary["company_names"]
-                        company_ids = tool_summary["company_ids"]
-                        for idx, name in enumerate(company_names):
-                            company_id = company_ids[idx] if idx < len(company_ids) else None
-                            self.companies.append({
-                                "id": company_id,
-                                "name": name,
-                                "turn_number": self.current_turn
-                            })
+                # Method 2: Fallback to metadata (for backwards compatibility or TABLE blocks)
+                metadata = msg.get("metadata") or {}
+                query_context = metadata.get("query_context", {})
+                result_summary = query_context.get("result_summary", {})
 
-                    # Extract people
-                    if "people_names" in tool_summary and "people_ids" in tool_summary:
-                        people_names = tool_summary["people_names"]
-                        people_ids = tool_summary["people_ids"]
-                        for idx, name in enumerate(people_names):
-                            person_id = people_ids[idx] if idx < len(people_ids) else None
-                            self.people.append({
-                                "id": person_id,
-                                "name": name,
-                                "turn_number": self.current_turn
-                            })
+                if result_summary:
+                    # Extract entities from result_summary
+                    for tool_name, tool_summary in result_summary.items():
+                        if not isinstance(tool_summary, dict):
+                            continue
 
-                    # Extract emails
-                    if "email_ids" in tool_summary:
-                        email_ids = tool_summary["email_ids"]
-                        for email_id in email_ids:
-                            self.emails.append({
-                                "message_id": email_id,
-                                "subject": "",  # Subject not stored in compact metadata
-                                "turn_number": self.current_turn
-                            })
+                        # Extract companies (only if not already extracted from ENTITY_LIST)
+                        if "company_names" in tool_summary and "company_ids" in tool_summary:
+                            company_names = tool_summary["company_names"]
+                            company_ids = tool_summary["company_ids"]
+                            # Check if we already have companies from this turn
+                            turn_companies = [c for c in self.companies if c["turn_number"] == self.current_turn]
+                            if not turn_companies:
+                                for idx, name in enumerate(company_names):
+                                    company_id = company_ids[idx] if idx < len(company_ids) else None
+                                    self.companies.append({
+                                        "id": company_id,
+                                        "name": name,
+                                        "turn_number": self.current_turn
+                                    })
+
+                        # Extract people (only if not already extracted from ENTITY_LIST)
+                        if "people_names" in tool_summary and "people_ids" in tool_summary:
+                            people_names = tool_summary["people_names"]
+                            people_ids = tool_summary["people_ids"]
+                            # Check if we already have people from this turn
+                            turn_people = [p for p in self.people if p["turn_number"] == self.current_turn]
+                            if not turn_people:
+                                for idx, name in enumerate(people_names):
+                                    person_id = people_ids[idx] if idx < len(people_ids) else None
+                                    self.people.append({
+                                        "id": person_id,
+                                        "name": name,
+                                        "turn_number": self.current_turn
+                                    })
+
+                        # Extract emails
+                        if "email_ids" in tool_summary:
+                            email_ids = tool_summary["email_ids"]
+                            for email_id in email_ids:
+                                self.emails.append({
+                                    "message_id": email_id,
+                                    "subject": "",  # Subject not stored in compact metadata
+                                    "turn_number": self.current_turn
+                                })
 
             # Log rebuild results
             self._logger.info(
@@ -367,3 +407,6 @@ class ConversationState:
             if self.companies:
                 company_names = [c["name"] for c in list(self.companies)[:5]]
                 self._logger.info(f"Companies in state: {company_names}")
+            if self.people:
+                people_names = [p["name"] for p in list(self.people)[:5]]
+                self._logger.info(f"People in state: {people_names}")

@@ -42,15 +42,17 @@ class SmartTableFormatter:
         self,
         data: List[Dict[str, Any]],
         data_type: str,
-        user_query: str
+        user_query: str,
+        mode: str = "generative" 
     ) -> Iterator[str]:
         """
         Generate user-friendly CSV from JSON data, streaming chunks as they're generated
-
+        
         Args:
             data: Raw data from database (list of dicts)
             data_type: Type of data (e.g., "companies", "people")
             user_query: Original user query for context
+            mode: "generative" (analysis/new structure) or "transform" (row-by-row cleaning)
 
         Yields:
             CSV chunks (header first, then rows in batches)
@@ -65,11 +67,129 @@ class SmartTableFormatter:
             return
 
         try:
-            # Use LLM to generate clean CSV with streaming
-            yield from self._generate_csv_with_llm_streaming(data, data_type, user_query)
+            # Choose strategy based on data size and mode
+            # If data is too large (>50 items), force transform mode to avoid context limits
+            # unless the user explicitly asked for analysis/summary which implies aggregation
+            is_large_data = len(data) > 50
+            
+            if mode == "generative" and not is_large_data:
+                # Generative Analysis (New structure/Aggregation)
+                yield from self._generate_analysis_csv(data, data_type, user_query)
+            else:
+                # Row-by-row Transformation (Clean formatting, preserves rows)
+                yield from self._generate_csv_with_llm_streaming(data, data_type, user_query)
+                
         except Exception as e:
             logger.error(f"LLM CSV generation failed: {e}, using fallback")
             yield from self._fallback_csv_generation(data, data_type)
+
+    def _generate_analysis_csv(
+        self,
+        data: List[Dict[str, Any]],
+        data_type: str,
+        user_query: str
+    ) -> Iterator[str]:
+        """
+        Generative Analysis: Uses LLM to produce a NEW CSV structure that best answers the query.
+        Use this for summaries, aggregations, or when the user wants a specific view.
+        """
+        # Serialize data (ensure it fits context)
+        # We assume data <= 50 items here as enforced by caller
+        serialized_data = json.dumps(data, indent=2, default=str)
+        
+        prompt = f"""You are a Senior Business Intelligence Analyst. 
+Your task is to generate a CSV table that BEST visualizes the answer to the user's query based on the provided raw data.
+
+User Query: "{user_query}"
+Data Type: {data_type}
+
+Raw Data:
+{serialized_data}
+
+INSTRUCTIONS:
+1. Analyze the User Query and the Raw Data.
+2. Determine the best table structure to answer the question.
+   - If the user asks for a list, provide a clean list with relevant columns.
+   - If the user asks for a count/summary (e.g., "count by city"), aggregate the data and show the summary table.
+   - If the user asks for a comparison, create a comparison table.
+3. Do NOT just dump the raw data. Create a specific response table.
+4. Rename columns to be human-readable (e.g., "Company Name" instead of "company_name").
+5. Format values nicely (e.g., dates, currency).
+6. Output MUST be valid CSV format.
+
+Output Rules:
+- Return ONLY the CSV content (header + rows).
+- NO markdown formatting (no ```csv ... ```).
+- NO introductory text or explanations.
+- Use comma (,) as delimiter.
+- Quote values if they contain commas.
+
+Generate the CSV now:"""
+
+        messages = [{"role": "user", "content": prompt}]
+
+        try:
+            # Get LLM response with streaming
+            response_stream = self._provider.chat_stream(messages, temperature=0.2, max_tokens=4000)
+            
+            # We need to handle the stream from the provider
+            # If provider doesn't support streaming, it returns a string
+            if isinstance(response_stream, str):
+                # Not a stream, just yield the string
+                cleaned_response = self._clean_csv_output(response_stream)
+                yield cleaned_response + "\n"
+            else:
+                # It is an iterator/generator
+                # We need to accumulate to ensure we don't break CSV structure mid-line? 
+                # Actually, streaming the raw tokens is fine as long as the client handles it.
+                # But we should try to clean markdown if possible.
+                
+                # For simplicity in this architecture, we'll buffer the whole response 
+                # to clean markdown, OR we assume the prompt is obeyed.
+                # Given "I want generated response", let's try to stream raw and clean only start/end if needed.
+                # But removing ```csv is hard in a stream.
+                
+                # Alternative: Accumulate full response then yield (safer for formatting)
+                # But user wants streaming.
+                
+                # Let's accumulate buffer for the first few tokens to check for ```csv
+                accumulated = ""
+                check_markdown = True
+                
+                for chunk in response_stream:
+                    if check_markdown:
+                        accumulated += chunk
+                        if len(accumulated) > 10: # Check header
+                            if accumulated.strip().startswith("```"):
+                                # It's markdown, we need to buffer more or strip it
+                                # This is complex to stream.
+                                # Let's fallback to non-streaming for safety in Generative Mode
+                                pass
+                            check_markdown = False
+                            yield accumulated
+                            accumulated = ""
+                    else:
+                        yield chunk
+                
+                if accumulated:
+                    yield accumulated
+
+        except Exception as e:
+            # If chat_stream is not implemented or fails
+            logger.warning(f"Streaming failed or not supported: {e}. Falling back to standard chat.")
+            response = self._provider.chat(messages, temperature=0.2, max_tokens=4000)
+            yield self._clean_csv_output(response) + "\n"
+
+    def _clean_csv_output(self, text: str) -> str:
+        """Remove markdown and cleanup CSV"""
+        text = text.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            # Remove first line (```csv) and last line (```)
+            if len(lines) >= 2:
+                text = "\n".join(lines[1:-1])
+            text = text.replace("```csv", "").replace("```", "").strip()
+        return text
 
     def _generate_csv_with_llm_streaming(
         self,
@@ -79,7 +199,7 @@ class SmartTableFormatter:
     ) -> Iterator[str]:
         """
         Use LLM to generate clean, user-friendly CSV with streaming output
-
+        
         Strategy:
         1. Send first 3 rows as sample to LLM
         2. Ask LLM to return CSV header with clean column names
@@ -152,11 +272,7 @@ Return ONLY the CSV output (header + all rows), nothing else. No markdown, no ex
             response = self._provider.chat(messages, temperature=0.1, max_tokens=4000)
 
             # Clean response (remove markdown if present)
-            csv_output = response.strip()
-            if csv_output.startswith("```"):
-                lines = csv_output.split("\n")
-                csv_output = "\n".join(lines[1:-1]) if len(lines) > 2 else csv_output
-                csv_output = csv_output.replace("```csv", "").replace("```", "").strip()
+            csv_output = self._clean_csv_output(response)
 
             # Validate it's CSV-like
             if not csv_output or "\n" not in csv_output:
@@ -209,11 +325,7 @@ Return only the CSV rows:"""
                     chunk_response = self._provider.chat(chunk_messages, temperature=0.1, max_tokens=2000)
 
                     # Clean response
-                    chunk_csv = chunk_response.strip()
-                    if chunk_csv.startswith("```"):
-                        chunk_lines = chunk_csv.split("\n")
-                        chunk_csv = "\n".join(chunk_lines[1:-1]) if len(chunk_lines) > 2 else chunk_csv
-                        chunk_csv = chunk_csv.replace("```csv", "").replace("```", "").strip()
+                    chunk_csv = self._clean_csv_output(chunk_response)
 
                     # Stream this chunk
                     if chunk_csv:

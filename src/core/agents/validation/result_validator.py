@@ -25,7 +25,7 @@ from src.shared.utils.agent_utils import (
     score_reasoning_quality,
     score_data_quantity
 )
-from prompts.reactive_execution_prompts import SEMANTIC_VALIDATION_PROMPT
+from src.shared.prompts.reactive_execution_prompts import SEMANTIC_VALIDATION_PROMPT
 
 
 class ResultValidator:

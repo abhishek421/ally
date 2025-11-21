@@ -19,6 +19,7 @@ Architecture:
 import logging
 import time
 import json
+import re
 from typing import Dict, Any, List, Optional, TypedDict, Literal, Union
 from datetime import datetime
 from uuid import uuid4
@@ -42,6 +43,14 @@ from src.core.agents.registry.models import (
 from src.application.services.conversation.conversation_state import ConversationState
 from src.application.services.blocks.models import StreamEvent, BlockType, Block
 from src.application.services.blocks.smart_table_formatter import get_smart_table_formatter
+from src.application.services.blocks.entity_models import (
+    CompanyEntity,
+    PersonEntity,
+    DealEntity,
+    CompanyReference,
+    GroupReference,
+    EntityType
+)
 
 
 class AgentState(TypedDict):
@@ -60,6 +69,9 @@ class AgentState(TypedDict):
     extraction_result: Dict[str, Any]
     validation_result: Any
     retry_count: int
+    generated_csv: Optional[str]  # LLM-generated CSV response (fallback)
+    primary_entity_type: Optional[str]  # Detected entity type (companies, people, etc.)
+    response_plan: List[Dict[str, Any]]  # LLM-planned response blocks
     final_response: Dict[str, Any]
     agents_executed: List[AgentExecution]
     start_time: float
@@ -68,7 +80,7 @@ class AgentState(TypedDict):
 class OrchestratorAgent:
     """
     Intelligent orchestrator that conditionally uses agents based on query needs
-    
+
     Key Features:
     - Direct responses for simple queries (no agent overhead)
     - Conditional agent usage (only what's needed)
@@ -80,7 +92,7 @@ class OrchestratorAgent:
     def __init__(self, llm_provider: Optional[LLMProvider] = None):
         """
         Initialize OrchestratorAgent
-        
+
         Args:
             llm_provider: LLM provider for agents (optional)
         """
@@ -121,7 +133,8 @@ class OrchestratorAgent:
         workflow.add_node("enrich_context", self.node_enrich_context)
         workflow.add_node("extract_data", self.node_extract_data)
         workflow.add_node("validate_result", self.node_validate_result)
-        workflow.add_node("generate_response", self.node_generate_response)
+        workflow.add_node("generate_query_csv", self.node_generate_query_csv)
+        workflow.add_node("plan_response", self.node_plan_response)
         
         # Add Edges
         workflow.add_edge(START, "decide_strategy")
@@ -137,9 +150,9 @@ class OrchestratorAgent:
             }
         )
         
-        # Direct path -> Response
-        workflow.add_edge("handle_direct", "generate_response")
-        
+        # Direct path -> Response Planning
+        workflow.add_edge("handle_direct", "plan_response")
+
         # Data path -> Enrichment -> Extraction
         workflow.add_edge("enrich_context", "extract_data")
         
@@ -148,9 +161,9 @@ class OrchestratorAgent:
             "extract_data",
             self._route_after_extraction,
             {
-                "simple": "generate_response",
+                "simple": "generate_query_csv",
                 "complex": "validate_result",
-                "clarify": "generate_response" # Pass through to response generation (which handles clarification status)
+                "clarify": "plan_response" # Pass through to response planning (which handles clarification status)
             }
         )
         
@@ -159,14 +172,17 @@ class OrchestratorAgent:
             "validate_result",
             self._route_after_validation,
             {
-                "success": "generate_response",
+                "success": "generate_query_csv",
                 "retry": "extract_data",
-                "clarify": "generate_response"
+                "clarify": "plan_response"
             }
         )
         
+        # After CSV generation -> Response planning
+        workflow.add_edge("generate_query_csv", "plan_response")
+        
         # End
-        workflow.add_edge("generate_response", END)
+        workflow.add_edge("plan_response", END)
         
         return workflow.compile()
 
@@ -196,7 +212,7 @@ class OrchestratorAgent:
         agents_executed = state['agents_executed']
         
         self._logger.info("DIRECT PATH: Handling without data extraction")
-        
+
         # Handle meta queries
         if decision.meta_type:
             agent_start = time.time()
@@ -210,16 +226,16 @@ class OrchestratorAgent:
                 success=True,
                 result_summary=f"Meta query handled: {decision.meta_type}"
             ))
-            
+
             return {
                 "final_response": {
-                    "response": response_text,
-                    "metadata": {"type": f"meta_{decision.meta_type}", "fast_path": True},
-                    "_direct_response": True
+                "response": response_text,
+                "metadata": {"type": f"meta_{decision.meta_type}", "fast_path": True},
+                "_direct_response": True
                 },
                 "agents_executed": agents_executed
             }
-            
+
         # Handle other direct queries
         agent_start = time.time()
         response_text = self._generate_direct_response(user_query)
@@ -232,11 +248,11 @@ class OrchestratorAgent:
             success=True,
             result_summary="Generated direct response"
         ))
-        
+
         return {
             "final_response": {
-                "response": response_text,
-                "_direct_response": True
+            "response": response_text,
+            "_direct_response": True
             },
             "agents_executed": agents_executed
         }
@@ -250,27 +266,27 @@ class OrchestratorAgent:
         if not entity_mentions or not access_token:
             return {"enriched_context": None}
             
-        try:
-            from src.application.services.entity import get_enrichment_service
-            enrichment_service = get_enrichment_service()
+            try:
+                from src.application.services.entity import get_enrichment_service
+                enrichment_service = get_enrichment_service()
 
-            self._logger.info(f"Enriching {len(entity_mentions)} entity mentions with CRM data...")
-            enriched_entities = enrichment_service.enrich_entity_mentions(
-                entity_mentions=entity_mentions,
-                access_token=access_token,
-                workspace_id=workspace_id
-            )
+                self._logger.info(f"Enriching {len(entity_mentions)} entity mentions with CRM data...")
+                enriched_entities = enrichment_service.enrich_entity_mentions(
+                    entity_mentions=entity_mentions,
+                    access_token=access_token,
+                    workspace_id=workspace_id
+                )
 
-            if enriched_entities:
-                context = enrichment_service.format_enriched_entities_for_context(enriched_entities)
-                self._logger.info(f"Enriched {len(enriched_entities)} entities with CRM data")
-                return {"enriched_context": context}
-            else:
-                self._logger.warning("No entities could be enriched")
-                return {"enriched_context": None}
+                if enriched_entities:
+                    context = enrichment_service.format_enriched_entities_for_context(enriched_entities)
+                    self._logger.info(f"Enriched {len(enriched_entities)} entities with CRM data")
+                    return {"enriched_context": context}
+                else:
+                    self._logger.warning("No entities could be enriched")
+                    return {"enriched_context": None}
                 
-        except Exception as e:
-            self._logger.error(f"Entity enrichment failed: {e}", exc_info=True)
+            except Exception as e:
+                self._logger.error(f"Entity enrichment failed: {e}", exc_info=True)
             return {"enriched_context": None}
 
     async def node_extract_data(self, state: AgentState) -> Dict[str, Any]:
@@ -293,7 +309,7 @@ class OrchestratorAgent:
             agents_executed,
             "Data extraction complete"
         )
-        
+
         # Update conversation state
         if state['conversation_state'] and extraction_result:
             try:
@@ -303,7 +319,7 @@ class OrchestratorAgent:
                     state['conversation_state'].update_from_results(extraction_result)
             except Exception as e:
                 self._logger.warning(f"Failed to update conversation state: {e}")
-        
+
         return {
             "extraction_result": extraction_result,
             "agents_executed": agents_executed
@@ -343,49 +359,516 @@ class OrchestratorAgent:
             "retry_count": retry_count + 1
         }
 
-    async def node_generate_response(self, state: AgentState) -> Dict[str, Any]:
-        """Node: Generate final response package"""
-        decision = state['decision']
+    async def node_generate_query_csv(self, state: AgentState) -> Dict[str, Any]:
+        """
+        Node: Generate a CSV response that visualizes the answer to the query
+        
+        This uses LLM to analyze the query and all extracted data, then generates
+        a NEW CSV table structure that best answers the query (not just formatting raw data).
+        """
+        self._logger.info("GENERATE CSV: Creating query-response CSV from extracted data")
+        
+        extraction_result = state.get('extraction_result', {})
+        user_query = state['user_query']
+        
+        # Check if we have meaningful data
+        if not self._has_meaningful_data(extraction_result):
+            self._logger.warning("No meaningful data to generate CSV from")
+            return {"generated_csv": None}
+        
+        # Prepare all extracted data for context
+        all_data = {}
+        for key, value in extraction_result.items():
+            if key.startswith("_"):
+                continue
+                
+            if isinstance(value, list) and len(value) > 0:
+                # Convert Pydantic models to dicts
+                value_as_dicts = []
+                for item in value:
+                    if hasattr(item, 'model_dump'):
+                        value_as_dicts.append(item.model_dump())
+                    elif hasattr(item, 'dict'):
+                        value_as_dicts.append(item.dict())
+                    elif isinstance(item, dict):
+                        value_as_dicts.append(item)
+                else:
+                        # Skip non-serializable items
+                        continue
+                
+                if value_as_dicts:
+                    all_data[key] = value_as_dicts
+        
+        if not all_data:
+            self._logger.warning("No serializable data found for CSV generation")
+            return {"generated_csv": None}
+        
+        # Generate CSV using LLM
+        try:
+            csv_content = await self._generate_query_response_csv(user_query, all_data)
+            return {"generated_csv": csv_content}
+        except Exception as e:
+            self._logger.error(f"Failed to generate query CSV: {e}", exc_info=True)
+            return {"generated_csv": None}
+
+    async def _generate_query_response_csv(self, query: str, all_data: Dict[str, List[Dict]]) -> str:
+        """
+        Use LLM to generate a CSV that answers the query using all extracted data as context
+        
+        This is different from formatting - it generates a NEW table structure that
+        best visualizes the answer to the query.
+        """
+        # Serialize all data for context
+        serialized_data = json.dumps(all_data, indent=2, default=str)
+        
+        # Build comprehensive prompt
+        prompt = f"""You are a Senior Business Intelligence Analyst. Your task is to generate a CSV table that BEST visualizes the answer to the user's query based on the provided raw data.
+
+User Query: "{query}"
+
+Raw Data Extracted:
+{serialized_data}
+
+INSTRUCTIONS:
+1. Analyze the User Query carefully - what is the user really asking for?
+2. Examine ALL the raw data provided (companies, people, emails, interactions, etc.)
+3. Generate a CSV table that DIRECTLY ANSWERS the query:
+   - If the query asks for a list: Create a clean, relevant list table
+   - If the query asks for counts/summaries: Aggregate and show summary statistics
+   - If the query asks for comparisons: Create a comparison table
+   - If the query asks for specific details: Create a focused detail table
+   - If the query asks for relationships: Show how entities relate to each other
+4. DO NOT just dump all raw data. Create a SPECIFIC response table that answers the query.
+5. Choose the most relevant columns that answer the question.
+6. Use human-readable column names (e.g., "Company Name" not "company_name").
+7. Format values appropriately (dates, currency, percentages).
+8. If aggregating, show meaningful metrics (counts, sums, averages, etc.).
+
+OUTPUT REQUIREMENTS:
+- Return ONLY valid CSV content (header row + data rows)
+- NO markdown formatting (no ```csv or ``` blocks)
+- NO introductory text or explanations
+- Use comma (,) as delimiter
+- Quote values that contain commas
+- Ensure all rows have the same number of columns as the header
+
+Generate the CSV table now:"""
+
+        messages = [
+            {"role": "system", "content": "You are an expert at creating business intelligence tables. Generate clean, well-structured CSV that directly answers user queries."},
+            {"role": "user", "content": prompt}
+        ]
+
+        try:
+            # Use chat method (synchronous, but we're in async context)
+            response = self.llm_provider.chat(
+                messages=messages,
+                max_tokens=4000,
+                temperature=0.2
+            )
+            
+            # Clean the response (remove markdown if present)
+            csv_content = self._clean_csv_output(response)
+            return csv_content
+            
+        except Exception as e:
+            self._logger.error(f"LLM CSV generation failed: {e}")
+            raise
+
+    def _clean_csv_output(self, text: str) -> str:
+        """Remove markdown formatting and clean CSV output"""
+        text = text.strip()
+        
+        # Remove markdown code blocks
+        if text.startswith("```"):
+            lines = text.split("\n")
+            # Remove first line (```csv or ```) and last line (```)
+            if len(lines) >= 2:
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                text = "\n".join(lines)
+        
+        # Remove any leading/trailing whitespace
+        text = text.strip()
+        
+        return text
+
+    async def node_plan_response(self, state: AgentState) -> Dict[str, Any]:
+        """
+        Node: Plan the response structure using LLM.
+        Decides which blocks (Text, Table) to use and in what order.
+        """
+        self._logger.info("PLAN RESPONSE: Planning response structure with LLM")
+        
+        user_query = state['user_query']
+        extraction_result = state.get('extraction_result', {})
+        generated_csv = state.get('generated_csv')
         
         # Case 1: Direct Response (already has final_response)
         if state.get('final_response') and state['final_response'].get('_direct_response'):
-            return {}
+            return {
+                "response_plan": [
+                    {"type": "text", "content": state['final_response'].get('response', '')}
+                ],
+                "final_response": state['final_response']
+            }
             
         # Case 2: Clarification needed
-        extraction_result = state.get('extraction_result', {})
-        validation_result = state.get('validation_result')
-        
         needs_clarification = False
         clarification_q = None
         
         if extraction_result.get("needs_clarification"):
             needs_clarification = True
             clarification_q = extraction_result.get("clarification_question")
-        elif validation_result:
-             next_action = validation_result.next_action if hasattr(validation_result, 'next_action') else validation_result.get('next_action')
-             if next_action in ["CLARIFY", NextAction.CLARIFY.value]:
-                 needs_clarification = True
-                 clarification_q = "I need some clarification to answer your question."
-        
+        else:
+            validation_result = state.get('validation_result')
+            if validation_result:
+                next_action = validation_result.next_action if hasattr(validation_result, 'next_action') else validation_result.get('next_action')
+                if next_action in ["CLARIFY", NextAction.CLARIFY.value]:
+                    needs_clarification = True
+                    clarification_q = "I need some clarification to answer your question."
+
         if needs_clarification:
-            return {
+                    return {
+                "response_plan": [
+                    {"type": "text", "content": clarification_q or "Could you provide more details?"}
+                ],
                 "final_response": {
-                    "status": "needs_clarification",
-                    "data": extraction_result,
+                        "status": "needs_clarification",
+                        "data": extraction_result,
                     "clarification_question": clarification_q,
                     "retry_count": state.get('retry_count', 0)
                 }
             }
             
-        # Case 3: Standard Data Response
+        # Case 3: Standard Data Response - Detect entity type and plan blocks
+        # Detect primary entity type (companies, people, deals)
+        primary_entity_type = self._detect_primary_entity_type(extraction_result)
+        
+        # Build data summary for context
+        data_summary = self._build_data_summary(extraction_result, generated_csv)
+        
+        # Generate response plan based on entity type
+        if primary_entity_type in ["companies", "people", "deals"]:
+            # Use structured ENTITY_LIST for known entity types
+            response_plan = await self._plan_entity_list_response(
+                user_query, 
+                primary_entity_type, 
+                extraction_result,
+                data_summary
+            )
+        else:
+            # Fallback to TABLE (CSV) for mixed/aggregated/unknown data
+            response_plan = await self._plan_table_response(
+                user_query,
+                data_summary,
+                generated_csv
+            )
+        
         return {
+            "primary_entity_type": primary_entity_type,
+            "response_plan": response_plan,
             "final_response": {
                 "status": "complete",
                 "data": extraction_result,
-                "validation": validation_result,
+                "validation": state.get('validation_result'),
+                "generated_csv": generated_csv,
+                "entity_type": primary_entity_type,
                 "retry_count": state.get('retry_count', 0)
             }
         }
+
+    def _build_data_summary(self, extraction_result: Dict[str, Any], generated_csv: Optional[str]) -> Dict[str, Any]:
+        """Build a summary of extracted data for the planner"""
+        summary = {
+            "raw_data_counts": {},
+            "csv_info": None
+        }
+        
+        # Count raw data items
+        for key, value in extraction_result.items():
+            if key.startswith("_") or not isinstance(value, list):
+                continue
+            summary["raw_data_counts"][key] = len(value)
+        
+        # Extract CSV info if available
+        if generated_csv:
+            lines = generated_csv.strip().split('\n')
+            if len(lines) > 1:
+                header = lines[0]
+                row_count = len(lines) - 1  # Exclude header
+                summary["csv_info"] = {
+                    "row_count": row_count,
+                    "header": header,
+                    "preview": '\n'.join(lines[:min(4, len(lines))])  # First 3 rows + header
+                }
+        
+        return summary
+
+    async def _plan_entity_list_response(
+        self,
+        query: str,
+        entity_type: str,
+        extraction_result: Dict[str, Any],
+        data_summary: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        Plan response with structured ENTITY_LIST block
+        
+        Args:
+            query: User query
+            entity_type: "companies", "people", or "deals"
+            extraction_result: Raw extraction data
+            data_summary: Summary of data
+            
+        Returns:
+            Response plan with text + entity_list blocks
+        """
+        entities = extraction_result.get(entity_type, [])
+        entity_count = len(entities)
+        
+        # Generate intro text using LLM
+        intro_text = await self._generate_entity_intro_text(query, entity_type, entity_count)
+        
+        # Build response plan
+        plan = [
+            {
+                "type": "text",
+                "content": intro_text
+            },
+            {
+                "type": "entity_list",
+                "entity_type": entity_type,
+                "entities": entities,  # Will be transformed to NDJSON during streaming
+                "metadata": {
+                    "total_count": entity_count,
+                    "view_mode": "list"
+                }
+            }
+        ]
+        
+        return plan
+
+    async def _generate_entity_intro_text(self, query: str, entity_type: str, count: int) -> str:
+        """Generate natural intro text for entity lists"""
+        
+        entity_labels = {
+            "companies": "companies",
+            "people": "people",
+            "deals": "deals"
+        }
+        
+        label = entity_labels.get(entity_type, "items")
+        
+        prompt = f"""You are a helpful business intelligence assistant. Generate a brief, natural introduction for a list of results.
+
+User Query: "{query}"
+Results: {count} {label}
+
+Generate a concise, conversational intro (1-2 sentences max) that:
+- Acknowledges what the user asked for
+- States the count accurately
+- Is friendly and natural (no robotic phrases like "based on available data")
+- Leads into the list naturally
+
+Example good intros:
+- "I found 7 companies working in the AI domain:"
+- "Here are the 3 people from your sales team:"
+- "I found 12 companies matching your criteria:"
+
+Your intro:"""
+
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant. Generate only the intro text, nothing else."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        try:
+            response = self.llm_provider.chat(
+                messages=messages,
+                max_tokens=100,
+                temperature=0.3
+            )
+            return response.strip()
+        except Exception as e:
+            self._logger.error(f"Failed to generate entity intro: {e}")
+            return f"I found {count} {label} matching your query:"
+
+    async def _plan_table_response(
+        self,
+        query: str,
+        data_summary: Dict[str, Any],
+        generated_csv: Optional[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Plan response with TABLE block (fallback for non-entity data)
+        
+        This is used for:
+        - Mixed entity types
+        - Aggregated/analytics queries
+        - Custom data that doesn't fit entity schemas
+        """
+        csv_info = data_summary.get("csv_info")
+        raw_counts = data_summary.get("raw_data_counts", {})
+        
+        # Generate intro text
+        if csv_info:
+            count = csv_info['row_count']
+            intro_text = await self._generate_table_intro_text(query, count, csv_info)
+        else:
+            intro_text = "Here are the results:"
+        
+        plan = [
+            {
+                "type": "text",
+                "content": intro_text
+            }
+        ]
+        
+        # Add table block if CSV exists
+        if generated_csv:
+            plan.append({
+                "type": "table",
+                "content": generated_csv
+            })
+        
+        return plan
+
+    async def _generate_table_intro_text(self, query: str, row_count: int, csv_info: Dict) -> str:
+        """Generate intro text for table responses"""
+        
+        prompt = f"""You are a helpful business intelligence assistant. Generate a brief intro for a data table.
+
+User Query: "{query}"
+Table: {row_count} rows
+Columns: {csv_info['header']}
+
+Generate a concise intro (1 sentence) that:
+- Acknowledges the query
+- States the row count
+- Is natural and conversational
+
+Your intro:"""
+
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant. Generate only the intro text."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        try:
+            response = self.llm_provider.chat(
+                messages=messages,
+                max_tokens=100,
+                temperature=0.3
+            )
+            return response.strip()
+        except Exception as e:
+            self._logger.error(f"Failed to generate table intro: {e}")
+            return f"Here are the {row_count} results:"
+
+    async def _generate_response_plan(self, query: str, data_summary: Dict[str, Any], generated_csv: Optional[str]) -> List[Dict[str, Any]]:
+        """
+        Use LLM to generate a response plan (list of blocks: text, table)
+        
+        The LLM should:
+        1. Analyze the query
+        2. Look at the CSV (if available) to get accurate counts
+        3. Generate appropriate text that references the CSV accurately
+        4. Decide the order of blocks
+        """
+        csv_info = data_summary.get("csv_info")
+        raw_counts = data_summary.get("raw_data_counts", {})
+        
+        # Build prompt
+        prompt = f"""You are a Business Intelligence Assistant. Plan the response structure for a user query.
+
+User Query: "{query}"
+
+Available Data:
+"""
+        
+        if csv_info:
+            prompt += f"""
+Generated CSV Table:
+- Rows: {csv_info['row_count']}
+- Header: {csv_info['header']}
+- Preview:
+{csv_info['preview']}
+
+IMPORTANT: The CSV table is the SOURCE OF TRUTH. If the CSV shows 3 companies, say "3 companies" in your text, NOT the raw data count.
+"""
+        else:
+            prompt += f"""
+Raw Data Counts: {raw_counts}
+(No CSV table was generated)
+"""
+        
+        prompt += """
+Your task:
+1. Generate a natural language TEXT response that accurately describes the results.
+2. If a CSV table exists, reference it accurately (e.g., "Here are the 3 companies..." if CSV has 3 rows).
+3. Decide if you need a TABLE block (if CSV exists).
+4. Choose the order: [text, table] or [table, text] or just [text] or just [table].
+
+Output Format (JSON):
+{
+  "blocks": [
+    {"type": "text", "content": "Your natural language response here..."},
+    {"type": "table", "use_csv": true}
+  ]
+}
+
+Rules:
+- Be accurate about counts based on the CSV, not raw data
+- Don't repeat information that's in the table
+- Be conversational and helpful
+- If no CSV, just provide text response
+
+JSON Response:"""
+
+        messages = [
+            {"role": "system", "content": "You are an expert at planning business intelligence responses. Always output valid JSON."},
+            {"role": "user", "content": prompt}
+        ]
+
+        try:
+            response = self.llm_provider.chat(
+                messages=messages,
+                max_tokens=500,
+                temperature=0.3
+            )
+            
+            # Parse JSON response
+            # Extract JSON from response (handle markdown code blocks)
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                plan_data = json.loads(json_str)
+                blocks = plan_data.get("blocks", [])
+                
+                # Ensure table block references the CSV
+                for block in blocks:
+                    if block.get("type") == "table" and block.get("use_csv"):
+                        block["content"] = generated_csv  # Attach CSV content
+                
+                return blocks
+            else:
+                # Fallback: simple text response
+                self._logger.warning("Failed to parse JSON from LLM response, using fallback")
+                return [{"type": "text", "content": response.strip()}]
+                
+        except Exception as e:
+            self._logger.error(f"Failed to generate response plan: {e}", exc_info=True)
+            # Fallback plan
+            plan = []
+            if generated_csv:
+                plan.append({"type": "text", "content": f"I found the following results for your query: {query}"})
+                plan.append({"type": "table", "content": generated_csv})
+            else:
+                plan.append({"type": "text", "content": "I've processed your query, but couldn't generate a response table."})
+            return plan
 
     # =================================================================
     # Edge Routing Logic
@@ -463,6 +946,9 @@ class OrchestratorAgent:
             "extraction_result": {},
             "validation_result": None,
             "retry_count": 0,
+            "generated_csv": None,
+            "primary_entity_type": None,
+            "response_plan": [],
             "final_response": {},
             "agents_executed": [],
             "start_time": start_time
@@ -534,6 +1020,9 @@ class OrchestratorAgent:
             "extraction_result": {},
             "validation_result": None,
             "retry_count": 0,
+            "generated_csv": None,
+            "primary_entity_type": None,
+            "response_plan": [],
             "final_response": {},
             "agents_executed": [],
             "start_time": start_time
@@ -567,61 +1056,131 @@ class OrchestratorAgent:
                         )
                         block_order += 1
                         
-                    elif node_name == "generate_response":
-                        # This is the final step - Generate output blocks
+                    elif node_name == "plan_response":
+                        # Execute the response plan dynamically
+                        response_plan = node_state.get('response_plan', [])
                         final_response = node_state.get('final_response', {})
                         
-                        if final_response.get('_direct_response'):
-                            # Direct text response
-                            yield self._create_block_event(
-                                BlockType.TEXT,
-                                final_response.get('response', ''),
-                                block_order,
-                                {"type": "direct_response"}
-                            )
-                            block_order += 1
+                        # Build result summary for conversation state
+                        data = final_response.get('data', {})
+                        result_summary = self._build_result_summary(data) if data else {}
                         
-                        elif final_response.get('status') == "needs_clarification":
-                            # Clarification response
-                            yield self._create_block_event(
-                                BlockType.TEXT,
-                                final_response.get('clarification_question', 'Could you clarify?'),
-                                block_order,
-                                {"type": "clarification"}
-                            )
-                            block_order += 1
+                        # Execute each block in the plan
+                        for block in response_plan:
+                            block_type = block.get('type')
                             
-                        else:
-                            # Standard data response (Text + Table)
-                            data = final_response.get('data', {})
-                            show_table = self._should_show_table(user_query, data)
-                            
-                            # Intro Text
-                            intro_text = self._generate_intro_text(data) if show_table else \
-                                         await self._generate_natural_language_response(user_query, data)
-                            
-                            result_summary = self._build_result_summary(data)
-                            
-                            yield self._create_block_event(
-                                BlockType.TEXT,
-                                intro_text,
-                                block_order,
-                                {
-                                    "type": "intro" if show_table else "natural_language_response",
-                                    "query_context": {"result_summary": result_summary},
-                                    "format": "table" if show_table else "text"
+                            if block_type == 'text':
+                                # Text block
+                                content = block.get('content', '')
+                                metadata = {
+                                    "type": "planned_response",
+                                    "query_context": {"result_summary": result_summary} if result_summary else {}
                                 }
-                            )
-                            block_order += 1
-                            
-                            # Table Blocks
-                            if show_table:
-                                async for block_event in self._stream_table_blocks(
-                                    data, user_query, block_order
-                                ):
-                                    yield block_event
-                                    if block_event.type == "block_complete":
-                                        block_order += 1
+                                
+                                # Add specific type if it's a direct/clarification response
+                                if final_response.get('_direct_response'):
+                                    metadata["type"] = "direct_response"
+                                elif final_response.get('status') == "needs_clarification":
+                                    metadata["type"] = "clarification"
+                                
+                                yield self._create_block_event(
+                                    BlockType.TEXT,
+                                    content,
+                                    block_order,
+                                    metadata
+                                )
+                                block_order += 1
+                                
+                            elif block_type == 'table':
+                                # Table block (using generated CSV)
+                                csv_content = block.get('content')
+                                if csv_content:
+                                    table_block_id = str(uuid4())
+                                    table_metadata = {
+                                        "data_type": "query_response",
+                                        "row_count": len(csv_content.split('\n')) - 1 if csv_content else 0,
+                                        "formatting_method": "llm_generated"
+                                    }
+                                    
+                                    yield StreamEvent.block_start(
+                                        block_id=table_block_id,
+                                        block_type=BlockType.TABLE,
+                                        order=block_order,
+                                        metadata=table_metadata
+                                    )
+                                    
+                                    # Stream the CSV content
+                                    yield StreamEvent.block_delta(
+                                        block_id=table_block_id,
+                                        content=csv_content
+                                    )
+                                    
+                                    yield StreamEvent.block_complete(
+                                        block_id=table_block_id,
+                                        block_type=BlockType.TABLE,
+                                        content=csv_content,
+                                        order=block_order,
+                                        metadata=table_metadata
+                                    )
+                                    block_order += 1
+                                    
+                            elif block_type == 'entity_list':
+                                # Entity list block (structured entities as NDJSON)
+                                entity_type = block.get('entity_type')
+                                raw_entities = block.get('entities', [])
+                                block_metadata = block.get('metadata', {})
+                                
+                                if raw_entities:
+                                    # Transform to entity models
+                                    entity_models = self._transform_to_entity_models(entity_type, raw_entities)
+                                    
+                                    # Create NDJSON content (one JSON object per line)
+                                    ndjson_lines = []
+                                    for entity in entity_models:
+                                        ndjson_lines.append(entity.model_dump_json())
+                                    ndjson_content = "\n".join(ndjson_lines)
+                                    
+                                    # Stream the entity list
+                                    list_block_id = str(uuid4())
+                                    
+                                    # Prepare metadata
+                                    stream_metadata = {
+                                        "entity_type": entity_type,
+                                        "total_count": len(entity_models),
+                                        "items_count": len(entity_models),
+                                        "view_mode": block_metadata.get("view_mode", "list")
+                                    }
+                                    
+                                    yield StreamEvent.block_start(
+                                        block_id=list_block_id,
+                                        block_type=BlockType.ENTITY_LIST,
+                                        order=block_order,
+                                        metadata=stream_metadata
+                                    )
+                                    
+                                    # Stream entities as NDJSON
+                                    # Option 1: Stream all at once (simpler, works for most cases)
+                                    yield StreamEvent.block_delta(
+                                        block_id=list_block_id,
+                                        content=ndjson_content
+                                    )
+                                    
+                                    # Option 2: Stream one entity per delta (more real-time feel)
+                                    # Uncomment below to stream incrementally:
+                                    # for line in ndjson_lines:
+                                    #     yield StreamEvent.block_delta(
+                                    #         block_id=list_block_id,
+                                    #         content=line + "\n"
+                                    #     )
+                                    
+                                    yield StreamEvent.block_complete(
+                                        block_id=list_block_id,
+                                        block_type=BlockType.ENTITY_LIST,
+                                        content=ndjson_content,
+                                        order=block_order,
+                                        metadata=stream_metadata
+                                    )
+                                    block_order += 1
 
             elapsed_ms = int((time.time() - start_time) * 1000)
             self._logger.info(f"Streaming complete in {elapsed_ms}ms")
@@ -675,7 +1234,7 @@ class OrchestratorAgent:
                         value_as_dicts.append(item.dict())
                     elif isinstance(item, dict):
                         value_as_dicts.append(item)
-                    else:
+                else:
                         value_as_dicts.append(item.__dict__ if hasattr(item, '__dict__') else {"value": str(item)})
 
                 csv_generator = get_smart_table_formatter()
@@ -696,7 +1255,8 @@ class OrchestratorAgent:
                 for csv_chunk in csv_generator.generate_csv_streaming(
                     data=value_as_dicts,
                     data_type=key,
-                    user_query=user_query
+                    user_query=user_query,
+                    mode="generative"
                 ):
                     yield StreamEvent.block_delta(
                         block_id=table_block_id,
@@ -779,7 +1339,7 @@ class OrchestratorAgent:
     ) -> OrchestrationResult:
         """Package execution results into OrchestrationResult"""
         elapsed_ms = int((time.time() - start_time) * 1000)
-        
+
         # Handle direct responses
         if execution_result.get("_direct_response"):
             return OrchestrationResult(
@@ -953,21 +1513,6 @@ class OrchestratorAgent:
             "complex_execution_rate": self.stats["complex_executions"] / total if total > 0 else 0
         }
 
-    def _generate_intro_text(self, data: Dict[str, Any]) -> str:
-        """Generate introductory text based on extracted data"""
-        result_counts = []
-        for key, value in data.items():
-            if not key.startswith("_") and isinstance(value, list):
-                count = len(value)
-                if count > 0:
-                    result_counts.append(f"{count} {key}")
-
-        if not result_counts:
-            return "I couldn't find any results matching your query."
-
-        results_text = ", ".join(result_counts)
-        return f"I found {results_text} matching your query."
-
     def _build_result_summary(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Build result summary metadata for conversation state persistence"""
         result_summary = {}
@@ -1011,63 +1556,6 @@ class OrchestratorAgent:
 
         return result_summary
 
-    def _should_show_table(self, query: str, data: Dict[str, Any]) -> bool:
-        """Determine if query should return a table or natural language response"""
-        query_lower = query.lower()
-        
-        table_indicators = ["show me all", "show all", "list all", "give me all", "get all", "list of", "list the", "show the list", "export", "download", "table", "show me the", "what are all"]
-        text_indicators = ["how many", "how much", "who is", "what is", "tell me about", "describe", "explain", "what does", "summary", "summarize"]
-
-        if any(indicator in query_lower for indicator in table_indicators):
-            return True
-        if any(indicator in query_lower for indicator in text_indicators):
-            return False
-
-        total_items = sum(len(v) for v in data.values() if isinstance(v, list) and not str(v).startswith("_"))
-        return total_items > 10
-
-    async def _generate_natural_language_response(self, query: str, data: Dict[str, Any]) -> str:
-        """Generate a natural language response using LLM"""
-        processed_data = {}
-        for key, value in data.items():
-            if key.startswith("_") or not isinstance(value, list):
-                continue
-            
-            value_as_dicts = []
-            for item in value:
-                if hasattr(item, 'model_dump'):
-                    value_as_dicts.append(item.model_dump())
-                elif hasattr(item, 'dict'):
-                    value_as_dicts.append(item.dict())
-                elif isinstance(item, dict):
-                    value_as_dicts.append(item)
-            
-            if value_as_dicts:
-                processed_data[key] = value_as_dicts
-
-        prompt = f"""You are a helpful business intelligence assistant. Generate a concise, natural language response to the user's query based on the data provided.
-User Query: {query}
-Data Found:
-{json.dumps(processed_data, indent=2)}
-Instructions:
-- Answer the user's specific question directly
-- Be concise but informative
-- For "how many" questions, give the count and maybe mention a few examples
-- For "who is" or "what is" questions, provide specific details
-- For small lists (≤5 items), mention them by name
-- For larger lists, mention count and first few examples
-- Use natural, conversational language
-- Don't use phrases like "based on the data" or "according to the information"
-- Just answer as if you know this information
-Response:"""
-
-        try:
-            response = await self.llm_provider.complete(prompt=prompt, max_tokens=300, temperature=0.3)
-            return response.strip()
-        except Exception as e:
-            self._logger.error(f"Failed to generate natural language response: {e}")
-            return self._generate_intro_text(data)
-
     def _generate_user_friendly_status(self, query: str, decision: 'ExecutionDecision', workspace_id: str) -> str:
         """Generate user-friendly status message"""
         query_lower = query.lower()
@@ -1102,7 +1590,7 @@ Response:"""
                 "data": "Performing comprehensive data analysis..."
             }
             return status_messages.get(entity_type, "Analyzing your data...")
-        
+
         return "Working on your request..."
 
     def _generate_meta_response(self, meta_type: str) -> str:
@@ -1113,3 +1601,273 @@ Response:"""
             "introduction": "I'm Analyst, an AI-powered business intelligence assistant. I can search and analyze your business data to help you find insights quickly."
         }
         return responses.get(meta_type, "How can I help you today?")
+
+    # ============================================================================
+    # Entity Detection & Transformation
+    # ============================================================================
+
+    def _detect_primary_entity_type(self, extraction_result: Dict[str, Any]) -> Optional[str]:
+        """
+        Detect the primary entity type in extraction results
+        
+        Returns: "companies", "people", "deals", or None
+        """
+        entity_counts = {}
+        
+        for entity_type in ["companies", "people", "deals"]:
+            items = extraction_result.get(entity_type, [])
+            if isinstance(items, list) and len(items) > 0:
+                entity_counts[entity_type] = len(items)
+        
+        if not entity_counts:
+            return None
+        
+        # Return type with most items
+        return max(entity_counts, key=entity_counts.get)
+
+    def _transform_to_entity_models(
+        self, 
+        entity_type: str, 
+        raw_entities: List[Any]
+    ) -> List[Union[CompanyEntity, PersonEntity, DealEntity]]:
+        """
+        Transform raw CRM data to frontend entity models
+        
+        Args:
+            entity_type: "companies", "people", or "deals"
+            raw_entities: List of raw entity objects from extractor
+            
+        Returns:
+            List of typed entity models ready for NDJSON serialization
+        """
+        if entity_type == "companies":
+            return [self._to_company_entity(e) for e in raw_entities]
+        elif entity_type == "people":
+            return [self._to_person_entity(e) for e in raw_entities]
+        elif entity_type == "deals":
+            return [self._to_deal_entity(e) for e in raw_entities]
+        else:
+            self._logger.warning(f"Unknown entity type: {entity_type}")
+            return []
+
+    def _extract_contact_value(self, data: Any) -> Optional[str]:
+        """Helper to extract email/phone value from various formats (string, list, object)"""
+        if not data:
+            return None
+            
+        # If it's already a string, return it
+        if isinstance(data, str):
+            return data
+            
+        # If it's a list (Prisma relation)
+        if isinstance(data, list):
+            if not data:
+                return None
+            
+            # Try to find primary
+            primary = None
+            for item in data:
+                if isinstance(item, dict) and item.get("isPrimary"):
+                    primary = item
+                    break
+                elif hasattr(item, "isPrimary") and getattr(item, "isPrimary"):
+                    primary = item
+                    break
+            
+            # Fallback to first item
+            target = primary if primary else data[0]
+            
+            if isinstance(target, dict):
+                return target.get("value")
+            else:
+                return getattr(target, "value", None)
+        
+        # If it's a single object with value field
+        if isinstance(data, dict):
+            return data.get("value")
+        elif hasattr(data, "value"):
+            return getattr(data, "value", None)
+                
+        return None
+
+    def _to_company_entity(self, company: Any) -> CompanyEntity:
+        """Transform Company model to CompanyEntity for frontend"""
+        
+        # Handle both dict and object formats
+        if isinstance(company, dict):
+            company_id = company.get("id", "")
+            name = company.get("name", "")
+            logo = company.get("logo_url") or company.get("logo")
+            email_raw = company.get("email")
+            phone_raw = company.get("phoneNumber") or company.get("phone") # Support both field names
+            website = company.get("website") or company.get("url")
+            industry = company.get("industry")
+            description = company.get("description")
+        else:
+            company_id = getattr(company, 'id', '')
+            name = getattr(company, 'name', '')
+            logo = getattr(company, 'logo_url', None) or getattr(company, 'logo', None)
+            email_raw = getattr(company, 'email', None)
+            phone_raw = getattr(company, 'phoneNumber', None) or getattr(company, 'phone', None)
+            website = getattr(company, 'website', None) or getattr(company, 'url', None)
+            industry = getattr(company, 'industry', None)
+            description = getattr(company, 'description', None)
+        
+        # Extract simple string values for contact info
+        email = self._extract_contact_value(email_raw)
+        phone = self._extract_contact_value(phone_raw)
+
+        # TODO: Enrich with peopleCount and groups in future phase
+        # For now, we'll use placeholder values
+        people_count = 0
+        groups = []
+        
+        # Build metadata with available fields
+        metadata = {}
+        if website:
+            # specialized handling for URL list if coming from Prisma
+            if isinstance(website, list) and website:
+                metadata["website"] = self._extract_contact_value(website)
+            else:
+                metadata["website"] = website
+        if industry:
+            metadata["industry"] = industry
+        if description:
+            metadata["description"] = description
+        
+        return CompanyEntity(
+            id=str(company_id),
+            name=name,
+            logo=logo,
+            email=email,
+            phone=phone,
+            peopleCount=people_count,
+            groups=groups,
+            metadata=metadata if metadata else None
+        )
+
+    def _to_person_entity(self, person: Any) -> PersonEntity:
+        """Transform Person model to PersonEntity for frontend"""
+        
+        # Handle both dict and object formats
+        if isinstance(person, dict):
+            person_id = person.get("id", "")
+            first_name = person.get("firstName", "")
+            last_name = person.get("lastName", "")
+            name = person.get("name") or f"{first_name} {last_name}".strip()
+            image = person.get("image") or person.get("avatar_url")
+            email_raw = person.get("email")
+            phone_raw = person.get("phoneNumber") or person.get("phone")
+            role = person.get("role") or person.get("title") or person.get("jobTitle")
+            company_data = person.get("company")
+        else:
+            person_id = getattr(person, 'id', '')
+            first_name = getattr(person, 'firstName', '') or getattr(person, 'first_name', '')
+            last_name = getattr(person, 'lastName', '') or getattr(person, 'last_name', '')
+            name = getattr(person, 'name', None) or f"{first_name} {last_name}".strip()
+            image = getattr(person, 'image', None) or getattr(person, 'avatar_url', None)
+            email_raw = getattr(person, 'email', None)
+            phone_raw = getattr(person, 'phoneNumber', None) or getattr(person, 'phone', None)
+            role = getattr(person, 'role', None) or getattr(person, 'title', None) or getattr(person, 'jobTitle', None)
+            company_data = getattr(person, 'company', None)
+        
+        # Extract simple string values for contact info
+        email = self._extract_contact_value(email_raw)
+        phone = self._extract_contact_value(phone_raw)
+
+        # Transform company reference if available
+        company_ref = None
+        if company_data:
+            if isinstance(company_data, dict):
+                company_ref = CompanyReference(
+                    id=str(company_data.get("id", "")),
+                    name=company_data.get("name", ""),
+                    imageUrl=company_data.get("imageUrl") or company_data.get("logo")
+                )
+            elif hasattr(company_data, 'id'):
+                company_ref = CompanyReference(
+                    id=str(company_data.id),
+                    name=getattr(company_data, 'name', ''),
+                    imageUrl=getattr(company_data, 'logo_url', None)
+                )
+        
+        # TODO: Enrich with groups in future phase
+        groups = []
+        
+        # Build metadata
+        metadata = {}
+        if role:
+            metadata["role"] = role
+        
+        return PersonEntity(
+            id=str(person_id),
+            name=name,
+            firstName=first_name or None,
+            lastName=last_name or None,
+            image=image,
+            email=email,
+            phone=phone,
+            role=role,
+            company=company_ref,
+            groups=groups,
+            metadata=metadata if metadata else None
+        )
+
+    def _to_deal_entity(self, deal: Any) -> DealEntity:
+        """Transform Deal model to DealEntity for frontend (future support)"""
+        
+        # Handle both dict and object formats
+        if isinstance(deal, dict):
+            deal_id = deal.get("id", "")
+            name = deal.get("name", "")
+            value = deal.get("value", 0)
+            currency = deal.get("currency", "USD")
+            stage = deal.get("stage", "")
+            probability = deal.get("probability")
+            close_date = deal.get("closeDate") or deal.get("close_date")
+            company_data = deal.get("company")
+            owner_data = deal.get("owner")
+        else:
+            deal_id = getattr(deal, 'id', '')
+            name = getattr(deal, 'name', '')
+            value = getattr(deal, 'value', 0)
+            currency = getattr(deal, 'currency', 'USD')
+            stage = getattr(deal, 'stage', '')
+            probability = getattr(deal, 'probability', None)
+            close_date = getattr(deal, 'close_date', None)
+            company_data = getattr(deal, 'company', None)
+            owner_data = getattr(deal, 'owner', None)
+        
+        # Transform company reference
+        company_ref = None
+        if company_data:
+            if isinstance(company_data, dict):
+                company_ref = CompanyReference(
+                    id=str(company_data.get("id", "")),
+                    name=company_data.get("name", ""),
+                    imageUrl=company_data.get("imageUrl")
+                )
+        
+        # Transform owner
+        owner = None
+        if owner_data:
+            if isinstance(owner_data, dict):
+                owner = {
+                    "id": str(owner_data.get("id", "")),
+                    "name": owner_data.get("name", "")
+                }
+        
+        groups = []
+        
+        return DealEntity(
+            id=str(deal_id),
+            name=name,
+            value=float(value),
+            currency=currency,
+            stage=stage,
+            probability=probability,
+            closeDate=close_date,
+            company=company_ref,
+            owner=owner,
+            groups=groups
+        )

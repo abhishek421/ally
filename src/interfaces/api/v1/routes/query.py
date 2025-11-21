@@ -112,29 +112,43 @@ async def _handle_streaming(request: QueryRequest, workspace_id: str, user_id: s
                     )
 
                     if messages:
-                        # Rebuild context from blocks
+                        # Rebuild context from ALL blocks (not just text)
                         context_messages = []
                         for msg in reversed(messages[1:]):
                             blocks = await client.messageblock.find_many(
                                 where={"messageId": msg.id},
                                 order={"order": "asc"}
                             )
-                            # Use first TEXT block as content
-                            content = next((b.content for b in blocks if b.blockType == "TEXT"), "")
-
-                            # Extract metadata from TEXT blocks that contain query_context
+                            
+                            # Convert all blocks to serializable format
+                            all_blocks = []
                             metadata = None
+                            
                             for block in blocks:
-                                if block.blockType == "TEXT" and block.metadata:
-                                    # Check if this block has query_context metadata
-                                    if isinstance(block.metadata, dict) and "query_context" in block.metadata:
-                                        metadata = block.metadata
-                                        break
+                                block_dict = {
+                                    "block_type": block.blockType,
+                                    "content": block.content,
+                                    "order": block.order
+                                }
+                                
+                                # Include metadata if present
+                                if block.metadata:
+                                    block_dict["metadata"] = block.metadata
+                                    # Extract query_context from TEXT blocks for conversation state
+                                    if block.blockType == "TEXT" and isinstance(block.metadata, dict):
+                                        if "query_context" in block.metadata:
+                                            metadata = block.metadata
+                                
+                                # Include entity_mentions if present
+                                if block.entityMentions:
+                                    block_dict["entity_mentions"] = block.entityMentions
+                                
+                                all_blocks.append(block_dict)
 
                             context_messages.append({
                                 "role": msg.role,
-                                "content": content,
-                                "metadata": metadata
+                                "blocks": all_blocks,  # ALL blocks
+                                "metadata": metadata  # For conversation state rebuild
                             })
                         perf_ctx_end = time.time()
                         logger.info(f"[PERF] {request_id} - Retrieved {len(context_messages)} context messages in {(perf_ctx_end - perf_ctx_start)*1000:.0f}ms")

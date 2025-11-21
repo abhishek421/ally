@@ -12,6 +12,9 @@ class BlockType(str, Enum):
     TEXT = "TEXT"
     TABLE = "TABLE"
     THINKING = "THINKING"
+    ENTITY_LIST = "ENTITY_LIST"  # For structured entity lists (companies, people, etc.)
+    ENTITY_CARD = "ENTITY_CARD"  # For single entity details (future)
+    INSIGHT_WIDGET = "INSIGHT_WIDGET"  # For analytics/charts (future)
 
 
 class StreamEventType(str, Enum):
