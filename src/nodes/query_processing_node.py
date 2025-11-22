@@ -28,7 +28,8 @@ def _get_dspy_lm():
     global _dspy_lm
     if _dspy_lm is None:
         _dspy_lm = get_dspy_lm(model_name=settings.query_processing_model)
-        dspy.configure(lm=_dspy_lm)
+        # Configure dspy with the LM and disable strict JSON adapter
+        dspy.configure(lm=_dspy_lm, adapter=dspy.ChatAdapter())
     return _dspy_lm
 
 
@@ -69,6 +70,9 @@ class ReActWithTools(dspy.Module):
         # Build tools description for LLM
         tools_description = self._build_tools_description()
 
+        # Get the LM instance
+        lm = dspy.settings.lm
+
         # ReAct loop
         for iteration in range(self.max_iterations):
             # Build context
@@ -78,31 +82,111 @@ class ReActWithTools(dspy.Module):
                 context += f"Available tools:\n{tools_description}\n\n"
 
             if context_history:
-                context += "Previous context:\n"
+                context += "Previous steps:\n"
                 for entry in context_history[-3:]:  # Last 3 entries
                     context += f"- {entry}\n"
                 context += "\n"
 
-            # Reason about next action
-            reason_signature = "context -> reasoning, action, tool_name, tool_params"
-            reason_prompt = (
-                f"{context}\n"
-                "Think step by step about what to do next. "
-                "If you need to use a tool, specify which tool and what parameters. "
-                "If you have enough information, provide the final answer."
+            context += (
+                "IMPORTANT: You do NOT have direct access to data. You MUST use tools to retrieve information.\n"
+                "When interpreting tool results, pay attention to metadata fields like 'total' or 'count' in the response. "
+                "If the user's question asks for a 'total', 'count', or 'number of' items, and the tool returns a 'total' field, "
+                "use this value as the answer. "
+                "However, if the user asks to 'list', 'show', or 'find' items, use the 'results' list to provide the details.\n\n"
+                "You MUST respond in one of these formats:\n\n"
+                "Format 1 - To use a tool (USE THIS to get information):\n"
+                "ACTION: use_tool\n"
+                "TOOL: <exact_tool_name>\n"
+                "PARAMS: {\"param1\": \"value1\", \"param2\": \"value2\"}\n\n"
+                "Format 2 - To provide final answer (ONLY after you have tool results):\n"
+                "ACTION: answer\n"
+                "ANSWER: <your comprehensive answer based on tool results>\n\n"
+                "Format 3 - To continue reasoning (if you need to think more):\n"
+                "Just explain your thoughts without ACTION keyword.\n\n"
+                "If you need information, you MUST use a tool first. Choose one format and respond now:"
             )
             
-            reasoning_pred = dspy.ChainOfThought(reason_signature)(context=reason_prompt)
-            reasoning = reasoning_pred.reasoning
-            action = getattr(reasoning_pred, "action", "").lower() if hasattr(reasoning_pred, "action") else ""
-            tool_name = getattr(reasoning_pred, "tool_name", "").strip() if hasattr(reasoning_pred, "tool_name") else ""
-            tool_params_str = getattr(reasoning_pred, "tool_params", "") if hasattr(reasoning_pred, "tool_params") else ""
+            try:
+                # Call LM directly to avoid JSON parsing issues
+                response = lm(context)
+                
+                # Parse the response
+                action = "continue"
+                tool_name = ""
+                tool_params_str = ""
+                reasoning = response
+                
+                # Check if response contains ACTION directive
+                response_upper = response.upper()
+                if "ACTION:" in response_upper:
+                    lines = response.split("\n")
+                    for i, line in enumerate(lines):
+                        line_upper = line.upper()
+                        line_stripped = line.strip()
+                        
+                        if "ACTION:" in line_upper:
+                            # Extract action value
+                            action_value = line.split(":", 1)[1].strip().lower() if ":" in line else ""
+                            if "use_tool" in action_value or "tool" in action_value:
+                                action = "use_tool"
+                            elif "answer" in action_value:
+                                action = "answer"
+                        
+                        if "TOOL:" in line_upper and action == "use_tool":
+                            # Extract tool name - remove "TOOL:" prefix
+                            tool_name = line.split(":", 1)[1].strip() if ":" in line else ""
+                            # Clean up tool name (remove quotes, extra spaces)
+                            tool_name = tool_name.strip("\"' ")
+                        
+                        if "PARAMS:" in line_upper and action == "use_tool":
+                            # Extract params - could be on same line or next lines
+                            params_part = line.split(":", 1)[1].strip() if ":" in line else ""
+                            # If params start with {, try to get the full JSON (might span multiple lines)
+                            if "{" in params_part:
+                                # Collect all lines until we have matching braces
+                                json_str = params_part
+                                open_braces = json_str.count("{")
+                                close_braces = json_str.count("}")
+                                j = i + 1
+                                while open_braces > close_braces and j < len(lines):
+                                    json_str += "\n" + lines[j]
+                                    open_braces = json_str.count("{")
+                                    close_braces = json_str.count("}")
+                                    j += 1
+                                tool_params_str = json_str
+                            else:
+                                tool_params_str = params_part
+                        
+                        if "ANSWER:" in line_upper and action == "answer":
+                            # Extract answer - could span multiple lines
+                            answer = line.split(":", 1)[1].strip() if ":" in line else ""
+                            # Collect remaining lines as part of answer
+                            for j in range(i + 1, len(lines)):
+                                answer += "\n" + lines[j]
+                            break
+                
+                # If action is use_tool but no tool name found, try to extract from reasoning
+                if action == "use_tool" and not tool_name:
+                    # Look for tool names mentioned in the response
+                    for potential_tool in self.tools.keys():
+                        if potential_tool.lower() in response.lower():
+                            tool_name = potential_tool
+                            logger.info(f"Extracted tool name from reasoning: {tool_name}")
+                            break
+                
+            except Exception as e:
+                logger.error(f"ReAct iteration {iteration + 1} failed", error=str(e))
+                # Fallback: try to continue with simpler reasoning
+                reasoning = f"Error in reasoning: {str(e)}"
+                action = "answer"  # Force answer generation
+                tool_name = ""
+                tool_params_str = ""
 
             reasoning_steps.append(reasoning)
             logger.info(f"ReAct iteration {iteration + 1}", reasoning=reasoning[:200], action=action)
 
             # Check if we should call a tool
-            if action == "use_tool" or tool_name:
+            if action == "use_tool" or (tool_name and tool_name in self.tools):
                 if not tool_name:
                     # Try to extract tool name from reasoning
                     for tool in self.tools.keys():
@@ -119,28 +203,32 @@ class ReActWithTools(dspy.Module):
                     tool_call_record = {
                         "tool": tool_name,
                         "params": tool_params,
-                        "result": str(tool_result)[:500],  # Limit result length
+                        "result": str(tool_result)[:20000],  # Limit result length
                         "iteration": iteration + 1,
                     }
                     tool_calls.append(tool_call_record)
-                    context_history.append(f"Tool {tool_name} called with params {tool_params}, result: {str(tool_result)[:100]}")
+                    context_history.append(f"Tool {tool_name} called with params {tool_params}, result: {str(tool_result)[:20000]}")
                     logger.info(f"Tool called: {tool_name}", params=tool_params, result_preview=str(tool_result)[:100])
                 else:
                     context_history.append(f"Attempted to call unknown tool: {tool_name}")
-            elif action == "answer" or "answer" in reasoning.lower()[-50:]:
-                # Generate final answer
-                answer_context = f"Question: {question}\n\n"
-                if reasoning_steps:
-                    answer_context += "Reasoning: " + " ".join(reasoning_steps[-2:]) + "\n\n"
-                if tool_calls:
-                    answer_context += "Tool results:\n"
-                    for call in tool_calls:
-                        answer_context += f"- {call['tool']}: {call['result'][:200]}\n"
+            elif action == "answer" or "final answer" in reasoning.lower()[-100:]:
+                # If answer not already extracted, generate it
+                if not answer:
+                    answer_context = f"Question: {question}\n\n"
+                    if reasoning_steps:
+                        answer_context += "Reasoning: " + " ".join(reasoning_steps[-2:]) + "\n\n"
+                    if tool_calls:
+                        answer_context += "Tool results:\n"
+                        for call in tool_calls:
+                            answer_context += f"- {call['tool']}: {call['result'][:20000]}\n"
                     answer_context += "\n"
+                    answer_context += "Provide a comprehensive answer based on the above information."
 
-                answer_signature = "context -> answer"
-                answer_pred = dspy.ChainOfThought(answer_signature)(context=f"{answer_context}Provide a comprehensive answer:")
-                answer = answer_pred.answer
+                    try:
+                        answer = lm(answer_context)
+                    except Exception as e:
+                        logger.error(f"Answer generation failed", error=str(e))
+                        answer = "I encountered an error while generating the answer."
                 break
             else:
                 # Continue reasoning
@@ -154,11 +242,15 @@ class ReActWithTools(dspy.Module):
             if tool_calls:
                 final_context += "Tool results:\n"
                 for call in tool_calls:
-                    final_context += f"- {call['tool']}: {call['result'][:200]}\n"
+                    final_context += f"- {call['tool']}: {call['result'][:20000]}\n"
                 final_context += "\n"
+            final_context += "Provide a comprehensive answer based on the above information."
 
-            answer_pred = dspy.ChainOfThought("context -> answer")(context=f"{final_context}Provide a comprehensive answer:")
-            answer = answer_pred.answer
+            try:
+                answer = lm(final_context)
+            except Exception as e:
+                logger.error(f"Final answer generation failed", error=str(e))
+                answer = "I couldn't generate a complete answer due to an error."
 
         return dspy.Prediction(
             answer=answer or "I couldn't generate a complete answer.",
@@ -239,8 +331,9 @@ class ReActWithTools(dspy.Module):
             if not tool:
                 return f"Error: Tool '{tool_name}' not found"
 
-            # Automatically inject workspace_id if not provided and available
-            if self.workspace_id and "workspace_id" not in params:
+            # Always inject/override workspace_id if available
+            # This ensures correct workspace_id even if LLM provides a placeholder
+            if self.workspace_id:
                 params["workspace_id"] = self.workspace_id
 
             result = tool.execute(**params)

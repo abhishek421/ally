@@ -28,20 +28,69 @@ class LangChainDSPyLM(dspy.LM):
         # Initialize parent with model name
         super().__init__(model_name)
 
-    def __call__(self, prompt: str, **kwargs) -> str:
+    def __call__(self, *args, **kwargs) -> str:
         """Call the language model.
 
         Args:
-            prompt: Input prompt (can be string or list of messages)
-            **kwargs: Additional parameters
+            *args: Positional arguments (may contain prompt as first arg)
+            **kwargs: Keyword arguments (may contain prompt or other parameters)
 
         Returns:
             Generated text
         """
         try:
-            # Handle both string prompts and message lists
             from langchain_core.messages import HumanMessage
             
+            # Extract prompt from args or kwargs
+            prompt = None
+            
+            # First, check if prompt is in positional args
+            if args:
+                prompt = args[0]
+            # Then check kwargs
+            elif "prompt" in kwargs:
+                prompt = kwargs.pop("prompt")
+            elif "messages" in kwargs:
+                # If messages are provided directly, use them
+                messages = kwargs.pop("messages")
+                response = self.langchain_model.invoke(messages, **kwargs)
+                return response.content if hasattr(response, "content") else str(response)
+            else:
+                # Try to find prompt-like values in kwargs
+                # dspy might pass the full prompt text in various ways
+                for key in ["input", "text", "content", "query", "instruction", "context"]:
+                    if key in kwargs:
+                        value = kwargs[key]
+                        if isinstance(value, str) and len(value.strip()) > 0:
+                            prompt = kwargs.pop(key)
+                            break
+                        elif isinstance(value, list) and len(value) > 0:
+                            # Could be a list of messages
+                            messages = kwargs.pop(key)
+                            response = self.langchain_model.invoke(messages, **kwargs)
+                            return response.content if hasattr(response, "content") else str(response)
+                
+                if prompt is None:
+                    # Last resort: look for any string value that looks like a prompt
+                    for key, value in list(kwargs.items()):
+                        if isinstance(value, str) and len(value.strip()) > 20:
+                            prompt = kwargs.pop(key)
+                            logger.debug(f"Extracted prompt from kwargs key '{key}'")
+                            break
+            
+            if prompt is None:
+                # Log for debugging
+                logger.warning(
+                    f"__call__ invoked without prompt. Args: {args}, Kwargs keys: {list(kwargs.keys())}"
+                )
+                # If still no prompt, raise a clear error
+                raise ValueError(
+                    f"No prompt provided to language model. "
+                    f"Args: {args}, Kwargs keys: {list(kwargs.keys())}. "
+                    f"dspy should call request() method instead of __call__() directly."
+                )
+            
+            # Convert prompt to messages format
             if isinstance(prompt, str):
                 messages = [HumanMessage(content=prompt)]
             elif isinstance(prompt, list):
@@ -53,14 +102,14 @@ class LangChainDSPyLM(dspy.LM):
             response = self.langchain_model.invoke(messages, **kwargs)
             return response.content if hasattr(response, "content") else str(response)
         except Exception as e:
-            logger.error(f"LangChain model call failed: {self.model_name}", error=str(e))
+            logger.error(f"LangChain model call failed: {self.model_name}", error=str(e), exc_info=True)
             raise
 
-    def generate(self, prompt: str, **kwargs) -> list[str]:
+    def generate(self, *args, **kwargs) -> list[str]:
         """Generate multiple completions.
 
         Args:
-            prompt: Input prompt
+            *args: Positional arguments (may contain prompt)
             **kwargs: Additional parameters
 
         Returns:
@@ -69,23 +118,26 @@ class LangChainDSPyLM(dspy.LM):
         try:
             # For now, return single completion
             # Can be extended to support multiple completions
-            result = self.__call__(prompt, **kwargs)
+            result = self.__call__(*args, **kwargs)
             return [result]
         except Exception as e:
             logger.error(f"LangChain model generate failed: {self.model_name}", error=str(e))
             raise
 
-    def request(self, prompt: str, **kwargs) -> str:
+    def request(self, *args, **kwargs) -> str:
         """Request completion from model (dspy interface).
+        
+        This is the primary method dspy uses to call the LM.
 
         Args:
-            prompt: Input prompt
-            **kwargs: Additional parameters
+            *args: Positional arguments (may contain prompt)
+            **kwargs: Additional parameters (may contain prompt)
 
         Returns:
             Generated text
         """
-        return self.__call__(prompt, **kwargs)
+        # Call __call__ which handles prompt extraction from args/kwargs
+        return self.__call__(*args, **kwargs)
 
     def stream(self, prompt: str, **kwargs):
         """Stream model response.
