@@ -100,14 +100,14 @@ class Interaction(Base):
     subject = Column(String, nullable=True)
     content = Column(Text, nullable=True)
     date = Column(DateTime, nullable=False)
-    metadata = Column(JSON, nullable=True)
+    meta_data = Column("metadata", JSON, nullable=True)
     isDeleted = Column(Boolean, default=False, nullable=False)
     createdAt = Column(DateTime, default=datetime.utcnow, server_default=text("now()"))
     updatedAt = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     workspaceId = Column(PGUUID(as_uuid=True), nullable=False, index=True)
     createdById = Column(PGUUID(as_uuid=True), nullable=False)
-    peopleId = Column(PGUUID(as_uuid=True), nullable=True, index=True)
-    companyId = Column(PGUUID(as_uuid=True), nullable=True, index=True)
+    peopleId = Column(PGUUID(as_uuid=True), ForeignKey("people.id"), nullable=True, index=True)
+    companyId = Column(PGUUID(as_uuid=True), ForeignKey("company.id"), nullable=True, index=True)
     externalId = Column(String, nullable=True)
     externalType = Column(String, nullable=True)
 
@@ -125,8 +125,8 @@ class Email(Base):
     type = Column(String, nullable=True)
     isPrimary = Column(Boolean, default=False, nullable=False)
     verified = Column(Boolean, default=False, nullable=False)
-    personId = Column(PGUUID(as_uuid=True), nullable=True, index=True)
-    companyId = Column(PGUUID(as_uuid=True), nullable=True, index=True)
+    personId = Column(PGUUID(as_uuid=True), ForeignKey("people.id"), nullable=True, index=True)
+    companyId = Column(PGUUID(as_uuid=True), ForeignKey("company.id"), nullable=True, index=True)
     createdAt = Column(DateTime, default=datetime.utcnow, server_default=text("now()"))
     updatedAt = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -143,8 +143,8 @@ class PhoneNumber(Base):
     value = Column(String, nullable=False)
     type = Column(String, nullable=True)
     isPrimary = Column(Boolean, default=False, nullable=False)
-    personId = Column(PGUUID(as_uuid=True), nullable=True, index=True)
-    companyId = Column(PGUUID(as_uuid=True), nullable=True, index=True)
+    personId = Column(PGUUID(as_uuid=True), ForeignKey("people.id"), nullable=True, index=True)
+    companyId = Column(PGUUID(as_uuid=True), ForeignKey("company.id"), nullable=True, index=True)
     createdAt = Column(DateTime, default=datetime.utcnow, server_default=text("now()"))
     updatedAt = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -161,8 +161,8 @@ class Address(Base):
     value = Column(Text, nullable=True)
     type = Column(String, nullable=True)
     isPrimary = Column(Boolean, default=False, nullable=False)
-    personId = Column(PGUUID(as_uuid=True), nullable=True, index=True)
-    companyId = Column(PGUUID(as_uuid=True), nullable=True, index=True)
+    personId = Column(PGUUID(as_uuid=True), ForeignKey("people.id"), nullable=True, index=True)
+    companyId = Column(PGUUID(as_uuid=True), ForeignKey("company.id"), nullable=True, index=True)
     createdAt = Column(DateTime, default=datetime.utcnow, server_default=text("now()"))
     updatedAt = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -179,8 +179,8 @@ class URL(Base):
     label = Column(String, nullable=True)
     value = Column(String, nullable=False)
     isPrimary = Column(Boolean, default=False, nullable=False)
-    personId = Column(PGUUID(as_uuid=True), nullable=True, index=True)
-    companyId = Column(PGUUID(as_uuid=True), nullable=True, index=True)
+    personId = Column(PGUUID(as_uuid=True), ForeignKey("people.id"), nullable=True, index=True)
+    companyId = Column(PGUUID(as_uuid=True), ForeignKey("company.id"), nullable=True, index=True)
     createdAt = Column(DateTime, default=datetime.utcnow, server_default=text("now()"))
     updatedAt = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -211,7 +211,7 @@ class Group(Base):
     publicOrder = Column(Integer, nullable=True)
 
 
-class Column(Base):
+class CustomField(Base):
     """Column (custom field) model."""
     __tablename__ = "column"
 

@@ -58,12 +58,30 @@ class SearchCompaniesTool(Tool):
 
         logger.info("Searching companies", workspace_id=workspace_id, query=kwargs.get("query"))
 
-        return {
-            "results": [],
-            "total": 0,
-            "hasMore": False,
-            "error": "Not yet implemented - requires data access layer",
-        }
+        try:
+            # Use the data access layer to get real data
+            data_access = get_data_access()
+            return data_access.search_companies(
+                workspace_id=workspace_id,
+                query=kwargs.get("query"),
+                industry=kwargs.get("industry"),
+                size=kwargs.get("size"),
+                tags=kwargs.get("tags"),
+                has_interactions_since=kwargs.get("has_interactions_since"),
+                has_deals_since=kwargs.get("has_deals_since"),
+                sort_by=kwargs.get("sort_by"),
+                sort_order=kwargs.get("sort_order"),
+                limit=kwargs.get("limit"),
+                offset=kwargs.get("offset"),
+            )
+        except Exception as e:
+            logger.error(f"Error searching companies: {e}")
+            return {
+                "results": [],
+                "total": 0,
+                "hasMore": False,
+                "error": f"Error accessing database: {str(e)}",
+            }
 
 
 class GetCompanyByIdTool(Tool):

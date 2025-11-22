@@ -12,11 +12,11 @@ from .database import get_db_session
 from .data_access import DataAccessInterface
 from .models import (
     Address,
-    Column,
     ColumnValue,
     ColumnValueMember,
     ColumnValueSelectOption,
     Company,
+    CustomField,
     Deal,
     DealMetaData,
     Email,
@@ -272,7 +272,7 @@ class PostgreSQLDataAccess(DataAccessInterface):
                     deal = session.query(Deal).filter(Deal.id == dm.dealId).first()
                     if deal:
                         # Get column/stage info
-                        column = session.query(Column).filter(Column.id == deal.columnId).first()
+                        column = session.query(CustomField).filter(CustomField.id == deal.columnId).first()
                         group = session.query(Group).filter(Group.id == column.groupId).first() if column else None
 
                         deal_data = {
@@ -425,7 +425,7 @@ class PostgreSQLDataAccess(DataAccessInterface):
         ).all()
 
         for cv in column_values:
-            column = session.query(Column).filter(Column.id == cv.columnId).first()
+            column = session.query(CustomField).filter(CustomField.id == cv.columnId).first()
             if column:
                 # Check workspace through group
                 group = session.query(Group).filter(Group.id == column.groupId).first()
@@ -442,7 +442,7 @@ class PostgreSQLDataAccess(DataAccessInterface):
         ).all()
 
         for so in select_options:
-            column = session.query(Column).filter(Column.id == so.columnId).first()
+            column = session.query(CustomField).filter(CustomField.id == so.columnId).first()
             if column:
                 group = session.query(Group).filter(Group.id == column.groupId).first()
                 if group and group.workspaceId == workspace_id:
@@ -463,7 +463,7 @@ class PostgreSQLDataAccess(DataAccessInterface):
         ).all()
 
         for mv in member_values:
-            column = session.query(Column).filter(Column.id == mv.columnId).first()
+            column = session.query(CustomField).filter(CustomField.id == mv.columnId).first()
             if column:
                 group = session.query(Group).filter(Group.id == column.groupId).first()
                 if group and group.workspaceId == workspace_id:

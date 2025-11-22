@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from ..utils.logger import get_logger
 from .base import Tool
+from .data_access import get_data_access
 
 logger = get_logger(__name__)
 
@@ -37,32 +38,39 @@ class GetWorkspaceSummaryTool(Tool):
 
         logger.info("Getting workspace summary", workspace_id=workspace_id)
 
-        return {
-            "people": {
-                "total": 0,
-                "addedThisMonth": 0,
-                "withInteractions": 0,
-            },
-            "companies": {
-                "total": 0,
-                "addedThisMonth": 0,
-                "withDeals": 0,
-            },
-            "deals": {
-                "total": 0,
-                "active": 0,
-                "won": 0,
-                "lost": 0,
-                "totalValue": 0.0,
-            },
-            "interactions": {
-                "total": 0,
-                "thisWeek": 0,
-                "thisMonth": 0,
-                "byType": {},
-            },
-            "error": "Not yet implemented - requires data access layer",
-        }
+        try:
+            # Use the data access layer to get real data
+            data_access = get_data_access()
+            return data_access.get_workspace_summary(workspace_id)
+        except Exception as e:
+            logger.error(f"Error getting workspace summary: {e}")
+            # Return error response instead of mock data
+            return {
+                "people": {
+                    "total": 0,
+                    "addedThisMonth": 0,
+                    "withInteractions": 0,
+                },
+                "companies": {
+                    "total": 0,
+                    "addedThisMonth": 0,
+                    "withDeals": 0,
+                },
+                "deals": {
+                    "total": 0,
+                    "active": 0,
+                    "won": 0,
+                    "lost": 0,
+                    "totalValue": 0.0,
+                },
+                "interactions": {
+                    "total": 0,
+                    "thisWeek": 0,
+                    "thisMonth": 0,
+                    "byType": {},
+                },
+                "error": f"Error accessing database: {str(e)}",
+            }
 
 
 class GetBulkEntitiesTool(Tool):
