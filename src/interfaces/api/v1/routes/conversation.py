@@ -32,7 +32,8 @@ async def list_conversations(
     offset: int = Query(0, ge=0),
     service: ConversationService = Depends(get_conversation_service)
 ):
-    user_id = "default_user" # Placeholder
+    # Use the same valid UUID for default user
+    user_id = "550e8400-e29b-41d4-a716-446655440000" 
     
     conversations = await service.list_conversations(user_id, x_workspace_id, limit, offset)
     

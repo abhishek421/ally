@@ -255,17 +255,25 @@ def validator_router(state: AgentState) -> Literal["executor", "final_response"]
         logger.info("Router: CONFIRMATION_REQUIRED - routing to final_response")
         return "final_response"
     
+    # Check if it's a NONE decision
+    # The validator might have set decision_type to NONE if validation failed
+    # Or if the planner couldn't generate a plan
+    if state.plan and state.plan.get("decision_type") == "NONE":
+        logger.info("Router: NONE decision - routing to final_response")
+        return "final_response"
+
     # Check if there are any tool calls logged (indicates execution happened)
     # If no tool calls and no pending action, likely a NONE decision
-    if not state.tool_calls or len(state.tool_calls) == 0:
-        # Check if this is genuinely a NONE decision vs just starting
-        if len(state.messages) > 1:  # More than just initial message
-            logger.info("Router: NONE decision - routing to final_response")
-            return "final_response"
+    # BUT this check is flawed for the validator router because execution hasn't happened yet!
+    # We should rely on the plan's decision_type and tasks list instead.
     
-    # Default: proceed to executor
-    logger.info("Router: Proceeding to executor")
-    return "executor"
+    if state.plan and state.plan.get("tasks") and len(state.plan.get("tasks")) > 0:
+        logger.info(f"Router: Proceeding to executor with {len(state.plan.get('tasks'))} tasks")
+        return "executor"
+    
+    # Fallback: if no tasks and no pending action, it's likely a NONE or empty plan
+    logger.info("Router: No tasks or pending action - routing to final_response")
+    return "final_response"
 
 
 def executor_router(state: AgentState) -> Literal["aggregator", "final_response"]:
@@ -284,15 +292,28 @@ def executor_router(state: AgentState) -> Literal["aggregator", "final_response"
     
     Note:
         In practice, the graph framework will pass the executor's output.
-        We check if any tool calls were logged to determine routing.
+        We check if any tool results were returned to determine routing.
     """
-    # Check if any tool executions occurred
-    if not state.tool_calls or len(state.tool_calls) == 0:
-        logger.info("Router: No tool executions - routing to final_response")
+    # Check if any tool executions occurred by examining execution_results
+    if not state.execution_results:
+        logger.info("Router: No execution_results in state - routing to final_response")
         return "final_response"
     
-    # Tool executions occurred - proceed to aggregator
-    logger.info("Router: Tool executions found - routing to aggregator")
+    results = state.execution_results.get("results", [])
+    
+    if not results or len(results) == 0:
+        logger.info("Router: No tool results - routing to final_response")
+        return "final_response"
+    
+    # Check if any results were successful
+    success_count = sum(1 for r in results if r.get("status") == "success")
+    
+    if success_count == 0:
+        logger.info(f"Router: All {len(results)} tool(s) failed - routing to final_response")
+        return "final_response"
+    
+    # Tool executions occurred with at least one success - proceed to aggregator
+    logger.info(f"Router: Found {success_count} successful tool result(s) - routing to aggregator")
     return "aggregator"
 
 

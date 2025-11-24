@@ -86,12 +86,8 @@ from src.utils.types import (
     ToolRegistry,
 )
 from src.config.logger import logger
-
-# TODO: Import actual LLM caller once implemented
-# from src.llm.model import call_llm
-
-# TODO: Import actual prompt templates once implemented
-# from src.llm.prompts import PLANNER_SYSTEM_PROMPT
+from src.llm.model import call_planner
+from src.llm.prompts import PLANNER_SYSTEM_PROMPT
 
 # Placeholder for tool registry injection
 # TODO: This will be injected at graph build time by graph.py
@@ -218,11 +214,38 @@ def _validate_task(task: Dict[str, Any], state: AgentState) -> Dict[str, Any]:
         validated_task["args"] = {}
         validated_task["validation_error"] = "Args must be a dictionary"
     else:
-        # Ensure workspace_id is present
-        if "workspace_id" not in args and state.workspace_id:
-            validated_task["args"]["workspace_id"] = state.workspace_id
-            logger.debug(f"Added workspace_id to {tool_name} args")
+        validated_task["args"] = args
+        # Normalize camelCase to snake_case for known arguments
+        value = args.pop("workspaceId", None)
+        if value is not None:
+            args.setdefault("workspace_id", value)
+        value = args.pop("userId", None)
+        if value is not None:
+            args.setdefault("user_id", value)
+
+        def _override_with_context(arg_name: str, context_value: Optional[str]) -> None:
+            """
+            Ensure workspace and user context always align with current state,
+            overriding any LLM-provided placeholders.
+            """
+            if not context_value:
+                return
+            existing_value = args.get(arg_name)
+            if existing_value and existing_value != context_value:
+                logger.debug(
+                    f"Overriding {arg_name} for tool {tool_name}: "
+                    f"{existing_value} -> {context_value}"
+                )
+            args[arg_name] = context_value
+            validated_task["args"][arg_name] = context_value
+
+        # Always enforce workspace/user context to avoid placeholder IDs
+        _override_with_context("workspace_id", state.workspace_id)
+        _override_with_context("user_id", state.user_id)
         
+        # Log final validated args for debugging
+        logger.debug(f"Planner validated task '{tool_name}' with args: {validated_task['args']}")
+
         # Special validation for interaction creation tasks
         if tool_name == "create_interaction":
             person_id = args.get("person_id") or args.get("personId")
@@ -251,11 +274,22 @@ def _build_tool_descriptions() -> str:
     if not TOOL_REGISTRY:
         return "No tools available (registry not initialized)"
     
-    # TODO: Once TOOL_REGISTRY is injected, use actual tool descriptions
-    # For now, return a placeholder
     tool_lines = []
     for tool_name, tool_spec in TOOL_REGISTRY.items():
-        description = tool_spec.description if hasattr(tool_spec, 'description') else "No description"
+        # Prefer explicit description attribute, fallback to docstring
+        description = getattr(tool_spec, 'description', None) or getattr(tool_spec, '__doc__', "No description")
+        
+        # Clean up description (take first paragraph or sentence)
+        if description and description != "No description":
+            # Remove leading/trailing whitespace
+            description = description.strip()
+            # Take first paragraph (split by double newline)
+            # Use regex to handle spaces between newlines
+            parts = re.split(r'\n\s*\n', description)
+            description = parts[0]
+            # Normalize whitespace
+            description = ' '.join(description.split())
+            
         tool_lines.append(f"- {tool_name}: {description}")
     
     return "\n".join(tool_lines)
@@ -347,11 +381,23 @@ async def planner_node(
         
         logger.info(f"Planning for message: {message_content[:100]}...")
         
+        # Quick check: Is this just a greeting/chitchat? Skip planning entirely
+        greeting_keywords = ["hello", "hi", "hey", "good morning", "good afternoon", "good evening", "thanks", "thank you", "bye", "goodbye"]
+        message_lower = message_content.lower().strip()
+        is_greeting = any(message_lower.startswith(kw) for kw in greeting_keywords) or message_lower in greeting_keywords
+        
+        if is_greeting and len(message_content.split()) <= 5:
+            logger.info("Detected greeting/chitchat - skipping planning")
+            return {"plan": {
+                "decision_type": "NONE",
+                "tasks": [],
+                "pending_action": None,
+                "summary": "User is greeting. Respond warmly.",
+                "confidence": 1.0
+            }}
+        
         # Build LLM prompt context
-        # TODO: Import actual PLANNER_SYSTEM_PROMPT from src/llm/prompts.py
-        system_prompt = """You are a planning agent for a CRM system.
-Analyze the user's request and create a structured execution plan.
-Return your response as a JSON object with decision_type, tasks, pending_action, and summary."""
+        system_prompt = PLANNER_SYSTEM_PROMPT
         
         # Get recent message history (last 8 messages)
         recent_messages = state.messages[-8:] if state.messages else []
@@ -366,6 +412,32 @@ Return your response as a JSON object with decision_type, tasks, pending_action,
         # Build memory context
         memory_context = _build_memory_context(state)
         
+        # Build previous results context (CRITICAL for intelligent behavior)
+        previous_results_context = ""
+        if state.aggregated_result:
+            merged_results = state.aggregated_result.get("merged_results", {})
+            if merged_results:
+                import json
+                # Show what data we already have
+                result_summary = []
+                for category, data in merged_results.items():
+                    if isinstance(data, list):
+                        result_summary.append(f"- {category}: {len(data)} items")
+                    elif isinstance(data, dict) and "data" in data:
+                        data_list = data.get("data", [])
+                        total = data.get("meta", {}).get("total", len(data_list))
+                        result_summary.append(f"- {category}: {len(data_list)} items (total: {total})")
+                
+                if result_summary:
+                    previous_results_context = f"""
+Previous Tool Results (from recent turns):
+{chr(10).join(result_summary)}
+
+**IMPORTANT**: Check if the user's question can be answered FULLY using these previous results.
+1. If YES (e.g. filtering existing list, counting items): Use decision_type: "NONE" and explain in summary.
+2. If NO (e.g. user wants DETAILS not in the list like email, phone, address): YOU MUST CALL A TOOL (like get_company or search_companies).
+3. Do not assume you have details that are not explicitly shown in the summary above."""
+        
         # Construct full prompt
         prompt = f"""{system_prompt}
 
@@ -373,6 +445,8 @@ Available Tools:
 {tools_context}
 
 {memory_context}
+
+{previous_results_context}
 
 Recent Conversation:
 {message_context}
@@ -388,30 +462,9 @@ Generate a plan as JSON with:
 """
         
         # Call LLM
-        # TODO: Replace with actual call_llm from src/llm/model.py
-        # For now, create a placeholder response
         logger.debug("Calling LLM for planning...")
         
-        # TODO: Uncomment when LLM is implemented
-        # llm_response = await call_llm(prompt, max_tokens=512)
-        
-        # Placeholder response for development
-        llm_response = json.dumps({
-            "decision_type": "SEQUENTIAL",
-            "tasks": [
-                {
-                    "tool": "search_companies",
-                    "args": {
-                        "workspace_id": state.workspace_id,
-                        "user_id": state.user_id,
-                        "search": message_content
-                    }
-                }
-            ],
-            "pending_action": None,
-            "summary": f"Planning to search based on: {message_content[:50]}",
-            "confidence": 0.8
-        })
+        llm_response = await call_planner(prompt, max_tokens=512)
         
         logger.debug(f"LLM response received: {llm_response[:200]}...")
         

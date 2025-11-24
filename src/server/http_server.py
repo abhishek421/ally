@@ -11,9 +11,13 @@ from src.interfaces.api.v1.routes import query
 # Initialize main API router
 router = APIRouter()
 
-# Include sub-routers
-router.include_router(conversation.router)
-router.include_router(query.router)
+# V1 Router
+v1_router = APIRouter(prefix="/v1")
+v1_router.include_router(conversation.router)
+v1_router.include_router(query.router)
+
+# Include V1 router in main router
+router.include_router(v1_router)
 
 # Add health check routes here if not in main.py, but main.py has them.
 # The new API contract says GET /health and GET /ready. 

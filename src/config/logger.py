@@ -191,6 +191,9 @@ def setup_logger() -> logging.Logger:
     # Prevent propagation to root logger
     logger.propagate = False
     
+    # Disable SQLAlchemy INFO logs (only show WARNING and above)
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    
     return logger
 
 

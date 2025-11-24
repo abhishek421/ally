@@ -73,7 +73,9 @@ The aggregator uses this to format the final response for the user.
 """
 
 import asyncio
-from typing import Dict, Any, List, Callable, Optional
+import inspect
+from functools import lru_cache
+from typing import Dict, Any, List, Callable, Optional, Set
 
 from src.memory.state import AgentState
 from src.utils.types import PlannerDecisionType, ToolStatus
@@ -90,9 +92,52 @@ from src.config.logger import logger
 TOOL_REGISTRY: Optional[Dict[str, Callable]] = None
 
 
+@lru_cache(maxsize=256)
+def _get_tool_param_names(tool_function: Callable) -> Set[str]:
+    """
+    Cache and return the parameter names for a tool function.
+
+    Using a cache prevents repeated inspection overhead when tools are
+    executed multiple times in a single session.
+    """
+    try:
+        return set(inspect.signature(tool_function).parameters.keys())
+    except (ValueError, TypeError):
+        # Some callables (like functools.partial) may not expose signatures cleanly
+        return set()
+
+
 # ========================================
 # Helper Functions
 # ========================================
+
+
+def _camel_to_snake(name: str) -> str:
+    """
+    Convert camelCase to snake_case.
+    
+    Handles cases where the LLM generates camelCase argument names
+    but Python functions expect snake_case.
+    
+    Args:
+        name: camelCase string (e.g., "workspaceId", "userId")
+    
+    Returns:
+        snake_case string (e.g., "workspace_id", "user_id")
+    
+    Examples:
+        >>> _camel_to_snake("workspaceId")
+        'workspace_id'
+        >>> _camel_to_snake("userId")
+        'user_id'
+        >>> _camel_to_snake("firstName")
+        'first_name'
+        >>> _camel_to_snake("already_snake")
+        'already_snake'
+    """
+    import re
+    # Insert underscore before uppercase letters and convert to lowercase
+    return re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
 
 
 async def _execute_single_task(
@@ -151,24 +196,70 @@ async def _execute_single_task(
         # Get tool function
         tool_function = TOOL_REGISTRY[tool_name]
         
-        # Inject graphql_auth_token from state into args if not already present
-        if "graphql_auth_token" not in args:
-            args["graphql_auth_token"] = state.graphql_auth_token
+        # Normalize argument names from camelCase to snake_case
+        # This handles cases where the LLM generates camelCase args but Python functions expect snake_case
+        normalized_args = {}
+        for key, value in args.items():
+            # Convert camelCase to snake_case
+            snake_case_key = _camel_to_snake(key)
+            normalized_args[snake_case_key] = value
         
-        # Log tool call start
+        # Handle common parameter aliases (LLM might use different names)
+        # Map 'query' -> 'search' for search_companies/search_people
+        if "query" in normalized_args and "search" not in normalized_args:
+            if tool_name in ["search_companies", "search_people"]:
+                normalized_args["search"] = normalized_args.pop("query")
+                logger.debug(f"Aliased 'query' -> 'search' for tool '{tool_name}'")
+
+        # Determine which parameters the tool actually accepts so we only inject relevant context.
+        tool_param_names = _get_tool_param_names(tool_function)
+
+        def _inject_context_arg(arg_name: str, value: Any) -> None:
+            """Helper to inject state context only when the tool accepts the argument."""
+            if value is None or arg_name in normalized_args:
+                return
+            if arg_name in tool_param_names:
+                normalized_args[arg_name] = value
+
+        # Inject common context arguments when the tool expects them.
+        _inject_context_arg("workspace_id", state.workspace_id)
+        _inject_context_arg("user_id", state.user_id)
+        _inject_context_arg("conversation_id", state.conversation_id)
+        _inject_context_arg("graphql_auth_token", state.graphql_auth_token)
+        
+        # Log tool call start with full argument details
         logger.info(f"Executing tool: {tool_name}")
-        state.log_tool_call(tool_name, args)
+        logger.debug(f"Tool '{tool_name}' arguments after normalization and injection: {normalized_args}")
+        state.log_tool_call(tool_name, normalized_args)
         
         # Execute tool
-        result = await tool_function(**args)
+        result = await tool_function(**normalized_args)
         
-        # Log successful completion
+        # Log successful completion with result summary
         logger.info(f"Tool '{tool_name}' completed successfully")
+        
+        # Log result structure for debugging
+        if isinstance(result, dict):
+            result_keys = list(result.keys())
+            logger.debug(f"Tool '{tool_name}' returned dict with keys: {result_keys}")
+            # Log data counts if present
+            if "data" in result:
+                data = result.get("data")
+                if isinstance(data, list):
+                    logger.info(f"Tool '{tool_name}' returned {len(data)} item(s)")
+                elif isinstance(data, dict):
+                    logger.debug(f"Tool '{tool_name}' returned data dict with keys: {list(data.keys())}")
+            if "meta" in result:
+                meta = result.get("meta", {})
+                total = meta.get("total")
+                if total is not None:
+                    logger.info(f"Tool '{tool_name}' meta.total: {total}")
+        
         state.complete_tool_call(tool_name, {"success": True})
         
         return {
             "tool": tool_name,
-            "args": args,
+            "args": normalized_args,
             "result": result,
             "error": None,
             "status": "success"
@@ -345,6 +436,9 @@ async def executor_node(
         decision_type = plan.get("decision_type", "NONE")
         tasks = plan.get("tasks", [])
         
+        # Normalize decision_type to lowercase (LLM might return uppercase)
+        decision_type = decision_type.lower() if isinstance(decision_type, str) else "none"
+        
         logger.info(f"Executor received plan: {decision_type} with {len(tasks)} task(s)")
         
         # ========================================
@@ -381,21 +475,21 @@ async def executor_node(
         # C. Execute Tasks
         # ========================================
         
-        # Determine execution mode
+        # Determine execution mode (decision_type is now lowercase)
         if decision_type == PlannerDecisionType.SEQUENTIAL.value:
-            execution_mode = "SEQUENTIAL"
+            execution_mode = "sequential"
             results = await _execute_sequential(tasks, state)
         
         elif decision_type == PlannerDecisionType.PARALLEL.value:
-            execution_mode = "PARALLEL"
+            execution_mode = "parallel"
             results = await _execute_parallel(tasks, state)
         
         else:
             # Unknown decision type - default to sequential for safety
             logger.warning(
-                f"Unknown decision_type '{decision_type}', defaulting to SEQUENTIAL"
+                f"Unknown decision_type '{decision_type}', defaulting to sequential"
             )
-            execution_mode = "SEQUENTIAL"
+            execution_mode = "sequential"
             results = await _execute_sequential(tasks, state)
         
         # ========================================

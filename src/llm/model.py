@@ -325,10 +325,20 @@ class ModelRouter:
             # Build request parameters
             request_params: Dict[str, Any] = {
                 "model": model,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
                 "messages": [{"role": "user", "content": prompt}],
             }
+
+            # Handle max_tokens vs max_completion_tokens
+            # Newer reasoning models (o1, gpt-5, etc.) use max_completion_tokens
+            if model.startswith("o1") or model.startswith("gpt-5"):
+                request_params["max_completion_tokens"] = max_tokens
+                # reasoning models might strictly enforce temperature=1 or not support it
+                # Documentation confirms gpt-5 family does not support temperature
+                if "temperature" in request_params:
+                    del request_params["temperature"]
+            else:
+                request_params["max_tokens"] = max_tokens
+                request_params["temperature"] = temperature
             
             # Enable JSON mode if requested
             if json_mode:
@@ -449,9 +459,15 @@ class ModelRouter:
             
             # Configure generation
             generation_config = {
-                "temperature": temperature,
                 "max_output_tokens": max_tokens,
             }
+
+            # Handle temperature for newer models if needed
+            # Some reasoning models might not support temperature or require it to be 1.0
+            # For now, we include it unless strictly known otherwise, but we can allow 
+            # override or removal if users encounter "unsupported parameter" errors.
+            # However, the main issue reported is response handling.
+            generation_config["temperature"] = temperature
             
             # Add JSON instruction if needed
             final_prompt = prompt
@@ -466,14 +482,35 @@ class ModelRouter:
                 generation_config=generation_config
             )
             
-            # Extract content
-            content = response.text if response.text else ""
-            
-            if not content:
-                logger.warning("Gemini returned empty content")
+            # Extract content safely
+            try:
+                return response.text
+            except ValueError:
+                # Handle cases where response.text fails (e.g. finish_reason is MAX_TOKENS or SAFETY)
+                # Check candidates
+                if response.candidates:
+                    candidate = response.candidates[0]
+                    
+                    # If we have parts, try to join them
+                    if candidate.content and candidate.content.parts:
+                        text_parts = [part.text for part in candidate.content.parts if part.text]
+                        if text_parts:
+                            return "".join(text_parts)
+                    
+                    # Log specific finish reasons
+                    if candidate.finish_reason == 2: # MAX_TOKENS
+                        logger.warning(f"Gemini model {model} hit max tokens limit ({max_tokens}). Partial response might be missing.")
+                        # If parts were empty despite max tokens, it might be a hard stop
+                        return ""
+                    elif candidate.finish_reason == 3: # SAFETY
+                        logger.warning(f"Gemini model {model} blocked response due to safety settings.")
+                        return "Error: Response blocked by safety filters."
+                    elif candidate.finish_reason == 4: # RECITATION
+                        logger.warning(f"Gemini model {model} blocked response due to recitation.")
+                        return "Error: Response blocked due to recitation."
+                
+                logger.warning(f"Gemini returned invalid or empty response. Finish reason: {response.candidates[0].finish_reason if response.candidates else 'Unknown'}")
                 return ""
-            
-            return content
         
         except Exception as e:
             logger.error(f"Gemini API error: {e}", exc_info=True)

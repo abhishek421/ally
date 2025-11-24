@@ -298,6 +298,45 @@ class Settings(BaseSettings):
             # Don't raise error, just warn (allow custom environments)
             pass
         return v_lower
+
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def validate_database_url(cls, v: str) -> str:
+        """
+        Ensure DATABASE_URL uses the asyncpg driver for async support.
+        Also removes 'schema' query parameter if present as it's not supported by asyncpg.
+        """
+        # Handle postgresql:// -> postgresql+asyncpg://
+        if v.startswith("postgresql://"):
+            v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        elif v.startswith("postgres://"):
+            v = v.replace("postgres://", "postgresql+asyncpg://", 1)
+            
+        # Remove 'schema' query parameter if present
+        # This is needed because some environments (like Supabase or default Postgres setups)
+        # might add ?schema=public, but asyncpg's connect() method doesn't accept 'schema' argument.
+        if "?schema=" in v or "&schema=" in v:
+            from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+            
+            parsed = urlparse(v)
+            query_params = parse_qs(parsed.query)
+            
+            if 'schema' in query_params:
+                # Remove schema parameter
+                del query_params['schema']
+                
+                # Reconstruct URL
+                new_query = urlencode(query_params, doseq=True)
+                v = urlunparse((
+                    parsed.scheme,
+                    parsed.netloc,
+                    parsed.path,
+                    parsed.params,
+                    new_query,
+                    parsed.fragment
+                ))
+                
+        return v
     
     # ========================================
     # Pydantic Settings Configuration

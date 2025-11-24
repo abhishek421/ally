@@ -136,7 +136,7 @@ async def search_companies(
     graphql_auth_token: str,
     search: Optional[str] = None,
     page: int = 1,
-    limit: int = 10
+    limit: int = 50
 ) -> Dict[str, Any]:
     """
     Search companies in a workspace with optional text search filter.
@@ -161,7 +161,7 @@ async def search_companies(
         graphql_auth_token: Authentication token for GraphQL API
         search: Optional text search query to filter results
         page: Page number for pagination (1-indexed, default: 1)
-        limit: Number of results per page (default: 10, max recommended: 50)
+        limit: Number of results per page (default: 50, max recommended: 50)
     
     Returns:
         Dictionary containing:
@@ -192,7 +192,7 @@ async def search_companies(
             user_id="user-456",
             search="Acme",
             page=1,
-            limit=10
+            limit=50
         )
         print(f"Found {results['meta']['total']} companies")
         for company in results['data']:
@@ -216,9 +216,6 @@ async def search_companies(
                 data {
                     id
                     name
-                    privacyLevel
-                    createdBy
-                    imageUrl
                     description
                 }
                 meta {
@@ -255,7 +252,7 @@ async def list_companies(
     user_id: str,
     graphql_auth_token: str,
     page: int = 1,
-    limit: int = 10
+    limit: int = 50
 ) -> Dict[str, Any]:
     """
     List all companies in a workspace without search filter.
@@ -279,7 +276,7 @@ async def list_companies(
         workspace_id: ID of the workspace to list companies from
         user_id: ID of the user performing the listing (for permission filtering)
         page: Page number for pagination (1-indexed, default: 1)
-        limit: Number of results per page (default: 10, max recommended: 50)
+        limit: Number of results per page (default: 50, max recommended: 50)
     
     Returns:
         Dictionary containing:

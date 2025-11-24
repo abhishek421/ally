@@ -74,7 +74,7 @@ from typing import Dict, Any, List
 
 from src.memory.state import AgentState
 from src.config.logger import logger
-
+from src.llm.model import call_summarizer
 
 # ========================================
 # Constants
@@ -109,36 +109,128 @@ ENTITY_BLOCK_TYPE_MAP: Dict[str, str] = {
 # ========================================
 
 
-def _build_thinking_block(state: AgentState) -> Dict[str, Any]:
+def _build_thinking_block(state: AgentState, aggregated: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Build a thinking block from state reasoning traces.
+    Build a user-friendly thinking block (NOT technical jargon).
     
-    Shows the last N reasoning lines to give users insight into
-    the agent's decision-making process without overwhelming them.
+    Translates technical reasoning into plain English that business users can understand.
     
     Args:
         state: Agent state containing reasoning traces
+        aggregated: Aggregated results with tool activity
     
     Returns:
-        Thinking block dictionary:
-        {
-            "type": "thinking",
-            "content": "Planner: ...\\nValidator: ...\\n..."
-        }
+        Thinking block dictionary with human-friendly content
     """
-    # Get last N reasoning lines
-    reasoning_lines = state.reasoning[-MAX_REASONING_LINES:] if state.reasoning else []
+    # Build human-friendly thinking steps
+    human_steps = []
     
-    if not reasoning_lines:
-        content = "Processing your request..."
+    # Check what happened
+    tool_log = aggregated.get("tool_activity_log", [])
+    merged_results = aggregated.get("merged_results", {})
+    plan_summary = aggregated.get("plan_summary", "")
+    
+    # Translate technical actions to user-friendly language
+    if len(tool_log) == 0:
+        # No tools executed - agent is reasoning
+        if "previous" in plan_summary.lower() or "existing" in plan_summary.lower():
+            human_steps.append("Reviewing data I already have...")
+        else:
+            human_steps.append("Analyzing your request...")
     else:
-        # Join reasoning lines with newlines
-        content = "\n".join([r.text for r in reasoning_lines])
+        # Tools executed - describe what we're doing
+        for log in tool_log:
+            tool_name = log.get("tool", "")
+            status = log.get("status", "")
+            
+            if "list" in tool_name or "search" in tool_name:
+                if "companies" in tool_name:
+                    human_steps.append("Looking through your companies...")
+                elif "people" in tool_name:
+                    human_steps.append("Searching through your contacts...")
+                elif "groups" in tool_name:
+                    human_steps.append("Checking your groups...")
+            elif "get" in tool_name:
+                human_steps.append("Fetching details...")
+            elif "create" in tool_name:
+                human_steps.append("Creating new record...")
+            elif "update" in tool_name:
+                human_steps.append("Updating information...")
+            elif "delete" in tool_name:
+                human_steps.append("Removing record...")
+            
+            if status == "success":
+                # Add result summary
+                if "companies" in tool_name and "companies" in merged_results:
+                    data = merged_results["companies"]
+                    if isinstance(data, dict) and "data" in data:
+                        count = len(data.get("data", []))
+                        total = data.get("meta", {}).get("total", count)
+                        human_steps.append(f"Found {total} companies")
+                    elif isinstance(data, list):
+                        human_steps.append(f"Found {len(data)} companies")
+                elif "people" in tool_name and "people" in merged_results:
+                    data = merged_results["people"]
+                    if isinstance(data, dict) and "data" in data:
+                        count = len(data.get("data", []))
+                        total = data.get("meta", {}).get("total", count)
+                        human_steps.append(f"Found {total} contacts")
+                    elif isinstance(data, list):
+                        human_steps.append(f"Found {len(data)} contacts")
+    
+    # Final step
+    if merged_results:
+        human_steps.append("Preparing results...")
+    
+    # Join with line breaks (each step on its own line)
+    content = "\n".join(human_steps) if human_steps else "Processing your request..."
     
     return {
         "type": "thinking",
         "content": content
     }
+
+
+def _build_reasoning_fallback(state: AgentState, aggregated: Dict[str, Any]) -> str | None:
+    """
+    Build a best-effort reasoning summary when no explicit reasoning logs exist.
+    
+    Leverages plan/execution metadata so the UI still communicates intent.
+    """
+    lines: List[str] = []
+    
+    plan = state.plan or {}
+    plan_summary = plan.get("summary")
+    decision_type = plan.get("decision_type")
+    tasks = plan.get("tasks") or []
+    
+    if plan_summary:
+        lines.append(f"Plan: {plan_summary}")
+    elif aggregated.get("plan_summary"):
+        lines.append(f"Plan: {aggregated['plan_summary']}")
+    
+    if decision_type and decision_type != "NONE":
+        lines.append(f"Decision: {decision_type} flow with {len(tasks)} task(s)")
+    elif not lines and plan:
+        lines.append("Plan created with no additional details.")
+    
+    execution_result = state.execution_results or {}
+    executor_summary = execution_result.get("summary") or aggregated.get("executor_summary")
+    if executor_summary:
+        lines.append(f"Execution: {executor_summary}")
+    
+    raw_results = execution_result.get("results") or aggregated.get("raw_results") or []
+    errors = [r.get("error") for r in raw_results if r.get("status") == "error" and r.get("error")]
+    if errors:
+        lines.append(f"Issues: {errors[0]}")
+    
+    tool_activity = aggregated.get("tool_activity_log") or []
+    if tool_activity:
+        success_count = sum(1 for entry in tool_activity if entry.get("status") == "success")
+        failure_count = len(tool_activity) - success_count
+        lines.append(f"Tools: {success_count} succeeded, {failure_count} failed")
+    
+    return "\n".join(lines) if lines else None
 
 
 def _build_tool_log_block(aggregated: Dict[str, Any]) -> Dict[str, Any] | None:
@@ -215,46 +307,128 @@ def _build_entity_blocks(aggregated: Dict[str, Any]) -> List[Dict[str, Any]]:
     return entity_blocks
 
 
-def _build_markdown_summary(aggregated: Dict[str, Any]) -> Dict[str, Any]:
+async def _build_markdown_summary(aggregated: Dict[str, Any], state: AgentState) -> Dict[str, Any]:
     """
-    Build final markdown summary block.
+    Build final markdown summary block using LLM.
     
-    Combines plan summary and executor summary into a cohesive
-    markdown response for the user.
+    Uses the summarizer model to generate a natural language response based on:
+    - The user's original query (from state)
+    - The plan summary
+    - The execution results (from aggregated)
     
     Args:
-        aggregated: Aggregated data containing summaries
+        aggregated: Aggregated data containing summaries and results
+        state: Current agent state
     
     Returns:
-        Markdown block dictionary:
-        {
-            "type": "markdown",
-            "content": "### Summary\\n..."
-        }
+        Markdown block dictionary
     """
+    # Get context
+    user_message = state.messages[-1].content if state.messages else ""
     plan_summary = aggregated.get("plan_summary", "")
-    executor_summary = aggregated.get("executor_summary", "")
+    merged_results = aggregated.get("merged_results", {})
+    tool_log = aggregated.get("tool_activity_log", [])
     
-    # Build markdown content
-    parts = []
+    # Extract metadata counts BEFORE truncating
+    entity_counts = {}
+    if merged_results:
+        for entity_type, entity_data in merged_results.items():
+            if isinstance(entity_data, dict):
+                # Check for pagination metadata
+                if "meta" in entity_data and "total" in entity_data["meta"]:
+                    entity_counts[entity_type] = entity_data["meta"]["total"]
+                elif "data" in entity_data:
+                    entity_counts[entity_type] = len(entity_data.get("data", []))
+            elif isinstance(entity_data, list):
+                entity_counts[entity_type] = len(entity_data)
     
-    if plan_summary:
-        parts.append(plan_summary)
+    # Prepare context for LLM
+    context = f"""
+User Query: {user_message}
+
+Plan Summary: {plan_summary}
+
+Execution Results:
+- Tools executed: {len(tool_log)}
+- Entities found: {list(merged_results.keys())}
+"""
+
+    # Add entity counts (CRITICAL: These are the TRUE counts)
+    if entity_counts:
+        context += f"\n\n**EXACT COUNTS** (use these, not what you count in the preview):\n"
+        for entity_type, count in entity_counts.items():
+            context += f"- {entity_type}: {count} total\n"
+
+    # Add full result details for intelligent analysis
+    if merged_results:
+        import json
+        # For NONE decisions (no tools executed), provide FULL data for LLM reasoning
+        # For tool executions, provide summary + preview
+        if len(tool_log) == 0:
+            # No tools executed - LLM needs to analyze existing data
+            results_str = json.dumps(merged_results, default=str)[:8000]  # Larger limit for reasoning
+            context += f"\n\n**IMPORTANT**: No new tools were executed. Use your knowledge and reasoning to answer based on this existing data:\n{results_str}"
+        else:
+            # Tools executed - provide preview (truncated)
+            results_str = json.dumps(merged_results, default=str)[:2000]
+            context += f"\n\nResult Data Preview (truncated, use EXACT COUNTS above):\n{results_str}"
+
+    # Check for tool failures
+    failed_tools = [log for log in tool_log if log.get("status") == "error"]
+    has_failures = len(failed_tools) > 0
+    all_failed = len(failed_tools) == len(tool_log) if tool_log else False
     
-    if executor_summary:
-        parts.append(executor_summary)
-    
-    if not parts:
-        content = "I've processed your request."
-    else:
-        content = "\n\n".join(parts)
-    
-    # Wrap in markdown
-    markdown_content = f"### Summary\n\n{content}"
-    
+    # Build prompt
+    prompt = f"""You are the voice of the CRM AI Copilot.
+Generate a helpful, natural language response for the user based on the execution results.
+
+Context:
+{context}
+
+Tool Execution Status:
+- Total tools executed: {len(tool_log)}
+- Failed: {len(failed_tools)}
+- All tools failed: {all_failed}
+
+**CRITICAL RULES**:
+
+1. **Use EXACT COUNTS Provided Above**: 
+   - The "EXACT COUNTS" section shows the TRUE total (e.g., companies: 27)
+   - The "Result Data Preview" is TRUNCATED and may only show 10-15 items
+   - ALWAYS use the EXACT COUNT, NOT what you count in the preview
+   - ✅ GOOD: "I found 27 companies in your workspace" (using EXACT COUNT)
+   - ❌ BAD: "I found 11 companies" (counting truncated preview)
+
+2. **List Items When Reasonable**: 
+   - If ≤10 items: List ALL of them by name from the preview
+   - If >10 items: List what you see in preview and say "and X more" (calculate X from EXACT COUNT)
+
+3. **Use Your Knowledge for Analysis**:
+   - If user asks "which are AI companies?" and you have a list, USE YOUR KNOWLEDGE to identify them
+   - Don't just search for keyword "AI" - actually reason about which companies work in AI
+   - Example: OpenAI, Anthropic, DeepSeek AI are AI companies. Netflix is streaming. Mercedes is automotive.
+
+4. **No Hallucination on Failures**:
+   - If all_failed=True, apologize and DO NOT make up data
+
+5. **Be Conversational but Precise**:
+   - Keep it natural (2-4 sentences)
+   - Use markdown for readability (bold names, bullet lists)
+   - Offer next steps when appropriate
+
+Response:"""
+
+    try:
+        # Call LLM
+        logger.debug("Generating final summary with LLM...")
+        content = await call_summarizer(prompt)
+    except Exception as e:
+        logger.error(f"Error generating summary with LLM: {e}")
+        content = plan_summary or "I've processed your request."
+
     return {
         "type": "markdown",
-        "content": markdown_content
+        "content": content
     }
 
 
@@ -321,7 +495,7 @@ async def final_response_node(
         # A. Build Thinking Block
         # ========================================
         
-        thinking_block = _build_thinking_block(state)
+        thinking_block = _build_thinking_block(state, aggregated)
         messages.append(thinking_block)
         
         logger.debug("Added thinking block to messages")
@@ -348,7 +522,7 @@ async def final_response_node(
         # D. Build Final Markdown Summary
         # ========================================
         
-        markdown_summary = _build_markdown_summary(aggregated)
+        markdown_summary = await _build_markdown_summary(aggregated, state)
         messages.append(markdown_summary)
         
         logger.debug("Added markdown summary block to messages")

@@ -152,6 +152,7 @@ BlockType = Literal[
     "TEXT",
     "TABLE",
     "THINKING",
+    "TOOL_LOG",
     "ENTITY_LIST",
     "ENTITY_CARD",
     "INSIGHT_WIDGET",
@@ -175,11 +176,11 @@ class MessageBlock(BaseModel):
 
 class Conversation(BaseModel):
     id: str
-    workspace_id: str
-    user_id: str
+    workspace_id: str = Field(serialization_alias="workspaceId")
+    user_id: str = Field(serialization_alias="userId")
     title: str
-    created_at: datetime
-    updated_at: datetime
+    created_at: datetime = Field(serialization_alias="createdAt")
+    updated_at: datetime = Field(serialization_alias="updatedAt")
 
 class Message(BaseModel):
     id: str

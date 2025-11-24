@@ -76,6 +76,12 @@ class AgentState(BaseModel):
     
     workspace_id: str
     """ID of the workspace this conversation is scoped to."""
+
+    user_details: Optional[Dict[str, Any]] = None
+    """
+    Details of the user (name, email, id, etc.) fetched from the backend.
+    Used to provide context to the agent about who they are talking to.
+    """
     
     # ----------------------------------
     # Message History
