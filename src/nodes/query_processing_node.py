@@ -380,8 +380,11 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
         tool_registry = get_tool_registry()
         tools = tool_registry.get_tool_descriptions() if settings.enable_tools else []
 
-        # Get workspace_id from state or settings
-        workspace_id = state.get("workspace_id") or settings.workspace_id
+        # Get workspace_id from state (prefer state over settings)
+        workspace_id = state.get("workspace_id")
+        if not workspace_id:
+            # Fallback to settings if not in state
+            workspace_id = settings.workspace_id
 
         # Create ReAct module
         react_module = ReActWithTools(

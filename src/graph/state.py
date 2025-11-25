@@ -19,6 +19,7 @@ class GraphState(TypedDict):
     conversation_history: NotRequired[list[Message]]
     context_summary: NotRequired[str]
     workspace_id: NotRequired[str]
+    user_id: NotRequired[str]
 
     # Intermediate results
     query_builder_result: NotRequired[str]
