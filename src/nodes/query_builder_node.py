@@ -52,8 +52,11 @@ def query_builder_node(state: GraphState) -> dict[str, Any]:
     """
     logger.info("Query Builder Node: Starting processing", user_query=state.get("user_query"))
 
-    # Get conversation ID from state or generate one
-    conversation_id = state.get("conversation_id") or settings.conversation_id
+    # Get conversation ID from state (prefer state over settings)
+    conversation_id = state.get("conversation_id")
+    if not conversation_id:
+        # Fallback to settings if not in state
+        conversation_id = settings.conversation_id
     if not conversation_id:
         conversation_id = str(uuid.uuid4())
         logger.info("Generated new conversation ID", conversation_id=conversation_id)

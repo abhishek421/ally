@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     # Workspace Configuration
     workspace_id: Optional[str] = None
 
+    # API Configuration
+    api_host: str = "0.0.0.0"
+    api_port: int = 8000
+    api_reload: bool = False
+
 
 @lru_cache()
 def get_settings() -> Settings:
