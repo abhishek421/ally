@@ -1,11 +1,10 @@
 """Main application entry point."""
 
-import asyncio
 import sys
 from typing import Any
 
 from .config import get_settings
-from .graph import build_graph
+from .graph.runner import ainvoke_graph, invoke_graph
 from .graph.state import GraphState
 from .utils.exceptions import GraphExecutionError
 from .utils.logger import configure_logging, get_logger
@@ -46,16 +45,13 @@ async def run_graph_async(input_data: str | None = None, user_query: str | None 
     try:
         logger.info("Starting graph execution")
 
-        # Build the graph
-        app = build_graph()
-
         # Create initial state
         initial_state = create_initial_state(input_data=input_data, user_query=user_query)
 
         logger.info("Executing graph", initial_state_keys=list(initial_state.keys()))
 
         # Execute the graph
-        final_state = await app.ainvoke(initial_state)
+        final_state = await ainvoke_graph(initial_state)
 
         logger.info(
             "Graph execution completed",
@@ -82,7 +78,9 @@ def run_graph_sync(input_data: str | None = None, user_query: str | None = None)
     Returns:
         Final state after graph execution
     """
-    return asyncio.run(run_graph_async(input_data=input_data, user_query=user_query))
+    initial_state = create_initial_state(input_data=input_data, user_query=user_query)
+    logger.info("Executing graph synchronously", initial_state_keys=list(initial_state.keys()))
+    return invoke_graph(initial_state)
 
 
 def main() -> int:
