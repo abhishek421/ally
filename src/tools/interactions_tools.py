@@ -44,7 +44,6 @@ from src.tools.graphql_client import gql_request
 async def get_person_interactions(
     person_id: str,
     workspace_id: str,
-    graphql_auth_token: str,
     limit: int = 20,
     next_token: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -78,19 +77,10 @@ async def get_person_interactions(
                     "from": str or None,
                     "to": str or None,
                     "direction": str (INBOUND|OUTBOUND),
-                    "body": str or None,
-                    "bodyHtml": str or None,
+                    # Body removed for list view to improve performance
                     "date": str (ISO datetime),
                     "threadId": str or None,
-                    "participants": [
-                        {
-                            "email": str,
-                            "name": str,
-                            "role": str,
-                            "relationship": str
-                        },
-                        ...
-                    ],
+                    "participants": [...],
                     "workspaceId": str,
                     "userId": str,
                     "processed": bool,
@@ -99,11 +89,6 @@ async def get_person_interactions(
                     "deleted": bool,
                     "labels": [str, ...],
                     "notes": str or None,
-                    "ownerPrivacyLevel": str,
-                    "canEdit": bool,
-                    "canDelete": bool,
-                    "isOwn": bool,
-                    "source": str,
                     "interactionType": str,
                     "eventName": str or None,
                     "description": str or None,
@@ -117,19 +102,13 @@ async def get_person_interactions(
             ],
             "totalCount": int,
             "hasNextPage": bool,
-            "nextToken": str or None,
-            "pagination": {
-                "limit": int,
-                "offset": int
-            }
+            "nextToken": str or None
         }
     
     Example:
         result = await get_person_interactions("person-123", "ws-456", limit=20)
         interactions = result["emails"]
         print(f"Found {result['totalCount']} interactions")
-        for interaction in interactions:
-            print(f"- {interaction['interactionType']}: {interaction['eventName']}")
     """
     query = """
         query GetPersonEmails(
@@ -150,8 +129,6 @@ async def get_person_interactions(
                     from
                     to
                     direction
-                    body
-                    bodyHtml
                     date
                     threadId
                     participants {
@@ -192,6 +169,7 @@ async def get_person_interactions(
             }
         }
     """
+    # Removed body and bodyHtml from query
     
     variables = {
         "personId": person_id,
@@ -205,7 +183,7 @@ async def get_person_interactions(
         f"(limit: {limit}, nextToken: {next_token})"
     )
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return data.get("getPersonEmails", {})
 
@@ -213,7 +191,6 @@ async def get_person_interactions(
 async def get_company_interactions(
     company_id: str,
     workspace_id: str,
-    graphql_auth_token: str,
     limit: int = 20,
     next_token: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -247,8 +224,7 @@ async def get_company_interactions(
                     "from": str or None,
                     "to": str or None,
                     "direction": str (INBOUND|OUTBOUND),
-                    "body": str or None,
-                    "bodyHtml": str or None,
+                    # Body removed for list view
                     "date": str (ISO datetime),
                     "threadId": str or None,
                     "participants": [...],
@@ -260,11 +236,6 @@ async def get_company_interactions(
                     "deleted": bool,
                     "labels": [str, ...],
                     "notes": str or None,
-                    "ownerPrivacyLevel": str,
-                    "canEdit": bool,
-                    "canDelete": bool,
-                    "isOwn": bool,
-                    "source": str,
                     "interactionType": str,
                     "eventName": str or None,
                     "description": str or None,
@@ -278,11 +249,7 @@ async def get_company_interactions(
             ],
             "totalCount": int,
             "hasNextPage": bool,
-            "nextToken": str or None,
-            "pagination": {
-                "limit": int,
-                "offset": int
-            }
+            "nextToken": str or None
         }
     
     Example:
@@ -309,8 +276,6 @@ async def get_company_interactions(
                     from
                     to
                     direction
-                    body
-                    bodyHtml
                     date
                     threadId
                     participants {
@@ -351,6 +316,7 @@ async def get_company_interactions(
             }
         }
     """
+    # Removed body and bodyHtml from query
     
     variables = {
         "companyId": company_id,
@@ -364,12 +330,12 @@ async def get_company_interactions(
         f"(limit: {limit}, nextToken: {next_token})"
     )
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return data.get("getCompanyEmails", {})
 
 
-async def get_interaction(message_id: str, workspace_id: str, graphql_auth_token: str) -> Dict[str, Any]:
+async def get_interaction(message_id: str, workspace_id: str) -> Dict[str, Any]:
     """
     Fetch a single interaction/email by messageId.
     
@@ -485,7 +451,7 @@ async def get_interaction(message_id: str, workspace_id: str, graphql_auth_token
     
     logger.debug(f"Fetching interaction: {message_id}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return data.get("getEmail", {})
 
@@ -500,7 +466,6 @@ async def create_interaction(
     interaction_type: str,
     event_name: str,
     date_time: str,
-    graphql_auth_token: str,
     person_id: Optional[str] = None,
     company_id: Optional[str] = None,
     description: Optional[str] = None,
@@ -630,7 +595,7 @@ async def create_interaction(
         f"(person: {person_id}, company: {company_id})"
     )
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return data.get("createInteraction", {})
 
@@ -638,7 +603,6 @@ async def create_interaction(
 async def update_interaction(
     interaction_id: str,
     workspace_id: str,
-    graphql_auth_token: str,
     interaction_type: Optional[str] = None,
     event_name: Optional[str] = None,
     description: Optional[str] = None,
@@ -734,15 +698,14 @@ async def update_interaction(
     
     logger.info(f"Updating interaction: {interaction_id}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return data.get("updateInteraction", {})
 
 
 async def delete_interaction(
     interaction_id: str,
-    workspace_id: str,
-    graphql_auth_token: str
+    workspace_id: str
 ) -> Dict[str, Any]:
     """
     Delete a manual interaction.
@@ -788,7 +751,7 @@ async def delete_interaction(
     
     logger.warning(f"Deleting interaction: {interaction_id}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"result": data.get("deleteInteraction")}
 
@@ -825,4 +788,3 @@ Usage:
     for tool in INTERACTION_TOOLS:
         agent.register_tool(tool)
 """
-

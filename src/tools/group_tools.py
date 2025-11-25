@@ -32,7 +32,7 @@ from src.tools.graphql_client import gql_request
 # ========================================
 
 
-async def get_group(group_id: str, graphql_auth_token: str) -> Dict[str, Any]:
+async def get_group(group_id: str) -> Dict[str, Any]:
     """
     Fetch a single group by ID.
     
@@ -89,7 +89,7 @@ async def get_group(group_id: str, graphql_auth_token: str) -> Dict[str, Any]:
     
     logger.debug(f"Fetching group: {group_id}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     groups = data.get("getGroups", [])
     
@@ -103,7 +103,7 @@ async def get_group(group_id: str, graphql_auth_token: str) -> Dict[str, Any]:
     return {}
 
 
-async def list_groups(workspace_id: str, graphql_auth_token: str) -> Dict[str, Any]:
+async def list_groups(workspace_id: str) -> Dict[str, Any]:
     """
     List all groups in a workspace.
     
@@ -162,14 +162,13 @@ async def list_groups(workspace_id: str, graphql_auth_token: str) -> Dict[str, A
     
     logger.debug(f"Listing groups for workspace: {workspace_id}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"groups": data.get("getGroups", [])}
 
 
 async def get_group_companies(
     group_id: str,
-    graphql_auth_token: str,
     page: int = 1,
     limit: int = 10,
     search: Optional[str] = None
@@ -262,14 +261,13 @@ async def get_group_companies(
         f"(page: {page}, limit: {limit}, search: '{search}')"
     )
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return data.get("getCompaniesByGroup", {})
 
 
 async def get_group_people(
     group_id: str,
-    graphql_auth_token: str,
     page: int = 1,
     limit: int = 10,
     search: Optional[str] = None
@@ -366,7 +364,7 @@ async def get_group_people(
         f"(page: {page}, limit: {limit}, search: '{search}')"
     )
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return data.get("getPeopleByGroup", {})
 
@@ -376,7 +374,7 @@ async def get_group_people(
 # ========================================
 
 
-async def create_group(input: Dict[str, Any], graphql_auth_token: str) -> Dict[str, Any]:
+async def create_group(input: Dict[str, Any]) -> Dict[str, Any]:
     """
     Create a new group in the workspace.
     
@@ -428,12 +426,12 @@ async def create_group(input: Dict[str, Any], graphql_auth_token: str) -> Dict[s
     
     logger.info(f"Creating group: {input.get('name', 'Unknown')}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"result": data.get("createGroup")}
 
 
-async def update_group(group_id: str, input: Dict[str, Any], graphql_auth_token: str) -> Dict[str, Any]:
+async def update_group(group_id: str, input: Dict[str, Any]) -> Dict[str, Any]:
     """
     Update a group's properties such as name, description, emoji, isPrivate, etc.
     
@@ -477,12 +475,12 @@ async def update_group(group_id: str, input: Dict[str, Any], graphql_auth_token:
     
     logger.info(f"Updating group: {group_id}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"result": data.get("updateGroup")}
 
 
-async def delete_group(group_id: str, graphql_auth_token: str) -> Dict[str, Any]:
+async def delete_group(group_id: str) -> Dict[str, Any]:
     """
     Delete a group from the workspace.
     
@@ -520,7 +518,7 @@ async def delete_group(group_id: str, graphql_auth_token: str) -> Dict[str, Any]
     
     logger.warning(f"Deleting group: {group_id}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"result": data.get("deleteGroup")}
 
@@ -534,7 +532,7 @@ async def add_company_to_group(
     group_id: str,
     company_id: str,
     user_id: str
-, graphql_auth_token: str) -> Dict[str, Any]:
+) -> Dict[str, Any]:
     """
     Add a company to a group.
     
@@ -582,12 +580,12 @@ async def add_company_to_group(
     
     logger.info(f"Adding company {company_id} to group {group_id}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"result": data.get("createGroupCompany")}
 
 
-async def remove_company_from_group(group_id: str, company_id: str, graphql_auth_token: str) -> Dict[str, Any]:
+async def remove_company_from_group(group_id: str, company_id: str) -> Dict[str, Any]:
     """
     Remove a company from a group.
     
@@ -626,7 +624,7 @@ async def remove_company_from_group(group_id: str, company_id: str, graphql_auth
     
     logger.info(f"Removing company {company_id} from group {group_id}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"result": data.get("deleteGroupCompany")}
 
@@ -635,7 +633,7 @@ async def add_person_to_group(
     group_id: str,
     people_id: str,
     user_id: str
-, graphql_auth_token: str) -> Dict[str, Any]:
+) -> Dict[str, Any]:
     """
     Add a person to a group.
     
@@ -683,12 +681,12 @@ async def add_person_to_group(
     
     logger.info(f"Adding person {people_id} to group {group_id}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"result": data.get("createGroupPeople")}
 
 
-async def remove_person_from_group(group_id: str, people_id: str, graphql_auth_token: str) -> Dict[str, Any]:
+async def remove_person_from_group(group_id: str, people_id: str) -> Dict[str, Any]:
     """
     Remove a person from a group.
     
@@ -727,7 +725,7 @@ async def remove_person_from_group(group_id: str, people_id: str, graphql_auth_t
     
     logger.info(f"Removing person {people_id} from group {group_id}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"result": data.get("deleteGroupPeople")}
 
@@ -770,4 +768,3 @@ Usage:
     for tool in GROUP_TOOLS:
         agent.register_tool(tool)
 """
-

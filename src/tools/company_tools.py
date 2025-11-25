@@ -31,7 +31,7 @@ from src.tools.graphql_client import gql_request
 # ========================================
 
 
-async def get_company(company_id: str, graphql_auth_token: str) -> Dict[str, Any]:
+async def get_company(company_id: str) -> Dict[str, Any]:
     """
     Fetch a single company by ID with full details.
     
@@ -50,7 +50,6 @@ async def get_company(company_id: str, graphql_auth_token: str) -> Dict[str, Any
     
     Args:
         company_id: Unique identifier of the company
-        graphql_auth_token: Authentication token for GraphQL API
     
     Returns:
         Dictionary containing full company information:
@@ -125,7 +124,7 @@ async def get_company(company_id: str, graphql_auth_token: str) -> Dict[str, Any
     
     logger.debug(f"Fetching company: {company_id}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return data.get("getOneCompany", {})
 
@@ -133,7 +132,6 @@ async def get_company(company_id: str, graphql_auth_token: str) -> Dict[str, Any
 async def search_companies(
     workspace_id: str,
     user_id: str,
-    graphql_auth_token: str,
     search: Optional[str] = None,
     page: int = 1,
     limit: int = 50
@@ -158,7 +156,6 @@ async def search_companies(
     Args:
         workspace_id: ID of the workspace to search in
         user_id: ID of the user performing the search (for permission filtering)
-        graphql_auth_token: Authentication token for GraphQL API
         search: Optional text search query to filter results
         page: Page number for pagination (1-indexed, default: 1)
         limit: Number of results per page (default: 50, max recommended: 50)
@@ -242,7 +239,7 @@ async def search_companies(
         f"(search: '{search}', page: {page}, limit: {limit})"
     )
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return data.get("getWorkspaceCompany", {})
 
@@ -250,7 +247,6 @@ async def search_companies(
 async def list_companies(
     workspace_id: str,
     user_id: str,
-    graphql_auth_token: str,
     page: int = 1,
     limit: int = 50
 ) -> Dict[str, Any]:
@@ -309,7 +305,6 @@ async def list_companies(
     return await search_companies(
         workspace_id=workspace_id,
         user_id=user_id,
-        graphql_auth_token=graphql_auth_token,
         search=None,
         page=page,
         limit=limit
@@ -324,7 +319,6 @@ async def list_companies(
 async def create_company(
     input: Dict[str, Any],
     user_id: str,
-    graphql_auth_token: str,
     group_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
@@ -356,7 +350,6 @@ async def create_company(
     Args:
         input: Company creation input matching CreateCompanyInput schema
         user_id: ID of the user creating the company
-        graphql_auth_token: Authentication token for GraphQL API
         group_id: Optional group ID to add the company to
     
     Returns:
@@ -387,12 +380,12 @@ async def create_company(
     
     logger.info(f"Creating company: {input.get('name', 'Unknown')}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"result": data.get("createCompany")}
 
 
-async def update_company(input: Dict[str, Any], graphql_auth_token: str) -> Dict[str, Any]:
+async def update_company(input: Dict[str, Any]) -> Dict[str, Any]:
     """
     Update an existing company's information.
     
@@ -417,7 +410,6 @@ async def update_company(input: Dict[str, Any], graphql_auth_token: str) -> Dict
     
     Args:
         input: Company update input matching UpdateCompanyInput schema
-        graphql_auth_token: Authentication token for GraphQL API
     
     Returns:
         Dictionary containing update confirmation or updated company data
@@ -441,12 +433,12 @@ async def update_company(input: Dict[str, Any], graphql_auth_token: str) -> Dict
     
     logger.info(f"Updating company: {input.get('id', 'Unknown')}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"result": data.get("updateCompany")}
 
 
-async def delete_companies(company_ids: List[str], graphql_auth_token: str) -> Dict[str, Any]:
+async def delete_companies(company_ids: List[str]) -> Dict[str, Any]:
     """
     Delete one or multiple companies from the workspace.
     
@@ -466,7 +458,6 @@ async def delete_companies(company_ids: List[str], graphql_auth_token: str) -> D
     
     Args:
         company_ids: List of company IDs to delete
-        graphql_auth_token: Authentication token for GraphQL API
     
     Returns:
         Dictionary containing deletion confirmation
@@ -485,7 +476,7 @@ async def delete_companies(company_ids: List[str], graphql_auth_token: str) -> D
     
     logger.warning(f"Deleting {len(company_ids)} companies: {company_ids}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"result": data.get("deleteCompanies")}
 
@@ -495,7 +486,7 @@ async def delete_companies(company_ids: List[str], graphql_auth_token: str) -> D
 # ========================================
 
 
-async def add_person_to_company(people_id: str, company_id: str, graphql_auth_token: str) -> Dict[str, Any]:
+async def add_person_to_company(people_id: str, company_id: str) -> Dict[str, Any]:
     """
     Link a person to a company, establishing a relationship.
     
@@ -515,7 +506,6 @@ async def add_person_to_company(people_id: str, company_id: str, graphql_auth_to
     Args:
         people_id: ID of the person to link
         company_id: ID of the company to link
-        graphql_auth_token: Authentication token for GraphQL API
     
     Returns:
         Dictionary containing relationship confirmation
@@ -537,12 +527,12 @@ async def add_person_to_company(people_id: str, company_id: str, graphql_auth_to
     
     logger.info(f"Linking person {people_id} to company {company_id}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"result": data.get("addPersonToCompany")}
 
 
-async def remove_person_from_company(people_id: str, company_id: str, graphql_auth_token: str) -> Dict[str, Any]:
+async def remove_person_from_company(people_id: str, company_id: str) -> Dict[str, Any]:
     """
     Unlink a person from a company, removing the relationship.
     
@@ -557,7 +547,6 @@ async def remove_person_from_company(people_id: str, company_id: str, graphql_au
     Args:
         people_id: ID of the person to unlink
         company_id: ID of the company to unlink from
-        graphql_auth_token: Authentication token for GraphQL API
     
     Returns:
         Dictionary containing unlink confirmation
@@ -579,7 +568,7 @@ async def remove_person_from_company(people_id: str, company_id: str, graphql_au
     
     logger.info(f"Unlinking person {people_id} from company {company_id}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"result": data.get("removePersonFromCompany")}
 
@@ -614,4 +603,3 @@ Usage:
     for tool in COMPANY_TOOLS:
         agent.register_tool(tool)
 """
-

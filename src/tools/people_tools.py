@@ -31,7 +31,7 @@ from src.tools.graphql_client import gql_request
 # ========================================
 
 
-async def get_person(people_id: str, graphql_auth_token: str) -> Dict[str, Any]:
+async def get_person(people_id: str) -> Dict[str, Any]:
     """
     Fetch a single person by ID with full details.
     
@@ -111,6 +111,7 @@ async def get_person(people_id: str, graphql_auth_token: str) -> Dict[str, Any]:
                 addresses {
                     line1
                     line2
+                    line3
                     city
                     state
                     country
@@ -129,12 +130,13 @@ async def get_person(people_id: str, graphql_auth_token: str) -> Dict[str, Any]:
             }
         }
     """
+    # Note: Added line3 to addresses in query to be safe, though not in mock return desc
     
     variables = {"peopleId": people_id}
     
     logger.debug(f"Fetching person: {people_id}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return data.get("getPerson", {})
 
@@ -142,7 +144,6 @@ async def get_person(people_id: str, graphql_auth_token: str) -> Dict[str, Any]:
 async def search_people(
     workspace_id: str,
     user_id: str,
-    graphql_auth_token: str,
     search: Optional[str] = None,
     page: int = 1,
     limit: int = 10
@@ -256,7 +257,7 @@ async def search_people(
         f"(search: '{search}', page: {page}, limit: {limit})"
     )
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return data.get("getWorkspacePeople", {})
 
@@ -264,7 +265,6 @@ async def search_people(
 async def list_people(
     workspace_id: str,
     user_id: str,
-    graphql_auth_token: str,
     page: int = 1,
     limit: int = 10
 ) -> Dict[str, Any]:
@@ -324,7 +324,6 @@ async def list_people(
     return await search_people(
         workspace_id=workspace_id,
         user_id=user_id,
-        graphql_auth_token=graphql_auth_token,
         search=None,
         page=page,
         limit=limit
@@ -339,7 +338,6 @@ async def list_people(
 async def create_person(
     input: Dict[str, Any],
     user_id: str,
-    graphql_auth_token: str,
     group_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
@@ -409,12 +407,12 @@ async def create_person(
         f"Creating person: {input.get('firstName', 'Unknown')} {input.get('lastName', '')}"
     )
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"result": data.get("createPerson")}
 
 
-async def update_person(input: Dict[str, Any], graphql_auth_token: str) -> Dict[str, Any]:
+async def update_person(input: Dict[str, Any]) -> Dict[str, Any]:
     """
     Update an existing person's information.
     
@@ -465,12 +463,12 @@ async def update_person(input: Dict[str, Any], graphql_auth_token: str) -> Dict[
     
     logger.info(f"Updating person: {input.get('id', 'Unknown')}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"result": data.get("updatePerson")}
 
 
-async def delete_people(people_ids: List[str], graphql_auth_token: str) -> Dict[str, Any]:
+async def delete_people(people_ids: List[str]) -> Dict[str, Any]:
     """
     Delete one or multiple people from the workspace.
     
@@ -508,7 +506,7 @@ async def delete_people(people_ids: List[str], graphql_auth_token: str) -> Dict[
     
     logger.warning(f"Deleting {len(people_ids)} people: {people_ids}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"result": data.get("deletePeoples")}
 
@@ -518,7 +516,7 @@ async def delete_people(people_ids: List[str], graphql_auth_token: str) -> Dict[
 # ========================================
 
 
-async def add_company_to_person(people_id: str, company_id: str, graphql_auth_token: str) -> Dict[str, Any]:
+async def add_company_to_person(people_id: str, company_id: str) -> Dict[str, Any]:
     """
     Link a person to a company, establishing a relationship.
     
@@ -562,12 +560,12 @@ async def add_company_to_person(people_id: str, company_id: str, graphql_auth_to
     
     logger.info(f"Linking person {people_id} to company {company_id}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"result": data.get("addPersonToCompany")}
 
 
-async def remove_company_from_person(people_id: str, company_id: str, graphql_auth_token: str) -> Dict[str, Any]:
+async def remove_company_from_person(people_id: str, company_id: str) -> Dict[str, Any]:
     """
     Unlink a person from a company, removing the relationship.
     
@@ -606,7 +604,7 @@ async def remove_company_from_person(people_id: str, company_id: str, graphql_au
     
     logger.info(f"Unlinking person {people_id} from company {company_id}")
     
-    data = await gql_request(query, variables, auth_token=graphql_auth_token)
+    data = await gql_request(query, variables)
     
     return {"result": data.get("removePersonFromCompany")}
 
@@ -641,4 +639,3 @@ Usage:
     for tool in PEOPLE_TOOLS:
         agent.register_tool(tool)
 """
-
