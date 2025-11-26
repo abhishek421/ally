@@ -1,6 +1,7 @@
 """API route handlers."""
 
 import json
+import uuid
 from typing import Dict, Any
 
 from fastapi import APIRouter, HTTPException
@@ -13,6 +14,12 @@ from ..utils.conversation_message_service import (
     prepare_function_calls,
     prepare_metadata_from_response,
     save_assistant_message_async,
+    save_user_message_async,
+    _save_user_message_sync,
+)
+from ..utils.conversation_service import (
+    create_conversation_sync,
+    generate_title_from_query,
 )
 from ..utils.exceptions import GraphExecutionError
 from ..utils.logger import get_logger
@@ -60,12 +67,72 @@ async def chat(request: ChatRequest) -> ChatResponse:
             query_length=len(request.query),
         )
         
+        # Determine conversation_id and handle new vs existing conversation
+        conversation_id = request.conversation_id
+        
+        if not conversation_id:
+            # New conversation: generate UUID and create conversation record
+            conversation_id = str(uuid.uuid4())
+            logger.info(
+                "Creating new conversation",
+                conversation_id=conversation_id,
+                workspace_id=request.workspace_id,
+                user_id=request.user_id,
+            )
+            
+            # Generate title from query
+            title = generate_title_from_query(request.query)
+            
+            # Create conversation record (synchronous, fail on error)
+            try:
+                create_conversation_sync(
+                    conversation_id=conversation_id,
+                    workspace_id=request.workspace_id,
+                    user_id=request.user_id,
+                    title=title,
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to create conversation record",
+                    conversation_id=conversation_id,
+                    error=str(e),
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to create conversation: {str(e)}",
+                )
+            
+            # Create USER message (synchronous, fail on error)
+            try:
+                _save_user_message_sync(
+                    conversation_id=conversation_id,
+                    content=request.query,
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to create user message",
+                    conversation_id=conversation_id,
+                    error=str(e),
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to save user message: {str(e)}",
+                )
+        else:
+            # Existing conversation: save USER message asynchronously (non-blocking)
+            save_user_message_async(
+                conversation_id=conversation_id,
+                content=request.query,
+            )
+        
         # Create initial graph state
         initial_state: GraphState = {
             "user_query": request.query,
             "workspace_id": request.workspace_id,
             "user_id": request.user_id,
-            "conversation_id": request.conversation_id,
+            "conversation_id": conversation_id,
             "execution_path": [],
             "metadata": {
                 "user_id": request.user_id,
@@ -73,7 +140,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
             },
         }
         
-        # Execute graph
+        # Execute graph (starts immediately, doesn't wait for message saves)
         final_state = await ainvoke_graph(initial_state)
         
         # Parse response
@@ -101,8 +168,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
         tool_calls = result_data.get("tool_calls", [])
         metadata = result_data.get("metadata", {})
         
-        # Get conversation_id from final state (may have been generated)
-        conversation_id = final_state.get("conversation_id", request.conversation_id)
+        # Get conversation_id from final state (should match what we set)
+        conversation_id = final_state.get("conversation_id", conversation_id)
         
         logger.info(
             "Chat request completed",
