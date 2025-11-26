@@ -17,7 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -349,4 +349,50 @@ class ColumnValueMember(Base):
     dealId = Column(PGUUID(as_uuid=True), nullable=True, index=True)
     createdBy = Column(PGUUID(as_uuid=True), nullable=False)
     createdAt = Column(DateTime, default=datetime.utcnow, server_default=text("now()"))
+
+
+class Conversation(Base):
+    """Conversation model (minimal - for foreign key reference only).
+    
+    This model exists solely to allow SQLAlchemy to resolve the foreign key
+    relationship from ConversationMessage. The actual conversation table is
+    managed by another service, so we only define the primary key here.
+    """
+    __tablename__ = "conversation"
+    
+    id = Column(PGUUID(as_uuid=True), primary_key=True)
+    # Other columns are not defined since this is only for FK reference
+
+
+class ConversationMessage(Base):
+    """Conversation message model for AI conversations."""
+    __tablename__ = "conversationMessage"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    conversationId = Column(
+        PGUUID(as_uuid=True),
+        ForeignKey("conversation.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role = Column(
+        Enum("USER", "ASSISTANT", "SYSTEM", "FUNCTION", name="conversation_role"),
+        nullable=False,
+        index=True,
+    )
+    content = Column(Text, nullable=False)
+    meta_data = Column("metadata", JSONB, nullable=True)
+    functionCalls = Column(JSONB, nullable=True)
+    timestamp = Column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(6)"),
+        index=True,
+    )
+
+    __table_args__ = (
+        Index("conversationMessage_conversationId_idx", "conversationId"),
+        Index("conversationMessage_conversationId_timestamp_idx", "conversationId", "timestamp"),
+        Index("conversationMessage_role_idx", "role"),
+    )
 
