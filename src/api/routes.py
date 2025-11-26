@@ -9,6 +9,11 @@ from sse_starlette.sse import EventSourceResponse
 from ..config import get_settings
 from ..graph.runner import ainvoke_graph
 from ..graph.state import GraphState
+from ..utils.conversation_message_service import (
+    prepare_function_calls,
+    prepare_metadata_from_response,
+    save_assistant_message_async,
+)
 from ..utils.exceptions import GraphExecutionError
 from ..utils.logger import get_logger
 from .models import ChatRequest, ChatResponse, HealthResponse
@@ -106,13 +111,44 @@ async def chat(request: ChatRequest) -> ChatResponse:
             tool_calls_count=len(tool_calls),
         )
         
-        return ChatResponse(
+        # Prepare response
+        response = ChatResponse(
             answer=answer,
             conversation_id=conversation_id,
             metadata=metadata,
             tool_calls=tool_calls,
             reasoning_steps=reasoning_steps,
         )
+        
+        # Save assistant message to database in background (non-blocking)
+        try:
+            # Prepare metadata for storage
+            query_processing_metadata = final_state.get("query_processing_metadata", {})
+            storage_metadata = prepare_metadata_from_response(
+                result_data,
+                query_processing_metadata,
+            )
+            
+            # Prepare function calls for storage
+            storage_function_calls = prepare_function_calls(tool_calls)
+            
+            # Save asynchronously (won't block response)
+            save_assistant_message_async(
+                conversation_id=conversation_id,
+                content=answer,
+                metadata=storage_metadata,
+                function_calls=storage_function_calls if storage_function_calls else None,
+            )
+        except Exception as e:
+            # Log error but don't fail the request
+            logger.error(
+                "Failed to initiate message save to database",
+                conversation_id=conversation_id,
+                error=str(e),
+                exc_info=True,
+            )
+        
+        return response
         
     except GraphExecutionError as e:
         logger.error("Graph execution error", error=str(e), exc_info=True)

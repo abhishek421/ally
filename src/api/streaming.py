@@ -8,6 +8,11 @@ from sse_starlette.sse import EventSourceResponse
 from ..config import get_settings
 from ..graph.runner import ainvoke_graph
 from ..graph.state import GraphState
+from ..utils.conversation_message_service import (
+    prepare_function_calls,
+    prepare_metadata_from_response,
+    save_assistant_message_async,
+)
 from ..utils.logger import get_logger
 from .models import StreamChunk, StreamChunkType
 
@@ -105,6 +110,36 @@ async def stream_graph_response(
                     content="",
                     data={"metadata": result_data.get("metadata", {})},
                 )
+                
+                # Save assistant message to database in background (non-blocking)
+                try:
+                    conversation_id = state.get("conversation_id")
+                    if conversation_id:
+                        # Prepare metadata for storage
+                        query_processing_metadata = final_state.get("query_processing_metadata", {})
+                        storage_metadata = prepare_metadata_from_response(
+                            result_data,
+                            query_processing_metadata,
+                        )
+                        
+                        # Prepare function calls for storage
+                        storage_function_calls = prepare_function_calls(tool_calls)
+                        
+                        # Save asynchronously (won't block streaming)
+                        save_assistant_message_async(
+                            conversation_id=conversation_id,
+                            content=answer,
+                            metadata=storage_metadata,
+                            function_calls=storage_function_calls if storage_function_calls else None,
+                        )
+                except Exception as e:
+                    # Log error but don't fail streaming
+                    logger.error(
+                        "Failed to initiate message save to database in streaming",
+                        conversation_id=state.get("conversation_id"),
+                        error=str(e),
+                        exc_info=True,
+                    )
                 
             except json.JSONDecodeError:
                 # If parsing fails, just stream the raw result

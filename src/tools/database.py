@@ -33,18 +33,35 @@ def get_database_url() -> str:
 
 
 def get_engine() -> Engine:
-    """Get or create database engine."""
+    """Get or create database engine with connection pooling.
+    
+    The engine uses a connection pool to efficiently manage database connections.
+    Connections are reused across multiple tool calls, and stale connections
+    are automatically recycled.
+    """
     global _engine
     if _engine is None:
         database_url = get_database_url()
         _engine = create_engine(
             database_url,
-            pool_size=10,
-            max_overflow=20,
-            pool_pre_ping=True,
-            echo=False,
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
+            pool_pre_ping=True,  # Verify connections before using
+            pool_recycle=settings.db_pool_recycle,  # Recycle connections after this many seconds
+            pool_timeout=settings.db_pool_timeout,  # Wait time for connection from pool
+            echo=settings.db_echo,  # Log SQL queries (for debugging)
+            connect_args={
+                "connect_timeout": settings.db_connect_timeout,  # Connection timeout
+                "application_name": "analyst_ai",  # For database monitoring
+            },
         )
-        logger.info("Database engine created", database_url=database_url.split("@")[-1])
+        logger.info(
+            "Database engine created",
+            database_url=database_url.split("@")[-1],
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
+            pool_recycle=settings.db_pool_recycle,
+        )
     return _engine
 
 
