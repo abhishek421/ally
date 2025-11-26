@@ -352,16 +352,34 @@ class ColumnValueMember(Base):
 
 
 class Conversation(Base):
-    """Conversation model (minimal - for foreign key reference only).
-    
-    This model exists solely to allow SQLAlchemy to resolve the foreign key
-    relationship from ConversationMessage. The actual conversation table is
-    managed by another service, so we only define the primary key here.
-    """
+    """Conversation model for AI conversations."""
     __tablename__ = "conversation"
     
-    id = Column(PGUUID(as_uuid=True), primary_key=True)
-    # Other columns are not defined since this is only for FK reference
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    workspaceId = Column(PGUUID(as_uuid=True), nullable=False, index=True)
+    userId = Column(PGUUID(as_uuid=True), nullable=False, index=True)
+    title = Column(Text, nullable=True)
+    context = Column(JSONB, nullable=True)
+    createdAt = Column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(6)"),
+        index=True,
+    )
+    updatedAt = Column(
+        DateTime(timezone=False),
+        nullable=False,
+        default=datetime.utcnow,  # Python-side default for INSERT
+        server_default=text("CURRENT_TIMESTAMP(6)"),  # Database-side default
+        onupdate=datetime.utcnow,  # For UPDATE operations
+    )
+    
+    __table_args__ = (
+        Index("idx_conversation_workspaceId_userId", "workspaceId", "userId"),
+        Index("idx_conversation_workspaceId", "workspaceId"),
+        Index("idx_conversation_userId", "userId"),
+        Index("idx_conversation_createdAt", "createdAt"),
+    )
 
 
 class ConversationMessage(Base):

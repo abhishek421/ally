@@ -12,7 +12,7 @@ class ChatRequest(BaseModel):
     query: str = Field(..., description="User query/question")
     workspace_id: str = Field(..., description="Workspace identifier")
     user_id: str = Field(..., description="User identifier")
-    conversation_id: str = Field(..., description="Conversation identifier")
+    conversation_id: Optional[str] = Field(None, description="Conversation identifier (optional, will be created if not provided)")
 
 
 class ChatResponse(BaseModel):

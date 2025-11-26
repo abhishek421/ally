@@ -1,6 +1,7 @@
 """Streaming utilities for API responses."""
 
 import json
+import uuid
 from typing import AsyncIterator, Dict, Any
 
 from sse_starlette.sse import EventSourceResponse
@@ -12,6 +13,12 @@ from ..utils.conversation_message_service import (
     prepare_function_calls,
     prepare_metadata_from_response,
     save_assistant_message_async,
+    save_user_message_async,
+    _save_user_message_sync,
+)
+from ..utils.conversation_service import (
+    create_conversation_sync,
+    generate_title_from_query,
 )
 from ..utils.logger import get_logger
 from .models import StreamChunk, StreamChunkType
@@ -40,11 +47,79 @@ async def stream_graph_response(
         # First, execute query_builder_node to get enriched query
         logger.info("Starting streaming graph execution")
         
+        # Handle conversation creation if needed (before streaming starts)
+        conversation_id = state.get("conversation_id")
+        workspace_id = state.get("workspace_id")
+        user_id = state.get("user_id")
+        user_query = state.get("user_query", "")
+        
+        if not conversation_id:
+            # New conversation: generate UUID and create conversation record
+            conversation_id = str(uuid.uuid4())
+            logger.info(
+                "Creating new conversation for streaming",
+                conversation_id=conversation_id,
+                workspace_id=workspace_id,
+                user_id=user_id,
+            )
+            
+            # Generate title from query
+            title = generate_title_from_query(user_query)
+            
+            # Create conversation record (synchronous, fail on error)
+            try:
+                create_conversation_sync(
+                    conversation_id=conversation_id,
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    title=title,
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to create conversation record in streaming",
+                    conversation_id=conversation_id,
+                    error=str(e),
+                    exc_info=True,
+                )
+                yield StreamChunk(
+                    type=StreamChunkType.ERROR,
+                    content=f"Failed to create conversation: {str(e)}",
+                )
+                return
+            
+            # Create USER message (synchronous, fail on error)
+            try:
+                _save_user_message_sync(
+                    conversation_id=conversation_id,
+                    content=user_query,
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to create user message in streaming",
+                    conversation_id=conversation_id,
+                    error=str(e),
+                    exc_info=True,
+                )
+                yield StreamChunk(
+                    type=StreamChunkType.ERROR,
+                    content=f"Failed to save user message: {str(e)}",
+                )
+                return
+            
+            # Update state with generated conversation_id
+            state["conversation_id"] = conversation_id
+        else:
+            # Existing conversation: save USER message asynchronously (non-blocking)
+            save_user_message_async(
+                conversation_id=conversation_id,
+                content=user_query,
+            )
+        
         # Create initial state for query builder
         query_builder_state: GraphState = {
-            "user_query": state.get("user_query", ""),
-            "conversation_id": state.get("conversation_id"),
-            "workspace_id": state.get("workspace_id"),
+            "user_query": user_query,
+            "conversation_id": conversation_id,
+            "workspace_id": workspace_id,
             "execution_path": [],
             "metadata": state.get("metadata", {}),
         }
@@ -113,8 +188,9 @@ async def stream_graph_response(
                 
                 # Save assistant message to database in background (non-blocking)
                 try:
-                    conversation_id = state.get("conversation_id")
-                    if conversation_id:
+                    # Use conversation_id from state (may have been generated)
+                    final_conversation_id = final_state.get("conversation_id", conversation_id)
+                    if final_conversation_id:
                         # Prepare metadata for storage
                         query_processing_metadata = final_state.get("query_processing_metadata", {})
                         storage_metadata = prepare_metadata_from_response(
@@ -127,7 +203,7 @@ async def stream_graph_response(
                         
                         # Save asynchronously (won't block streaming)
                         save_assistant_message_async(
-                            conversation_id=conversation_id,
+                            conversation_id=final_conversation_id,
                             content=answer,
                             metadata=storage_metadata,
                             function_calls=storage_function_calls if storage_function_calls else None,
@@ -136,7 +212,7 @@ async def stream_graph_response(
                     # Log error but don't fail streaming
                     logger.error(
                         "Failed to initiate message save to database in streaming",
-                        conversation_id=state.get("conversation_id"),
+                        conversation_id=final_conversation_id,
                         error=str(e),
                         exc_info=True,
                     )
