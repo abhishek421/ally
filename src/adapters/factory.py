@@ -57,6 +57,7 @@ def get_llm_adapter(
     model_name: Optional[str] = None,
     temperature: float = 0,
     api_key: Optional[str] = None,
+    max_tokens: Optional[int] = None,
 ) -> LLMAdapter:
     """Get appropriate LLM adapter based on model name.
 
@@ -64,6 +65,7 @@ def get_llm_adapter(
         model_name: Model name. If None, uses settings.llm_model
         temperature: Sampling temperature
         api_key: Optional API key override
+        max_tokens: Optional max tokens override. If None, uses settings.llm_max_tokens
 
     Returns:
         LLMAdapter instance
@@ -77,12 +79,15 @@ def get_llm_adapter(
 
     provider = detect_provider(model_name)
 
+    # Use provided max_tokens or fall back to settings
+    max_tokens = max_tokens if max_tokens is not None else settings.llm_max_tokens
+
     if provider == "openai":
-        return OpenAIAdapter(model=model_name, api_key=api_key, temperature=temperature)
+        return OpenAIAdapter(model=model_name, api_key=api_key, temperature=temperature, max_tokens=max_tokens)
     elif provider == "gemini":
-        return GeminiAdapter(model=model_name, api_key=api_key, temperature=temperature)
+        return GeminiAdapter(model=model_name, api_key=api_key, temperature=temperature, max_tokens=max_tokens)
     elif provider == "claude":
-        return ClaudeAdapter(model=model_name, api_key=api_key, temperature=temperature)
+        return ClaudeAdapter(model=model_name, api_key=api_key, temperature=temperature, max_tokens=max_tokens)
     else:
         raise ValueError(f"Unsupported provider: {provider}")
 

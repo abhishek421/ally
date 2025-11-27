@@ -11,13 +11,14 @@ settings = get_settings()
 class ClaudeAdapter(LLMAdapter):
     """Anthropic Claude LLM adapter using LangChain."""
 
-    def __init__(self, model: str, api_key: Optional[str] = None, temperature: float = 0):
+    def __init__(self, model: str, api_key: Optional[str] = None, temperature: float = 0, max_tokens: Optional[int] = None):
         """Initialize Claude adapter.
 
         Args:
             model: Model name (e.g., 'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku')
             api_key: Anthropic API key. If None, uses settings.
             temperature: Sampling temperature
+            max_tokens: Maximum tokens for response. If None, uses settings.llm_max_tokens
         """
         try:
             from langchain_anthropic import ChatAnthropic
@@ -32,10 +33,14 @@ class ClaudeAdapter(LLMAdapter):
         if not api_key:
             raise ValueError("Anthropic API key is required. Set ANTHROPIC_API_KEY in environment.")
 
+        # Use provided max_tokens or fall back to settings
+        max_tokens = max_tokens if max_tokens is not None else settings.llm_max_tokens
+
         self.llm = ChatAnthropic(
             model=model,
             anthropic_api_key=api_key,
             temperature=temperature,
+            max_tokens=max_tokens,
         )
 
     def invoke(self, prompt: str, **kwargs) -> str:

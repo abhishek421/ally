@@ -13,23 +13,28 @@ settings = get_settings()
 class OpenAIAdapter(LLMAdapter):
     """OpenAI LLM adapter using LangChain."""
 
-    def __init__(self, model: str, api_key: Optional[str] = None, temperature: float = 0):
+    def __init__(self, model: str, api_key: Optional[str] = None, temperature: float = 0, max_tokens: Optional[int] = None):
         """Initialize OpenAI adapter.
 
         Args:
             model: Model name (e.g., 'gpt-4', 'gpt-3.5-turbo')
             api_key: OpenAI API key. If None, uses settings.
             temperature: Sampling temperature
+            max_tokens: Maximum tokens for response. If None, uses settings.llm_max_tokens
         """
         self.model_name = model
 openai_api_key="REDACTED"
         if not api_key:
 OPENAI_API_KEY=REDACTED
 
+        # Use provided max_tokens or fall back to settings
+        max_tokens = max_tokens if max_tokens is not None else settings.llm_max_tokens
+
         self.llm = ChatOpenAI(
             model=model,
             api_key=api_key,
             temperature=temperature,
+            max_tokens=max_tokens,
         )
 
     def invoke(self, prompt: str, **kwargs) -> str:
