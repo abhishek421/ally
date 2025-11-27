@@ -36,19 +36,27 @@ def _get_dspy_lm():
 class ReActWithTools(dspy.Module):
     """ReAct module with tool support."""
 
-    def __init__(self, tools: List[Dict[str, Any]], max_iterations: int = 10, workspace_id: Optional[str] = None):
+    def __init__(
+        self,
+        tools: List[Dict[str, Any]],
+        max_iterations: int = 10,
+        workspace_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ):
         """Initialize ReAct module with tools.
 
         Args:
             tools: List of available tools
             max_iterations: Maximum number of reasoning iterations
             workspace_id: Workspace ID to automatically inject into tool calls
+            user_id: User ID to automatically inject into tool calls (for write operations)
         """
         super().__init__()
         self.tools = {tool["name"]: tool for tool in tools}
         self.max_iterations = max_iterations
         self.tool_registry = get_tool_registry()
         self.workspace_id = workspace_id or settings.workspace_id
+        self.user_id = user_id
         if not self.workspace_id:
             logger.warning("No workspace_id provided. Tool calls may fail if workspace_id is required.")
 
@@ -88,11 +96,25 @@ class ReActWithTools(dspy.Module):
                 context += "\n"
 
             context += (
+                "You are a friendly, alive, and direct business analyst AI. You have a personality. "
+                "You are not just a tool; you are a partner in analysis. Be concise and direct. "
+                "If the data is large, big messages are fine. If not, keep it brief. "
+                "Avoid irrelevant long messages.\n\n"
                 "IMPORTANT: You do NOT have direct access to data. You MUST use tools to retrieve information.\n"
+                "If you cannot perform an action (like adding a person) because you lack the tool, "
+                "say so directly. Do NOT suggest logging into the CRM or navigating to the website. "
+                "I don't need that generic advice.\n\n"
+                "CRITICAL - User-Friendly Responses:\n"
+                "- NEVER include UUIDs, IDs, or technical identifiers in your responses to the user.\n"
+                "- NEVER mention workspace_id, user_id, company_id, person_id, or any internal IDs.\n"
+                "- Use names and descriptions instead of IDs (e.g., say 'Created company Entreship' NOT 'Created company with ID abc-123').\n"
+                "- Keep responses natural and conversational, as if talking to a non-technical business user.\n"
+                "- When referring to entities from previous messages, use their names, not IDs.\n\n"
                 "When interpreting tool results, pay attention to metadata fields like 'total' or 'count' in the response. "
                 "If the user's question asks for a 'total', 'count', or 'number of' items, and the tool returns a 'total' field, "
                 "use this value as the answer. "
                 "However, if the user asks to 'list', 'show', or 'find' items, use the 'results' list to provide the details.\n\n"
+                "Format your final answer in clean, readable Markdown.\n\n"
                 "You MUST respond in one of these formats:\n\n"
                 "Format 1 - To use a tool (USE THIS to get information):\n"
                 "ACTION: use_tool\n"
@@ -336,6 +358,11 @@ class ReActWithTools(dspy.Module):
             if self.workspace_id:
                 params["workspace_id"] = self.workspace_id
 
+            # Also inject user_id for write operations
+            # This ensures correct user_id even if LLM provides a placeholder
+            if self.user_id:
+                params["user_id"] = self.user_id
+
             result = tool.execute(**params)
             return result
         except Exception as e:
@@ -386,11 +413,15 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
             # Fallback to settings if not in state
             workspace_id = settings.workspace_id
 
+        # Get user_id from state (needed for write operations)
+        user_id = state.get("user_id")
+
         # Create ReAct module
         react_module = ReActWithTools(
             tools=tools,
             max_iterations=settings.max_react_iterations,
             workspace_id=workspace_id,
+            user_id=user_id,
         )
 
         # Process query

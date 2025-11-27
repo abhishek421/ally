@@ -256,11 +256,14 @@ class GetPersonCompaniesTool(Tool):
             current_only=current_only,
         )
 
-        # This would call data_access.get_person_companies() when implemented
-        return {
-            "companies": [],
-            "error": "Not yet implemented - requires data access layer",
-        }
+        data_access = get_data_access()
+        return data_access.get_person_companies(
+            workspace_id=workspace_id,
+            person_id=person_id,
+            current_only=current_only,
+            include_primary=include_primary,
+            include_metadata=include_metadata,
+        )
 
 
 class GetPersonDealsTool(Tool):
@@ -301,17 +304,27 @@ class GetPersonDealsTool(Tool):
     def execute(self, **kwargs: Any) -> Any:
         workspace_id = kwargs.get("workspace_id")
         person_id = kwargs.get("person_id")
+        status = kwargs.get("status")
+        column_id = kwargs.get("column_id")
+        group_id = kwargs.get("group_id")
+        sort_by = kwargs.get("sort_by")
+        limit = kwargs.get("limit")
 
         if not workspace_id or not person_id:
             raise ValueError("workspace_id and person_id are required")
 
         logger.info("Getting person deals", workspace_id=workspace_id, person_id=person_id)
 
-        return {
-            "deals": [],
-            "total": 0,
-            "error": "Not yet implemented - requires data access layer",
-        }
+        data_access = get_data_access()
+        return data_access.get_person_deals(
+            workspace_id=workspace_id,
+            person_id=person_id,
+            status=status,
+            column_id=column_id,
+            group_id=group_id,
+            sort_by=sort_by,
+            limit=limit,
+        )
 
 
 class GetPersonInteractionsTool(Tool):
@@ -388,24 +401,41 @@ class GetPersonInteractionsTool(Tool):
     def execute(self, **kwargs: Any) -> Any:
         workspace_id = kwargs.get("workspace_id")
         person_id = kwargs.get("person_id")
+        type_filter = kwargs.get("type")
+        direction = kwargs.get("direction")
+        date_range = kwargs.get("date_range")
+        limit = kwargs.get("limit", 20)
+        offset = kwargs.get("offset", 0)
+        sort_by = kwargs.get("sort_by")
+        sort_order = kwargs.get("sort_order")
 
         if not workspace_id or not person_id:
             raise ValueError("workspace_id and person_id are required")
 
         logger.info("Getting person interactions", workspace_id=workspace_id, person_id=person_id)
 
-        return {
-            "interactions": [],
-            "total": 0,
-            "summary": {
-                "totalCount": 0,
-                "byType": {},
-                "byDirection": {"inbound": 0, "outbound": 0},
-                "lastInteractionDate": None,
-                "averageResponseTime": None,
-            },
-            "error": "Not yet implemented - requires data access layer",
-        }
+        # Parse date range if provided
+        parsed_date_range = None
+        if date_range:
+            from datetime import datetime
+            parsed_date_range = {}
+            if date_range.get("start"):
+                parsed_date_range["start"] = datetime.fromisoformat(date_range["start"].replace("Z", "+00:00"))
+            if date_range.get("end"):
+                parsed_date_range["end"] = datetime.fromisoformat(date_range["end"].replace("Z", "+00:00"))
+
+        data_access = get_data_access()
+        return data_access.get_person_interactions(
+            workspace_id=workspace_id,
+            person_id=person_id,
+            type=type_filter,
+            direction=direction,
+            date_range=parsed_date_range,
+            limit=limit,
+            offset=offset,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
 
 
 class GetPersonTimelineTool(Tool):
@@ -450,15 +480,50 @@ class GetPersonTimelineTool(Tool):
     def execute(self, **kwargs: Any) -> Any:
         workspace_id = kwargs.get("workspace_id")
         person_id = kwargs.get("person_id")
+        date_range = kwargs.get("date_range")
+        include_types = kwargs.get("include_types")
+        limit = kwargs.get("limit", 50)
 
         if not workspace_id or not person_id:
             raise ValueError("workspace_id and person_id are required")
 
         logger.info("Getting person timeline", workspace_id=workspace_id, person_id=person_id)
 
+        # Get interactions as timeline events
+        data_access = get_data_access()
+        
+        # Parse date range if provided
+        parsed_date_range = None
+        if date_range:
+            from datetime import datetime
+            parsed_date_range = {}
+            if date_range.get("start"):
+                parsed_date_range["start"] = datetime.fromisoformat(date_range["start"].replace("Z", "+00:00"))
+            if date_range.get("end"):
+                parsed_date_range["end"] = datetime.fromisoformat(date_range["end"].replace("Z", "+00:00"))
+
+        interactions_result = data_access.get_person_interactions(
+            workspace_id=workspace_id,
+            person_id=person_id,
+            date_range=parsed_date_range,
+            limit=limit,
+        )
+
+        # Convert interactions to timeline events
+        timeline = []
+        for interaction in interactions_result.get("interactions", []):
+            timeline.append({
+                "type": "interaction",
+                "date": interaction.get("date"),
+                "data": interaction,
+                "description": f"{interaction.get('type', 'Interaction')}: {interaction.get('subject', 'No subject')}",
+            })
+
+        # Sort by date descending
+        timeline.sort(key=lambda x: x.get("date", ""), reverse=True)
+
         return {
-            "timeline": [],
-            "total": 0,
-            "error": "Not yet implemented - requires data access layer",
+            "timeline": timeline[:limit],
+            "total": len(timeline),
         }
 

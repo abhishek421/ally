@@ -134,20 +134,19 @@ class GetCompanyByIdTool(Tool):
     def execute(self, **kwargs: Any) -> Any:
         workspace_id = kwargs.get("workspace_id")
         company_id = kwargs.get("company_id")
+        include = kwargs.get("include")
 
         if not workspace_id or not company_id:
             raise ValueError("workspace_id and company_id are required")
 
         logger.info("Getting company by ID", workspace_id=workspace_id, company_id=company_id)
 
-        return {
-            "company": None,
-            "people": None,
-            "keyContacts": None,
-            "deals": None,
-            "interactions": None,
-            "error": "Not yet implemented - requires data access layer",
-        }
+        data_access = get_data_access()
+        return data_access.get_company_by_id(
+            workspace_id=workspace_id,
+            company_id=company_id,
+            include=include,
+        )
 
 
 class GetCompanyPeopleTool(Tool):
@@ -190,22 +189,25 @@ class GetCompanyPeopleTool(Tool):
     def execute(self, **kwargs: Any) -> Any:
         workspace_id = kwargs.get("workspace_id")
         company_id = kwargs.get("company_id")
+        current_only = kwargs.get("current_only", False)
+        roles = kwargs.get("roles")
+        sort_by = kwargs.get("sort_by")
+        limit = kwargs.get("limit")
 
         if not workspace_id or not company_id:
             raise ValueError("workspace_id and company_id are required")
 
         logger.info("Getting company people", workspace_id=workspace_id, company_id=company_id)
 
-        return {
-            "people": [],
-            "total": 0,
-            "summary": {
-                "totalEmployees": 0,
-                "keyContacts": 0,
-                "decisionMakers": 0,
-            },
-            "error": "Not yet implemented - requires data access layer",
-        }
+        data_access = get_data_access()
+        return data_access.get_company_people(
+            workspace_id=workspace_id,
+            company_id=company_id,
+            current_only=current_only,
+            roles=roles,
+            sort_by=sort_by,
+            limit=limit,
+        )
 
 
 class GetCompanyDealsTool(Tool):
@@ -250,24 +252,29 @@ class GetCompanyDealsTool(Tool):
     def execute(self, **kwargs: Any) -> Any:
         workspace_id = kwargs.get("workspace_id")
         company_id = kwargs.get("company_id")
+        status = kwargs.get("status")
+        column_id = kwargs.get("column_id")
+        group_id = kwargs.get("group_id")
+        sort_by = kwargs.get("sort_by")
+        limit = kwargs.get("limit")
+        include_contacts = kwargs.get("include_contacts", False)
 
         if not workspace_id or not company_id:
             raise ValueError("workspace_id and company_id are required")
 
         logger.info("Getting company deals", workspace_id=workspace_id, company_id=company_id)
 
-        return {
-            "deals": [],
-            "total": 0,
-            "summary": {
-                "totalValue": 0.0,
-                "activeDeals": 0,
-                "wonDeals": 0,
-                "lostDeals": 0,
-                "averageDealSize": 0.0,
-            },
-            "error": "Not yet implemented - requires data access layer",
-        }
+        data_access = get_data_access()
+        return data_access.get_company_deals(
+            workspace_id=workspace_id,
+            company_id=company_id,
+            status=status,
+            column_id=column_id,
+            group_id=group_id,
+            sort_by=sort_by,
+            limit=limit,
+            include_contacts=include_contacts,
+        )
 
 
 class GetCompanyInteractionsTool(Tool):
@@ -336,24 +343,38 @@ class GetCompanyInteractionsTool(Tool):
     def execute(self, **kwargs: Any) -> Any:
         workspace_id = kwargs.get("workspace_id")
         company_id = kwargs.get("company_id")
+        include_employee_interactions = kwargs.get("include_employee_interactions", False)
+        type_filter = kwargs.get("type")
+        direction = kwargs.get("direction")
+        date_range = kwargs.get("date_range")
+        limit = kwargs.get("limit", 20)
+        offset = kwargs.get("offset", 0)
 
         if not workspace_id or not company_id:
             raise ValueError("workspace_id and company_id are required")
 
         logger.info("Getting company interactions", workspace_id=workspace_id, company_id=company_id)
 
-        return {
-            "interactions": [],
-            "total": 0,
-            "summary": {
-                "companyLevel": 0,
-                "employeeLevel": 0,
-                "byType": {},
-                "byPerson": None,
-                "lastInteractionDate": None,
-            },
-            "error": "Not yet implemented - requires data access layer",
-        }
+        # Parse date range if provided
+        parsed_date_range = None
+        if date_range:
+            parsed_date_range = {}
+            if date_range.get("start"):
+                parsed_date_range["start"] = datetime.fromisoformat(date_range["start"].replace("Z", "+00:00"))
+            if date_range.get("end"):
+                parsed_date_range["end"] = datetime.fromisoformat(date_range["end"].replace("Z", "+00:00"))
+
+        data_access = get_data_access()
+        return data_access.get_company_interactions(
+            workspace_id=workspace_id,
+            company_id=company_id,
+            include_employee_interactions=include_employee_interactions,
+            type=type_filter,
+            direction=direction,
+            date_range=parsed_date_range,
+            limit=limit,
+            offset=offset,
+        )
 
 
 class GetCompanyTimelineTool(Tool):
@@ -409,15 +430,51 @@ class GetCompanyTimelineTool(Tool):
     def execute(self, **kwargs: Any) -> Any:
         workspace_id = kwargs.get("workspace_id")
         company_id = kwargs.get("company_id")
+        include_employee_activity = kwargs.get("include_employee_activity", False)
+        date_range = kwargs.get("date_range")
+        include_types = kwargs.get("include_types")
+        limit = kwargs.get("limit", 50)
 
         if not workspace_id or not company_id:
             raise ValueError("workspace_id and company_id are required")
 
         logger.info("Getting company timeline", workspace_id=workspace_id, company_id=company_id)
 
+        # Parse date range if provided
+        parsed_date_range = None
+        if date_range:
+            parsed_date_range = {}
+            if date_range.get("start"):
+                parsed_date_range["start"] = datetime.fromisoformat(date_range["start"].replace("Z", "+00:00"))
+            if date_range.get("end"):
+                parsed_date_range["end"] = datetime.fromisoformat(date_range["end"].replace("Z", "+00:00"))
+
+        data_access = get_data_access()
+        
+        # Get interactions as timeline events
+        interactions_result = data_access.get_company_interactions(
+            workspace_id=workspace_id,
+            company_id=company_id,
+            include_employee_interactions=include_employee_activity,
+            date_range=parsed_date_range,
+            limit=limit,
+        )
+
+        # Convert interactions to timeline events
+        timeline = []
+        for interaction in interactions_result.get("interactions", []):
+            timeline.append({
+                "type": "interaction",
+                "date": interaction.get("date"),
+                "data": interaction,
+                "description": f"{interaction.get('type', 'Interaction')}: {interaction.get('subject', 'No subject')}",
+            })
+
+        # Sort by date descending
+        timeline.sort(key=lambda x: x.get("date", ""), reverse=True)
+
         return {
-            "timeline": [],
-            "total": 0,
-            "error": "Not yet implemented - requires data access layer",
+            "timeline": timeline[:limit],
+            "total": len(timeline),
         }
 

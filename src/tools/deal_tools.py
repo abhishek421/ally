@@ -1,9 +1,11 @@
 """Deal query tools for CRM."""
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from ..utils.logger import get_logger
 from .base import Tool
+from .data_access import get_data_access
 
 logger = get_logger(__name__)
 
@@ -58,17 +60,32 @@ class SearchDealsTool(Tool):
 
         logger.info("Searching deals", workspace_id=workspace_id, query=kwargs.get("query"))
 
-        return {
-            "results": [],
-            "total": 0,
-            "hasMore": False,
-            "summary": {
-                "totalValue": 0.0,
-                "averageValue": 0.0,
-                "byStage": {},
-            },
-            "error": "Not yet implemented - requires data access layer",
-        }
+        # Parse dates if provided
+        created_after = None
+        created_before = None
+        if kwargs.get("created_after"):
+            created_after = datetime.fromisoformat(kwargs["created_after"].replace("Z", "+00:00"))
+        if kwargs.get("created_before"):
+            created_before = datetime.fromisoformat(kwargs["created_before"].replace("Z", "+00:00"))
+
+        data_access = get_data_access()
+        return data_access.search_deals(
+            workspace_id=workspace_id,
+            query=kwargs.get("query"),
+            column_id=kwargs.get("column_id"),
+            column_ids=kwargs.get("column_ids"),
+            group_id=kwargs.get("group_id"),
+            company_id=kwargs.get("company_id"),
+            person_id=kwargs.get("person_id"),
+            min_value=kwargs.get("min_value"),
+            max_value=kwargs.get("max_value"),
+            created_after=created_after,
+            created_before=created_before,
+            sort_by=kwargs.get("sort_by"),
+            sort_order=kwargs.get("sort_order"),
+            limit=kwargs.get("limit"),
+            offset=kwargs.get("offset"),
+        )
 
 
 class GetDealByIdTool(Tool):
@@ -114,28 +131,19 @@ class GetDealByIdTool(Tool):
     def execute(self, **kwargs: Any) -> Any:
         workspace_id = kwargs.get("workspace_id")
         deal_id = kwargs.get("deal_id")
+        include = kwargs.get("include")
 
         if not workspace_id or not deal_id:
             raise ValueError("workspace_id and deal_id are required")
 
         logger.info("Getting deal by ID", workspace_id=workspace_id, deal_id=deal_id)
 
-        return {
-            "deal": None,
-            "stage": None,
-            "people": None,
-            "companies": None,
-            "interactions": None,
-            "columnValues": None,
-            "stageHistory": None,
-            "notes": None,
-            "metadata": {
-                "daysInCurrentStage": 0,
-                "totalDaysInPipeline": 0,
-                "createdBy": None,
-            },
-            "error": "Not yet implemented - requires data access layer",
-        }
+        data_access = get_data_access()
+        return data_access.get_deal_by_id(
+            workspace_id=workspace_id,
+            deal_id=deal_id,
+            include=include,
+        )
 
 
 class GetDealPeopleTool(Tool):
@@ -167,17 +175,19 @@ class GetDealPeopleTool(Tool):
     def execute(self, **kwargs: Any) -> Any:
         workspace_id = kwargs.get("workspace_id")
         deal_id = kwargs.get("deal_id")
+        include_interactions = kwargs.get("include_interactions", False)
 
         if not workspace_id or not deal_id:
             raise ValueError("workspace_id and deal_id are required")
 
         logger.info("Getting deal people", workspace_id=workspace_id, deal_id=deal_id)
 
-        return {
-            "people": [],
-            "total": 0,
-            "error": "Not yet implemented - requires data access layer",
-        }
+        data_access = get_data_access()
+        return data_access.get_deal_people(
+            workspace_id=workspace_id,
+            deal_id=deal_id,
+            include_interactions=include_interactions,
+        )
 
 
 class GetDealCompaniesTool(Tool):
@@ -211,10 +221,11 @@ class GetDealCompaniesTool(Tool):
 
         logger.info("Getting deal companies", workspace_id=workspace_id, deal_id=deal_id)
 
-        return {
-            "companies": [],
-            "error": "Not yet implemented - requires data access layer",
-        }
+        data_access = get_data_access()
+        return data_access.get_deal_companies(
+            workspace_id=workspace_id,
+            deal_id=deal_id,
+        )
 
 
 class GetDealInteractionsTool(Tool):
@@ -269,21 +280,32 @@ class GetDealInteractionsTool(Tool):
     def execute(self, **kwargs: Any) -> Any:
         workspace_id = kwargs.get("workspace_id")
         deal_id = kwargs.get("deal_id")
+        type_filter = kwargs.get("type")
+        date_range = kwargs.get("date_range")
+        limit = kwargs.get("limit", 20)
+        offset = kwargs.get("offset", 0)
 
         if not workspace_id or not deal_id:
             raise ValueError("workspace_id and deal_id are required")
 
         logger.info("Getting deal interactions", workspace_id=workspace_id, deal_id=deal_id)
 
-        return {
-            "interactions": [],
-            "total": 0,
-            "summary": {
-                "byType": {},
-                "byPerson": {},
-                "lastInteractionDate": None,
-                "daysSinceLastInteraction": 0,
-            },
-            "error": "Not yet implemented - requires data access layer",
-        }
+        # Parse date range if provided
+        parsed_date_range = None
+        if date_range:
+            parsed_date_range = {}
+            if date_range.get("start"):
+                parsed_date_range["start"] = datetime.fromisoformat(date_range["start"].replace("Z", "+00:00"))
+            if date_range.get("end"):
+                parsed_date_range["end"] = datetime.fromisoformat(date_range["end"].replace("Z", "+00:00"))
+
+        data_access = get_data_access()
+        return data_access.get_deal_interactions(
+            workspace_id=workspace_id,
+            deal_id=deal_id,
+            type=type_filter,
+            date_range=parsed_date_range,
+            limit=limit,
+            offset=offset,
+        )
 

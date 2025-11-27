@@ -1,72 +1,77 @@
-"""Streaming utilities for API responses."""
+"""Streaming utilities for the API."""
 
 import json
+import logging
 import uuid
-from typing import AsyncIterator, Dict, Any
+from typing import AsyncGenerator, Dict, Any, Optional
 
 from sse_starlette.sse import EventSourceResponse
 
-from ..config import get_settings
-from ..graph.runner import ainvoke_graph
+from ..graph.runner import astream_graph, ainvoke_graph
 from ..graph.state import GraphState
+from ..utils.conversation_service import create_conversation_sync, generate_title_from_query
 from ..utils.conversation_message_service import (
-    prepare_function_calls,
-    prepare_metadata_from_response,
-    save_assistant_message_async,
-    save_user_message_async,
     _save_user_message_sync,
+    save_assistant_message_async,
+    prepare_metadata_from_response,
+    prepare_function_calls,
 )
-from ..utils.conversation_service import (
-    create_conversation_sync,
-    generate_title_from_query,
+from ..utils.reasoning_formatter import (
+    format_reasoning_steps,
+    format_tool_call_for_display,
 )
-from ..utils.logger import get_logger
 from .models import StreamChunk, StreamChunkType
 
-logger = get_logger(__name__)
-settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
-async def stream_graph_response(
-    state: GraphState,
-) -> AsyncIterator[StreamChunk]:
-    """Stream graph execution response with intermediate updates.
+def _create_chunk(chunk_type: StreamChunkType, content: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Create a formatted SSE chunk."""
+    chunk = StreamChunk(
+        type=chunk_type,
+        content=content,
+        data=data
+    )
+    return {
+        "event": "message",
+        "data": chunk.model_dump_json()
+    }
 
-    This function executes the graph and streams:
-    - Reasoning steps as they're generated
-    - Tool calls when tools are executed
-    - Final answer token-by-token
 
-    Args:
-        state: Initial graph state with user_query, workspace_id, user_id, conversation_id
-
-    Yields:
-        StreamChunk objects with different types
+async def stream_graph_response(initial_state: GraphState) -> AsyncGenerator[Dict[str, Any], None]:
     """
+    Stream graph execution results as SSE events.
+    
+    This implementation runs the full graph and then streams the results
+    in a way that simulates real-time processing (reasoning first, then answer).
+    
+    Args:
+        initial_state: The initial state of the graph.
+        
+    Yields:
+        Dict containing the SSE event data.
+    """
+    conversation_id = initial_state.get("conversation_id")
+    workspace_id = initial_state.get("workspace_id")
+    user_id = initial_state.get("user_id")
+    user_query = initial_state.get("user_query", "")
+    
     try:
-        # First, execute query_builder_node to get enriched query
-        logger.info("Starting streaming graph execution")
-        
-        # Handle conversation creation if needed (before streaming starts)
-        conversation_id = state.get("conversation_id")
-        workspace_id = state.get("workspace_id")
-        user_id = state.get("user_id")
-        user_query = state.get("user_query", "")
-        
+        # Handle conversation creation if needed
         if not conversation_id:
-            # New conversation: generate UUID and create conversation record
             conversation_id = str(uuid.uuid4())
+            initial_state["conversation_id"] = conversation_id
+            
             logger.info(
                 "Creating new conversation for streaming",
-                conversation_id=conversation_id,
-                workspace_id=workspace_id,
-                user_id=user_id,
+                extra={
+                    "conversation_id": conversation_id,
+                    "workspace_id": workspace_id,
+                }
             )
             
-            # Generate title from query
+            # Generate title and create conversation
             title = generate_title_from_query(user_query)
-            
-            # Create conversation record (synchronous, fail on error)
             try:
                 create_conversation_sync(
                     conversation_id=conversation_id,
@@ -75,191 +80,113 @@ async def stream_graph_response(
                     title=title,
                 )
             except Exception as e:
-                logger.error(
-                    "Failed to create conversation record in streaming",
-                    conversation_id=conversation_id,
-                    error=str(e),
-                    exc_info=True,
-                )
-                yield StreamChunk(
-                    type=StreamChunkType.ERROR,
-                    content=f"Failed to create conversation: {str(e)}",
-                )
+                logger.error(f"Failed to create conversation: {e}")
+                yield _create_chunk(StreamChunkType.ERROR, f"Failed to create conversation: {str(e)}")
                 return
             
-            # Create USER message (synchronous, fail on error)
+            # Save user message
             try:
                 _save_user_message_sync(
                     conversation_id=conversation_id,
                     content=user_query,
                 )
             except Exception as e:
-                logger.error(
-                    "Failed to create user message in streaming",
-                    conversation_id=conversation_id,
-                    error=str(e),
-                    exc_info=True,
-                )
-                yield StreamChunk(
-                    type=StreamChunkType.ERROR,
-                    content=f"Failed to save user message: {str(e)}",
-                )
-                return
-            
-            # Update state with generated conversation_id
-            state["conversation_id"] = conversation_id
-        else:
-            # Existing conversation: save USER message asynchronously (non-blocking)
-            save_user_message_async(
-                conversation_id=conversation_id,
-                content=user_query,
-            )
+                logger.error(f"Failed to save user message: {e}")
+                # Continue anyway - don't fail the whole request
         
-        # Create initial state for query builder
-        query_builder_state: GraphState = {
-            "user_query": user_query,
-            "conversation_id": conversation_id,
-            "workspace_id": workspace_id,
-            "execution_path": [],
-            "metadata": state.get("metadata", {}),
-        }
+        # Send initial reasoning chunk to indicate processing started
+        yield _create_chunk(StreamChunkType.REASONING, "🔄 Let me look into that for you...")
         
-        # We need to manually execute query_builder_node
-        # For now, let's use the full graph and extract what we need
-        # This is a simplified approach - in production, you might want to
-        # execute nodes individually for better streaming control
+        # Execute the full graph
+        logger.info(f"Starting graph execution for streaming, conversation_id={conversation_id}")
+        final_state = await ainvoke_graph(initial_state)
         
-        # Execute full graph first to get the enriched query
-        # Then we'll stream the answer generation
-        final_state = await ainvoke_graph(state)
-        
-        # Extract enriched query
-        enriched_query = final_state.get("query_builder_result", "")
-        if not enriched_query:
-            enriched_query = state.get("user_query", "")
-        
-        # Extract the actual question from enriched query
-        if "Current query:" in enriched_query:
-            question = enriched_query.split("Current query:")[-1].strip()
-        else:
-            question = enriched_query
-        
-        # Get the parsed result if available
+        # Get the result
         query_processing_result = final_state.get("query_processing_result", "")
-        if query_processing_result:
-            try:
-                result_data = json.loads(query_processing_result)
-                
-                # Stream reasoning steps
-                reasoning_steps = result_data.get("reasoning_steps", [])
-                for step in reasoning_steps:
-                    yield StreamChunk(
-                        type=StreamChunkType.REASONING,
-                        content=step,
-                    )
-                
-                # Stream tool calls
-                tool_calls = result_data.get("tool_calls", [])
-                for tool_call in tool_calls:
-                    yield StreamChunk(
-                        type=StreamChunkType.TOOL_CALL,
-                        content=f"Tool {tool_call.get('tool', 'unknown')} called",
-                        data=tool_call,
-                    )
-                
-                # Stream final answer token-by-token
-                answer = result_data.get("answer", "")
-                if answer:
-                    # Stream answer character by character for smooth streaming effect
-                    # In a more sophisticated implementation, we could re-generate the answer
-                    # using the LLM adapter's astream method for true token-by-token streaming
-                    for char in answer:
-                        yield StreamChunk(
-                            type=StreamChunkType.TOKEN,
-                            content=char,
-                        )
-                
-                # Send done signal
-                yield StreamChunk(
-                    type=StreamChunkType.DONE,
-                    content="",
-                    data={"metadata": result_data.get("metadata", {})},
-                )
-                
-                # Save assistant message to database in background (non-blocking)
-                try:
-                    # Use conversation_id from state (may have been generated)
-                    final_conversation_id = final_state.get("conversation_id", conversation_id)
-                    if final_conversation_id:
-                        # Prepare metadata for storage
-                        query_processing_metadata = final_state.get("query_processing_metadata", {})
-                        storage_metadata = prepare_metadata_from_response(
-                            result_data,
-                            query_processing_metadata,
-                        )
-                        
-                        # Prepare function calls for storage
-                        storage_function_calls = prepare_function_calls(tool_calls)
-                        
-                        # Save asynchronously (won't block streaming)
-                        save_assistant_message_async(
-                            conversation_id=final_conversation_id,
-                            content=answer,
-                            metadata=storage_metadata,
-                            function_calls=storage_function_calls if storage_function_calls else None,
-                        )
-                except Exception as e:
-                    # Log error but don't fail streaming
-                    logger.error(
-                        "Failed to initiate message save to database in streaming",
-                        conversation_id=final_conversation_id,
-                        error=str(e),
-                        exc_info=True,
-                    )
-                
-            except json.JSONDecodeError:
-                # If parsing fails, just stream the raw result
-                yield StreamChunk(
-                    type=StreamChunkType.TOKEN,
-                    content=query_processing_result,
-                )
-                yield StreamChunk(
-                    type=StreamChunkType.DONE,
-                    content="",
-                )
-        else:
-            # No result available, send error
-            yield StreamChunk(
-                type=StreamChunkType.ERROR,
-                content="No processing result available",
-            )
-            
-    except Exception as e:
-        logger.error("Streaming error", error=str(e), exc_info=True)
-        yield StreamChunk(
-            type=StreamChunkType.ERROR,
-            content=f"Error during streaming: {str(e)}",
-        )
-
-
-def create_sse_response(stream: AsyncIterator[StreamChunk]) -> EventSourceResponse:
-    """Create SSE response from stream chunks.
-
-    Args:
-        stream: Async iterator of StreamChunk objects
-
-    Returns:
-        EventSourceResponse configured for SSE
-    """
-    async def event_generator():
-        async for chunk in stream:
-            # Convert chunk to JSON
-            chunk_json = chunk.model_dump_json()
-            # SSE format: event: <type>\ndata: <json>\n\n
-            yield {
-                "event": chunk.type.value,
-                "data": chunk_json,
+        
+        if not query_processing_result:
+            yield _create_chunk(StreamChunkType.ERROR, "No response generated")
+            return
+        
+        # Parse the result
+        try:
+            result_data = json.loads(query_processing_result)
+        except json.JSONDecodeError:
+            # If not JSON, treat as plain text answer
+            result_data = {
+                "answer": query_processing_result,
+                "reasoning_steps": [],
+                "tool_calls": [],
             }
-    
-    return EventSourceResponse(event_generator())
+        
+        # Stream reasoning steps first (formatted for user-friendliness)
+        reasoning_steps = result_data.get("reasoning_steps", [])
+        formatted_steps = format_reasoning_steps(reasoning_steps)
+        for step in formatted_steps:
+            yield _create_chunk(StreamChunkType.REASONING, step)
+        
+        # Stream tool calls (formatted for user-friendliness)
+        tool_calls = result_data.get("tool_calls", [])
+        for tool_call in tool_calls:
+            formatted_tool = format_tool_call_for_display(tool_call)
+            yield _create_chunk(
+                StreamChunkType.TOOL_CALL,
+                f"✅ {formatted_tool['tool']}",
+                data={
+                    "tool": formatted_tool['tool'],
+                    "tool_id": formatted_tool['tool_id'],
+                    "params": formatted_tool['params'],
+                    "status": "completed",
+                }
+            )
+        
+        # Stream the answer token by token (simulated streaming)
+        answer = result_data.get("answer", "")
+        if answer:
+            # Stream in chunks for better UX
+            chunk_size = 10  # Characters per chunk
+            for i in range(0, len(answer), chunk_size):
+                chunk = answer[i:i + chunk_size]
+                yield _create_chunk(StreamChunkType.TOKEN, chunk)
+        
+        # Get final conversation_id from state
+        final_conversation_id = final_state.get("conversation_id", conversation_id)
+        
+        # Send done signal with conversation_id
+        yield _create_chunk(
+            StreamChunkType.DONE,
+            "",
+            data={"conversation_id": final_conversation_id}
+        )
+        
+        # Save assistant message in background
+        try:
+            query_processing_metadata = final_state.get("query_processing_metadata", {})
+            storage_metadata = prepare_metadata_from_response(result_data, query_processing_metadata)
+            storage_function_calls = prepare_function_calls(tool_calls)
+            
+            save_assistant_message_async(
+                conversation_id=final_conversation_id,
+                content=answer,  # Already cleaned above
+                metadata=storage_metadata,
+                function_calls=storage_function_calls if storage_function_calls else None,
+            )
+        except Exception as e:
+            logger.error(f"Failed to save assistant message: {e}")
 
+    except Exception as e:
+        logger.error(f"Error in stream_graph_response: {e}", exc_info=True)
+        yield _create_chunk(StreamChunkType.ERROR, f"Error: {str(e)}")
+
+
+def create_sse_response(generator: AsyncGenerator[Dict[str, Any], None]) -> EventSourceResponse:
+    """
+    Create an EventSourceResponse from an async generator.
+    
+    Args:
+        generator: The async generator yielding SSE events.
+        
+    Returns:
+        EventSourceResponse configured for the generator.
+    """
+    return EventSourceResponse(generator)

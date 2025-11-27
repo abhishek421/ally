@@ -1,9 +1,12 @@
 """Service for managing conversations."""
 
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
+from sqlalchemy import and_, desc, func
+
 from ..tools.database import get_db_session
-from ..tools.models import Conversation
+from ..tools.models import Conversation, ConversationMessage
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -106,5 +109,291 @@ def create_conversation_sync(
             error=str(e),
             exc_info=True,
         )
+        raise
+
+
+def list_conversations(
+    workspace_id: str,
+    user_id: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> Dict[str, Any]:
+    """List conversations for a user in a workspace.
+    
+    Args:
+        workspace_id: Workspace UUID string
+        user_id: User UUID string
+        limit: Maximum number of conversations to return
+        offset: Offset for pagination
+        
+    Returns:
+        Dictionary with conversations list, total count, and has_more flag
+    """
+    try:
+        workspace_uuid = UUID(workspace_id)
+        user_uuid = UUID(user_id)
+        
+        with get_db_session() as session:
+            # Base query for user's conversations in workspace
+            base_query = session.query(Conversation).filter(
+                and_(
+                    Conversation.workspaceId == workspace_uuid,
+                    Conversation.userId == user_uuid,
+                )
+            )
+            
+            # Get total count
+            total = base_query.count()
+            
+            # Get conversations ordered by most recent first
+            conversations = base_query.order_by(
+                desc(Conversation.updatedAt)
+            ).offset(offset).limit(limit).all()
+            
+            # Build response with message counts and last message preview
+            result_conversations = []
+            for conv in conversations:
+                # Get message count
+                message_count = session.query(func.count(ConversationMessage.id)).filter(
+                    ConversationMessage.conversationId == conv.id
+                ).scalar() or 0
+                
+                # Get last message preview
+                last_message = session.query(ConversationMessage).filter(
+                    ConversationMessage.conversationId == conv.id
+                ).order_by(desc(ConversationMessage.timestamp)).first()
+                
+                last_message_preview = None
+                if last_message:
+                    content = last_message.content or ""
+                    last_message_preview = content[:100] + "..." if len(content) > 100 else content
+                
+                result_conversations.append({
+                    "id": str(conv.id),
+                    "workspace_id": str(conv.workspaceId),
+                    "user_id": str(conv.userId),
+                    "title": conv.title,
+                    "created_at": conv.createdAt.isoformat() if conv.createdAt else None,
+                    "updated_at": conv.updatedAt.isoformat() if conv.updatedAt else None,
+                    "message_count": message_count,
+                    "last_message": last_message_preview,
+                })
+            
+            return {
+                "conversations": result_conversations,
+                "total": total,
+                "has_more": (offset + limit) < total,
+            }
+            
+    except ValueError as e:
+        logger.error("Invalid UUID format for list_conversations", error=str(e))
+        raise
+    except Exception as e:
+        logger.error("Failed to list conversations", error=str(e), exc_info=True)
+        raise
+
+
+def get_conversation(
+    conversation_id: str,
+    workspace_id: str,
+    user_id: str,
+    include_messages: bool = True,
+    message_limit: int = 100,
+) -> Optional[Dict[str, Any]]:
+    """Get a conversation by ID with optional messages.
+    
+    Args:
+        conversation_id: Conversation UUID string
+        workspace_id: Workspace UUID string
+        user_id: User UUID string
+        include_messages: Whether to include messages
+        message_limit: Maximum number of messages to return
+        
+    Returns:
+        Conversation dictionary or None if not found
+    """
+    try:
+        conversation_uuid = UUID(conversation_id)
+        workspace_uuid = UUID(workspace_id)
+        user_uuid = UUID(user_id)
+        
+        with get_db_session() as session:
+            # Get conversation (verify ownership)
+            conversation = session.query(Conversation).filter(
+                and_(
+                    Conversation.id == conversation_uuid,
+                    Conversation.workspaceId == workspace_uuid,
+                    Conversation.userId == user_uuid,
+                )
+            ).first()
+            
+            if not conversation:
+                return None
+            
+            # Build response
+            result = {
+                "id": str(conversation.id),
+                "workspace_id": str(conversation.workspaceId),
+                "user_id": str(conversation.userId),
+                "title": conversation.title,
+                "created_at": conversation.createdAt.isoformat() if conversation.createdAt else None,
+                "updated_at": conversation.updatedAt.isoformat() if conversation.updatedAt else None,
+            }
+            
+            # Get message count
+            message_count = session.query(func.count(ConversationMessage.id)).filter(
+                ConversationMessage.conversationId == conversation_uuid
+            ).scalar() or 0
+            result["message_count"] = message_count
+            
+            # Include messages if requested
+            if include_messages:
+                messages = session.query(ConversationMessage).filter(
+                    ConversationMessage.conversationId == conversation_uuid
+                ).order_by(ConversationMessage.timestamp).limit(message_limit).all()
+                
+                result["messages"] = [
+                    {
+                        "id": str(msg.id),
+                        "role": msg.role,
+                        "content": msg.content,
+                        "metadata": msg.meta_data,
+                        "function_calls": msg.functionCalls,
+                        "timestamp": msg.timestamp.isoformat() if msg.timestamp else None,
+                    }
+                    for msg in messages
+                ]
+            
+            return result
+            
+    except ValueError as e:
+        logger.error("Invalid UUID format for get_conversation", error=str(e))
+        raise
+    except Exception as e:
+        logger.error("Failed to get conversation", error=str(e), exc_info=True)
+        raise
+
+
+def delete_conversation(
+    conversation_id: str,
+    workspace_id: str,
+    user_id: str,
+) -> bool:
+    """Delete a conversation and all its messages.
+    
+    Args:
+        conversation_id: Conversation UUID string
+        workspace_id: Workspace UUID string
+        user_id: User UUID string
+        
+    Returns:
+        True if deleted, False if not found
+    """
+    try:
+        conversation_uuid = UUID(conversation_id)
+        workspace_uuid = UUID(workspace_id)
+        user_uuid = UUID(user_id)
+        
+        with get_db_session() as session:
+            # Find conversation (verify ownership)
+            conversation = session.query(Conversation).filter(
+                and_(
+                    Conversation.id == conversation_uuid,
+                    Conversation.workspaceId == workspace_uuid,
+                    Conversation.userId == user_uuid,
+                )
+            ).first()
+            
+            if not conversation:
+                return False
+            
+            # Delete messages first (cascade should handle this, but being explicit)
+            session.query(ConversationMessage).filter(
+                ConversationMessage.conversationId == conversation_uuid
+            ).delete()
+            
+            # Delete conversation
+            session.delete(conversation)
+            session.commit()
+            
+            logger.info(
+                "Deleted conversation",
+                conversation_id=conversation_id,
+                workspace_id=workspace_id,
+                user_id=user_id,
+            )
+            
+            return True
+            
+    except ValueError as e:
+        logger.error("Invalid UUID format for delete_conversation", error=str(e))
+        raise
+    except Exception as e:
+        logger.error("Failed to delete conversation", error=str(e), exc_info=True)
+        raise
+
+
+def update_conversation(
+    conversation_id: str,
+    workspace_id: str,
+    user_id: str,
+    title: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Update a conversation's metadata.
+    
+    Args:
+        conversation_id: Conversation UUID string
+        workspace_id: Workspace UUID string
+        user_id: User UUID string
+        title: New title (optional)
+        
+    Returns:
+        Updated conversation dictionary or None if not found
+    """
+    try:
+        conversation_uuid = UUID(conversation_id)
+        workspace_uuid = UUID(workspace_id)
+        user_uuid = UUID(user_id)
+        
+        with get_db_session() as session:
+            # Find conversation (verify ownership)
+            conversation = session.query(Conversation).filter(
+                and_(
+                    Conversation.id == conversation_uuid,
+                    Conversation.workspaceId == workspace_uuid,
+                    Conversation.userId == user_uuid,
+                )
+            ).first()
+            
+            if not conversation:
+                return None
+            
+            # Update fields
+            if title is not None:
+                conversation.title = title
+            
+            session.commit()
+            session.refresh(conversation)
+            
+            logger.info(
+                "Updated conversation",
+                conversation_id=conversation_id,
+                title=title,
+            )
+            
+            return {
+                "id": str(conversation.id),
+                "workspace_id": str(conversation.workspaceId),
+                "user_id": str(conversation.userId),
+                "title": conversation.title,
+                "created_at": conversation.createdAt.isoformat() if conversation.createdAt else None,
+                "updated_at": conversation.updatedAt.isoformat() if conversation.updatedAt else None,
+            }
+            
+    except ValueError as e:
+        logger.error("Invalid UUID format for update_conversation", error=str(e))
+        raise
+    except Exception as e:
+        logger.error("Failed to update conversation", error=str(e), exc_info=True)
         raise
 

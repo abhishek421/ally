@@ -1,12 +1,18 @@
 """Storage abstraction for conversation history."""
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import List, Optional
+from uuid import UUID
 
 from ..config import get_settings
+from ..tools.database import get_db_session
+from ..tools.models import ConversationMessage
 from .models import Message
+from .logger import get_logger
 
 settings = get_settings()
+logger = get_logger(__name__)
 
 
 class StorageInterface(ABC):
@@ -59,13 +65,82 @@ class StorageInterface(ABC):
 
 
 class LangGraphStorage(StorageInterface):
-    """LangGraph checkpoint-based storage implementation."""
+    """LangGraph checkpoint-based storage implementation with database backing."""
 
     def __init__(self):
         """Initialize LangGraph storage."""
-        # In-memory storage for conversation data
-        # Key: conversation_id, Value: dict with 'messages' and 'summary'
+        # In-memory cache for conversation data
+        # Key: conversation_id, Value: dict with 'messages', 'summary', 'loaded_from_db'
         self._storage: dict[str, dict] = {}
+
+    def _load_from_database(self, conversation_id: str) -> None:
+        """Load conversation history from database if not already loaded.
+        
+        Args:
+            conversation_id: Unique conversation identifier
+        """
+        if conversation_id in self._storage and self._storage[conversation_id].get("loaded_from_db"):
+            return  # Already loaded
+            
+        try:
+            conversation_uuid = UUID(conversation_id)
+            
+            with get_db_session() as session:
+                # Load messages from database
+                db_messages = session.query(ConversationMessage).filter(
+                    ConversationMessage.conversationId == conversation_uuid
+                ).order_by(ConversationMessage.timestamp).all()
+                
+                messages = []
+                for db_msg in db_messages:
+                    # Map database role to our role format
+                    role = db_msg.role.lower() if db_msg.role else "user"
+                    if role == "assistant":
+                        role = "assistant"
+                    elif role == "system":
+                        role = "system"
+                    else:
+                        role = "user"
+                    
+                    msg = Message(
+                        role=role,
+                        content=db_msg.content or "",
+                        timestamp=db_msg.timestamp or datetime.now(),
+                    )
+                    messages.append(msg.to_dict())
+                
+                # Initialize or update storage
+                if conversation_id not in self._storage:
+                    self._storage[conversation_id] = {
+                        "messages": messages,
+                        "summary": None,
+                        "summary_count": 0,
+                        "loaded_from_db": True,
+                    }
+                else:
+                    # Merge: database messages first, then any in-memory messages not in DB
+                    existing_messages = self._storage[conversation_id].get("messages", [])
+                    # Only add new messages that aren't in the DB
+                    db_contents = {m.get("content") for m in messages}
+                    new_messages = [m for m in existing_messages if m.get("content") not in db_contents]
+                    self._storage[conversation_id]["messages"] = messages + new_messages
+                    self._storage[conversation_id]["loaded_from_db"] = True
+                
+                logger.debug(
+                    "Loaded conversation from database",
+                    conversation_id=conversation_id,
+                    message_count=len(messages),
+                )
+                
+        except ValueError:
+            # Invalid UUID, just use in-memory
+            logger.warning("Invalid conversation_id UUID, using in-memory only", conversation_id=conversation_id)
+            if conversation_id not in self._storage:
+                self._storage[conversation_id] = {"messages": [], "summary": None, "summary_count": 0, "loaded_from_db": True}
+        except Exception as e:
+            logger.error("Failed to load conversation from database", error=str(e), conversation_id=conversation_id)
+            if conversation_id not in self._storage:
+                self._storage[conversation_id] = {"messages": [], "summary": None, "summary_count": 0, "loaded_from_db": True}
 
     def get_conversation_history(self, conversation_id: str) -> List[Message]:
         """Get conversation history from storage.
@@ -76,6 +151,9 @@ class LangGraphStorage(StorageInterface):
         Returns:
             List of messages
         """
+        # Load from database first if needed
+        self._load_from_database(conversation_id)
+        
         if conversation_id not in self._storage:
             return []
 
@@ -91,8 +169,11 @@ class LangGraphStorage(StorageInterface):
             conversation_id: Unique conversation identifier
             message: Message to save
         """
+        # Load from database first if needed
+        self._load_from_database(conversation_id)
+        
         if conversation_id not in self._storage:
-            self._storage[conversation_id] = {"messages": [], "summary": None, "summary_count": 0}
+            self._storage[conversation_id] = {"messages": [], "summary": None, "summary_count": 0, "loaded_from_db": True}
 
         self._storage[conversation_id]["messages"].append(message.to_dict())
 
@@ -105,7 +186,7 @@ class LangGraphStorage(StorageInterface):
             message_count: Number of messages summarized
         """
         if conversation_id not in self._storage:
-            self._storage[conversation_id] = {"messages": [], "summary": None, "summary_count": 0}
+            self._storage[conversation_id] = {"messages": [], "summary": None, "summary_count": 0, "loaded_from_db": False}
 
         self._storage[conversation_id]["summary"] = summary
         self._storage[conversation_id]["summary_count"] = message_count

@@ -1,9 +1,11 @@
 """Interaction query tools for CRM."""
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from ..utils.logger import get_logger
 from .base import Tool
+from .data_access import get_data_access
 
 logger = get_logger(__name__)
 
@@ -82,16 +84,32 @@ class SearchInteractionsTool(Tool):
 
         logger.info("Searching interactions", workspace_id=workspace_id, query=kwargs.get("query"))
 
-        return {
-            "results": [],
-            "total": 0,
-            "hasMore": False,
-            "summary": {
-                "byType": {},
-                "byDirection": {"inbound": 0, "outbound": 0},
-            },
-            "error": "Not yet implemented - requires data access layer",
-        }
+        # Parse date range if provided
+        date_range = kwargs.get("date_range")
+        parsed_date_range = None
+        if date_range:
+            parsed_date_range = {}
+            if date_range.get("start"):
+                parsed_date_range["start"] = datetime.fromisoformat(date_range["start"].replace("Z", "+00:00"))
+            if date_range.get("end"):
+                parsed_date_range["end"] = datetime.fromisoformat(date_range["end"].replace("Z", "+00:00"))
+
+        data_access = get_data_access()
+        return data_access.search_interactions(
+            workspace_id=workspace_id,
+            query=kwargs.get("query"),
+            type=kwargs.get("type"),
+            direction=kwargs.get("direction"),
+            person_id=kwargs.get("person_id"),
+            company_id=kwargs.get("company_id"),
+            created_by=kwargs.get("created_by"),
+            date_range=parsed_date_range,
+            has_content=kwargs.get("has_content"),
+            sort_by=kwargs.get("sort_by"),
+            sort_order=kwargs.get("sort_order"),
+            limit=kwargs.get("limit"),
+            offset=kwargs.get("offset"),
+        )
 
 
 class GetInteractionByIdTool(Tool):
@@ -128,17 +146,17 @@ class GetInteractionByIdTool(Tool):
     def execute(self, **kwargs: Any) -> Any:
         workspace_id = kwargs.get("workspace_id")
         interaction_id = kwargs.get("interaction_id")
+        include = kwargs.get("include")
 
         if not workspace_id or not interaction_id:
             raise ValueError("workspace_id and interaction_id are required")
 
         logger.info("Getting interaction by ID", workspace_id=workspace_id, interaction_id=interaction_id)
 
-        return {
-            "interaction": None,
-            "person": None,
-            "company": None,
-            "relatedDeals": None,
-            "error": "Not yet implemented - requires data access layer",
-        }
+        data_access = get_data_access()
+        return data_access.get_interaction_by_id(
+            workspace_id=workspace_id,
+            interaction_id=interaction_id,
+            include=include,
+        )
 
