@@ -55,9 +55,6 @@ def query_builder_node(state: GraphState) -> dict[str, Any]:
     # Get conversation ID from state (prefer state over settings)
     conversation_id = state.get("conversation_id")
     if not conversation_id:
-        # Fallback to settings if not in state
-        conversation_id = settings.conversation_id
-    if not conversation_id:
         conversation_id = str(uuid.uuid4())
         logger.info("Generated new conversation ID", conversation_id=conversation_id)
 
