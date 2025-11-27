@@ -67,6 +67,9 @@ def query_builder_node(state: GraphState) -> dict[str, Any]:
         logger.warning("No user query found in state")
         user_query = ""
 
+    # Get workspace_id from state
+    workspace_id = state.get("workspace_id")
+
     # Get conversation manager
     conversation_manager = _get_conversation_manager()
 
@@ -75,11 +78,14 @@ def query_builder_node(state: GraphState) -> dict[str, Any]:
         conversation_manager.save_user_query(conversation_id, user_query)
 
     # Build enriched query with context
-    enriched_query = conversation_manager.get_context_for_query(conversation_id, user_query)
+    enriched_query = conversation_manager.get_context_for_query(
+        conversation_id, user_query, workspace_id=workspace_id
+    )
 
     # Get updated conversation history
     conversation_history = conversation_manager.storage.get_conversation_history(conversation_id)
     summary_data = conversation_manager.storage.get_summary(conversation_id)
+    # Handle new return format: (summary, message_count, start_message_id, end_message_id)
     context_summary = summary_data[0] if summary_data else None
 
     logger.info(

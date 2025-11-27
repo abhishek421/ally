@@ -414,3 +414,51 @@ class ConversationMessage(Base):
         Index("conversationMessage_role_idx", "role"),
     )
 
+
+class ConversationSummary(Base):
+    """Conversation summary model for storing conversation summaries."""
+    __tablename__ = "conversationSummary"
+    
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    conversationId = Column(
+        PGUUID(as_uuid=True),
+        ForeignKey("conversation.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    workspaceId = Column(
+        PGUUID(as_uuid=True),
+        nullable=False,
+        index=True,
+    )
+    summaryText = Column(Text, nullable=False)
+    startMessageId = Column(
+        PGUUID(as_uuid=True),
+        ForeignKey("conversationMessage.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=False,
+    )
+    endMessageId = Column(
+        PGUUID(as_uuid=True),
+        ForeignKey("conversationMessage.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=False,
+    )
+    endMessageAt = Column(DateTime(timezone=False), nullable=False)
+    messageCount = Column(Integer, nullable=False)
+    summaryTokens = Column(Integer, nullable=False)
+    createdAt = Column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(6)"),
+    )
+    updatedAt = Column(
+        DateTime(timezone=False),
+        nullable=False,
+        default=datetime.utcnow,
+        server_default=text("CURRENT_TIMESTAMP(6)"),
+        onupdate=datetime.utcnow,
+    )
+    
+    __table_args__ = (
+        Index("conversationSummary_conversationId_createdAt_idx", "conversationId", "createdAt"),
+        Index("conversationSummary_workspaceId_idx", "workspaceId"),
+    )

@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     summary_model: str = "gpt-4o-mini"
     query_processing_model: str = "gpt-4o"
     llm_context_limit: int = 128000
+    llm_max_tokens: int = 4096  # Max tokens for response generation (configurable via LLM_MAX_TOKENS in .env)
     context_threshold_percentage: int = 70
 
     # Tokenizer Configuration
