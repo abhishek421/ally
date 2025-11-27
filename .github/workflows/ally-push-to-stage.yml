@@ -1,0 +1,162 @@
+name: Ally Push to Stage
+
+on:
+  push:
+    branches: [stage]
+
+jobs:
+  build_and_push:
+    name: Build and Push Ally to ECR (stage)
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: eu-north-1
+      ECR_REPOSITORY: ally_stage
+      DISCORD_WEBHOOK_URL_ALERT: ${{ secrets.DISCORD_WEBHOOK_URL_ALERT }}
+    permissions:
+      id-token: write
+      contents: read
+
+    outputs:
+      start_ts: ${{ steps.capture_start.outputs.ts }}
+
+    steps:
+      - id: capture_start
+        name: Capture start time
+        run: echo "ts=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+        
+      - name: Notify Discord (started)
+        if: ${{ env.DISCORD_WEBHOOK_URL_ALERT != '' }}
+        run: |
+          CONTENT="🚀 **${{ github.workflow }}** started on \`${{ github.ref_name }}\` by **${{ github.actor }}**
+          Repo: \`${{ github.repository }}\` • Run: #${{ github.run_number }}
+          Service: \`${ECR_REPOSITORY}\`
+          🔗 ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          printf '%s' "$CONTENT" | jq -Rs '{content:.}' > body.json
+          curl -sS -H "Content-Type: application/json" -d @body.json "$DISCORD_WEBHOOK_URL_ALERT"
+
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::194317476708:role/GitHubActionsECRRole
+          aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+          output-env-credentials: true
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1 || \
+            aws ecr create-repository --repository-name "$ECR_REPOSITORY" --region "$AWS_REGION"
+
+      - name: Build and Push Docker Image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+
+          # Generate date tag in DDMMYYYY format (e.g., 25122024)
+          DATE_TAG=$(date +'%d%m%Y')
+          IMAGE_TAG="ally_stage_${DATE_TAG}"
+          ECR_IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}"
+
+          echo "🔨 Building image with BuildKit cache: ${ECR_IMAGE}:${IMAGE_TAG}"
+
+          # Check if latest tag exists and remove it from the previous image
+          echo "🔄 Handling latest tag..."
+          LATEST_EXISTS=$(aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag=latest \
+            --region "$AWS_REGION" \
+            --query 'length(imageDetails)' \
+            --output text 2>/dev/null || echo "0")
+
+          if [ "$LATEST_EXISTS" != "0" ] && [ "$LATEST_EXISTS" != "None" ]; then
+            echo "🗑️ Removing latest tag from previous image"
+            aws ecr batch-delete-image \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-ids imageTag=latest \
+              --region "$AWS_REGION" || true
+          else
+            echo "ℹ️ No existing latest tag found"
+          fi
+
+          # Build and push Docker image
+          docker build -f Dockerfile -t "${ECR_IMAGE}:${IMAGE_TAG}" -t "${ECR_IMAGE}:latest" .
+          docker push "${ECR_IMAGE}:${IMAGE_TAG}"
+          docker push "${ECR_IMAGE}:latest"
+
+          echo "✅ Successfully pushed ${ECR_IMAGE}:${IMAGE_TAG} and ${ECR_IMAGE}:latest"
+
+  notify_stage:
+    name: Notify Discord (completed)
+    runs-on: ubuntu-latest
+    needs: build_and_push
+    if: always()
+    env:
+      DISCORD_WEBHOOK_URL_ALERT: ${{ secrets.DISCORD_WEBHOOK_URL_ALERT }}
+    steps:
+      - name: Send completion embed
+        if: ${{ env.DISCORD_WEBHOOK_URL_ALERT != '' }}
+        run: |
+          RESULT="${{ needs.build_and_push.result }}"  # success | failure | cancelled
+          if [ "$RESULT" = "success" ]; then
+            EMOJI="✅"; COLOR=3066993
+          elif [ "$RESULT" = "failure" ]; then
+            EMOJI="❌"; COLOR=15158332
+          elif [ "$RESULT" = "cancelled" ]; then
+            EMOJI="🚫"; COLOR=10038562
+          else
+            EMOJI="ℹ️"; COLOR=3447003
+          fi
+
+          START_TS="${{ needs.build_and_push.outputs.start_ts }}"
+          END_TS=$(date -u +%s)
+          DUR=$(( END_TS - START_TS ))
+          printf -v DUR_HMS '%02d:%02d:%02d' $((DUR/3600)) $(((DUR%3600)/60)) $((DUR%60))
+
+          TITLE="$EMOJI ${{ github.workflow }} • $RESULT"
+          URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          REPO="${{ github.repository }}"
+          BRANCH="${{ github.ref_name }}"
+          ACTOR="${{ github.actor }}"
+          RUNNUM="#${{ github.run_number }}"
+
+          TIMESTAMP=$(date -u +%FT%TZ)
+          jq -n \
+            --arg title "$TITLE" \
+            --arg url "$URL" \
+            --arg repo "$REPO" \
+            --arg branch "$BRANCH" \
+            --arg actor "$ACTOR" \
+            --arg runnum "$RUNNUM" \
+            --arg result "$RESULT" \
+            --arg duration "$DUR_HMS" \
+            --arg timestamp "$TIMESTAMP" \
+            --argjson color $COLOR '
+            {
+              embeds: [
+                {
+                  title: $title,
+                  url: $url,
+                  color: $color,
+                  fields: [
+                    { "name": "Repository", "value": $repo,   "inline": true },
+                    { "name": "Branch",     "value": $branch, "inline": true },
+                    { "name": "Run",        "value": $runnum, "inline": true },
+                    { "name": "By",         "value": $actor,  "inline": true },
+                    { "name": "Result",     "value": $result, "inline": true },
+                    { "name": "Duration",   "value": $duration, "inline": true }
+                  ],
+                  timestamp: $timestamp
+                }
+              ]
+            }' > body.json
+
+          curl -sS -H "Content-Type: application/json" -d @body.json "$DISCORD_WEBHOOK_URL_ALERT"
+
