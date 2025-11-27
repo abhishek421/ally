@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: analyst-ai:latest
+    container_name: analyst-ai-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      # Prevent masking the container's python packages
+      - /app/__pycache__
+    restart: unless-stopped
+    networks:
+      - analyst-network
+
+networks:
+  analyst-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+
