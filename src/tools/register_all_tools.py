@@ -24,6 +24,11 @@ from .deal_tools import (
     GetDealPeopleTool,
     SearchDealsTool,
 )
+from .group_tools import (
+    GetGroupByIdTool,
+    GetGroupMembersTool,
+    GetWorkspaceGroupsTool,
+)
 from .interaction_tools import GetInteractionByIdTool, SearchInteractionsTool
 from .people_tools import (
     GetPersonByIdTool,
@@ -35,6 +40,16 @@ from .people_tools import (
 )
 from .registry import get_tool_registry
 from .utility_tools import GetBulkEntitiesTool, GetWorkspaceSummaryTool
+from .write_tools import (
+    CreatePersonTool,
+    CreateCompanyTool,
+    CreateGroupTool,
+    AddPersonToCompanyTool,
+    AddPersonToGroupTool,
+    AddCompanyToGroupTool,
+    AddMultiplePeopleToGroupTool,
+    AddMultipleCompaniesToGroupTool,
+)
 
 
 def register_all_tools() -> None:
@@ -85,9 +100,24 @@ def register_all_tools() -> None:
     registry.register(FindRelationshipsTool())
     registry.register(GetRelationshipNetworkTool())
 
+    # Group tools
+    registry.register(GetWorkspaceGroupsTool())
+    registry.register(GetGroupByIdTool())
+    registry.register(GetGroupMembersTool())
+
     # Utility tools
     registry.register(GetWorkspaceSummaryTool())
     registry.register(GetBulkEntitiesTool())
+
+    # Write/Creation tools
+    registry.register(CreatePersonTool())
+    registry.register(CreateCompanyTool())
+    registry.register(CreateGroupTool())
+    registry.register(AddPersonToCompanyTool())
+    registry.register(AddPersonToGroupTool())
+    registry.register(AddCompanyToGroupTool())
+    registry.register(AddMultiplePeopleToGroupTool())
+    registry.register(AddMultipleCompaniesToGroupTool())
 
 
 # Auto-register on import (can be disabled if needed)

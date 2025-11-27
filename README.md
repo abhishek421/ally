@@ -39,6 +39,27 @@ A production-grade LangGraph-based orchestration system with modular node archit
 
 ## Installation
 
+### Using uv (Recommended)
+
+1. Install [uv](https://github.com/astral-sh/uv) if you haven't already:
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+2. Sync dependencies (creates virtual environment automatically):
+```bash
+uv sync
+```
+
+3. Copy environment file:
+```bash
+cp .env.example .env
+```
+
+4. Update `.env` with your configuration.
+
+### Using pip (Alternative)
+
 1. Create a virtual environment:
 ```bash
 python -m venv venv
@@ -59,7 +80,36 @@ cp .env.example .env
 
 ## Usage
 
-Run the application:
+### Using uv
+
+Run the Streamlit web interface:
+```bash
+uv run streamlit run streamlit_app.py
+```
+
+Run the API server:
+```bash
+uv run python api_server.py
+```
+
+Run the CLI application:
+```bash
+uv run python -m src.main
+```
+
+### Using pip
+
+Run the Streamlit web interface:
+```bash
+streamlit run streamlit_app.py
+```
+
+Run the API server:
+```bash
+python api_server.py
+```
+
+Run the CLI application:
 ```bash
 python -m src.main
 ```

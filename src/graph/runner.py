@@ -1,7 +1,7 @@
 """Helpers for running the LangGraph application."""
 
 from functools import lru_cache
-from typing import Any, Dict
+from typing import Any, Dict, AsyncIterator
 
 from .builder import build_graph
 from .state import GraphState
@@ -25,6 +25,11 @@ async def ainvoke_graph(state: GraphState) -> Dict[str, Any]:
     return await app.ainvoke(state)
 
 
-__all__ = ["invoke_graph", "ainvoke_graph"]
+async def astream_graph(state: GraphState) -> AsyncIterator[Dict[str, Any]]:
+    """Stream the compiled graph execution asynchronously."""
+    app = _get_compiled_graph()
+    async for event in app.astream(state):
+        yield event
 
 
+__all__ = ["invoke_graph", "ainvoke_graph", "astream_graph"]
