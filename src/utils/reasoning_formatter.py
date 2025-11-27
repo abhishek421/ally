@@ -114,6 +114,12 @@ def _format_tool_action(tool_name: str, params_str: str = None) -> str:
         'search_interactions': '📧 Searching interactions...',
         'get_interaction_by_id': '📧 Looking up interaction...',
         
+        # Note tools
+        'create_note': '📝 Creating note...',
+        'get_notes': '📝 Fetching notes...',
+        'update_note': '📝 Updating note...',
+        'delete_note': '🗑️ Deleting note...',
+        
         # Group tools
         'get_workspace_groups': '📁 Looking up your groups...',
         'get_group_by_id': '📁 Getting group details...',
@@ -283,6 +289,11 @@ def format_tool_call_for_display(tool_call: Dict[str, Any]) -> Dict[str, Any]:
         'add_company_to_group': 'Add to Group',
         'add_multiple_people_to_group': 'Add People to Group',
         'add_multiple_companies_to_group': 'Add Companies to Group',
+        # Note tools
+        'create_note': 'Create Note',
+        'get_notes': 'Get Notes',
+        'update_note': 'Update Note',
+        'delete_note': 'Delete Note',
     }
     
     return {

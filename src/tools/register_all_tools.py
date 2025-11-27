@@ -29,7 +29,14 @@ from .group_tools import (
     GetGroupMembersTool,
     GetWorkspaceGroupsTool,
 )
-from .interaction_tools import GetInteractionByIdTool, SearchInteractionsTool
+from .interaction_tools import (
+    GetInteractionByIdTool,
+    SearchInteractionsTool,
+    CreateNoteTool,
+    GetNotesTool,
+    UpdateNoteTool,
+    DeleteNoteTool,
+)
 from .people_tools import (
     GetPersonByIdTool,
     GetPersonCompaniesTool,
@@ -82,6 +89,12 @@ def register_all_tools() -> None:
     # Interaction tools
     registry.register(SearchInteractionsTool())
     registry.register(GetInteractionByIdTool())
+
+    # Note tools (notes are a type of interaction)
+    registry.register(CreateNoteTool())
+    registry.register(GetNotesTool())
+    registry.register(UpdateNoteTool())
+    registry.register(DeleteNoteTool())
 
     # Contact tools
     registry.register(SearchContactsTool())
