@@ -7,7 +7,7 @@ Set the following environment variables:
 - OPENAI_API_KEY (or GOOGLE_API_KEY or ANTHROPIC_API_KEY)
 - QUERY_PROCESSING_MODEL (e.g., gpt-4o, gemini-pro, claude-3-opus)
 - WORKSPACE_ID (UUID of the workspace to query)
-- DATABASE_URL (PostgreSQL connection string)
+- DATABASE_URL_ALLY (PostgreSQL connection string)
 """
 
 import json

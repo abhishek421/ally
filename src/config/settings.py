@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     max_iterations: int = 100
 
     # Database Configuration
-    database_url: Optional[str] = None
+    database_url_ally: Optional[str] = None
     db_pool_size: int = 10
     db_max_overflow: int = 20
     db_pool_recycle: int = 3600  # Recycle connections after 1 hour
