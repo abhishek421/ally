@@ -1,9 +1,11 @@
 """Service for managing conversations."""
 
+import json
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from sqlalchemy import and_, desc, func
+from sqlalchemy.orm.attributes import flag_modified
 
 from ..tools.database import get_db_session
 from ..tools.models import Conversation, ConversationMessage
@@ -393,7 +395,100 @@ def update_conversation(
     except ValueError as e:
         logger.error("Invalid UUID format for update_conversation", error=str(e))
         raise
-    except Exception as e:
-        logger.error("Failed to update conversation", error=str(e), exc_info=True)
-        raise
+
+
+def update_conversation_token_usage(
+    conversation_id: str,
+    input_tokens: int,
+    output_tokens: int,
+) -> None:
+    """Update cumulative token usage stored in conversation context.
+
+    Args:
+        conversation_id: Conversation UUID string
+        input_tokens: Tokens used for the latest user request/context
+        output_tokens: Tokens generated in the latest assistant response
+    """
+    try:
+        conversation_uuid = UUID(conversation_id)
+    except ValueError as exc:
+        logger.warning(
+            "Invalid conversation_id for token usage update",
+            conversation_id=conversation_id,
+            error=str(exc),
+        )
+        return
+
+    try:
+        with get_db_session() as session:
+            conversation = session.query(Conversation).filter(
+                Conversation.id == conversation_uuid
+            ).first()
+
+            if not conversation:
+                logger.warning(
+                    "Conversation not found for token usage update",
+                    conversation_id=conversation_id,
+                )
+                return
+
+            context_data: Dict[str, Any]
+            raw_context = conversation.context
+
+            if raw_context is None:
+                context_data = {}
+            elif isinstance(raw_context, dict):
+                context_data = dict(raw_context)
+            elif isinstance(raw_context, str) and raw_context.strip():
+                try:
+                    context_data = json.loads(raw_context)
+                    if not isinstance(context_data, dict):
+                        context_data = {}
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "Failed to parse conversation context as JSON; resetting",
+                        conversation_id=conversation_id,
+                    )
+                    context_data = {}
+            else:
+                context_data = {}
+
+            token_usage = context_data.get("token_usage")
+            if not isinstance(token_usage, dict):
+                token_usage = {}
+
+            cumulative_input = int(token_usage.get("input_tokens", 0)) + max(input_tokens, 0)
+            cumulative_output = int(token_usage.get("output_tokens", 0)) + max(output_tokens, 0)
+            token_usage.update(
+                {
+                    "input_tokens": cumulative_input,
+                    "output_tokens": cumulative_output,
+                    "total_tokens": cumulative_input + cumulative_output,
+                }
+            )
+
+            context_data["token_usage"] = token_usage
+            conversation.context = context_data
+
+            # Explicitly flag the JSONB field as modified so SQLAlchemy detects the change
+            flag_modified(conversation, "context")
+
+            session.add(conversation)
+            session.commit()
+
+            logger.info(
+                "Updated conversation token usage",
+                conversation_id=conversation_id,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cumulative_input=cumulative_input,
+                cumulative_output=cumulative_output,
+            )
+    except Exception as exc:
+        logger.error(
+            "Failed to update conversation token usage",
+            conversation_id=conversation_id,
+            error=str(exc),
+            exc_info=True,
+        )
 

@@ -198,6 +198,17 @@ class ConversationManager:
                     total_messages_to_summarize=len(messages_to_summarize),
                 )
                 
+                # Calculate summarization input tokens (the prompt sent to summarizer)
+                # Format messages for summarization (same as summarizer does)
+                conversation_text = "\n".join([f"{msg.role}: {msg.content}" for msg in messages_to_summarize])
+                summarization_prompt = f"""Summarize the following conversation history. Focus on key topics, decisions, and important information that would be useful for future context. Keep the summary concise but comprehensive.
+
+Conversation:
+{conversation_text}
+
+Summary:"""
+                summarization_input_tokens = self.tokenizer.count_tokens(summarization_prompt)
+                
                 new_summary = self.summarizer.summarize(messages_to_summarize)
                 
                 logger.info(
@@ -218,8 +229,32 @@ class ConversationManager:
                     total_summarized=total_summarized,
                 )
                 
-                # Calculate summary tokens
-                summary_tokens = self.tokenizer.count_tokens(new_summary)
+                # Calculate summary tokens (output from summarizer)
+                summary_output_tokens = self.tokenizer.count_tokens(new_summary)
+                
+                # Update conversation token usage with summarization tokens
+                from ..utils.conversation_service import update_conversation_token_usage
+                try:
+                    update_conversation_token_usage(
+                        conversation_id=conversation_id,
+                        input_tokens=summarization_input_tokens,
+                        output_tokens=summary_output_tokens,
+                    )
+                    logger.info(
+                        "Updated conversation token usage with summarization",
+                        conversation_id=conversation_id,
+                        summarization_input_tokens=summarization_input_tokens,
+                        summarization_output_tokens=summary_output_tokens,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to update conversation token usage for summarization",
+                        conversation_id=conversation_id,
+                        error=str(e),
+                    )
+                
+                # Calculate summary tokens (for storage metadata - use output tokens)
+                summary_tokens = summary_output_tokens
                 
                 # Get message IDs for DB storage
                 # start_message_id: first message ever (use previous if exists, otherwise first message)

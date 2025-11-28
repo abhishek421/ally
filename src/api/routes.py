@@ -23,10 +23,12 @@ from ..utils.conversation_service import (
     generate_title_from_query,
     get_conversation,
     list_conversations,
+    update_conversation_token_usage,
     update_conversation,
 )
 from ..utils.exceptions import GraphExecutionError
 from ..utils.logger import get_logger
+from ..utils.tokenizer import get_tokenizer
 from .models import (
     ChatRequest,
     ChatResponse,
@@ -226,6 +228,34 @@ async def chat(request: ChatRequest) -> ChatResponse:
             # Log error but don't fail the request
             logger.error(
                 "Failed to initiate message save to database",
+                conversation_id=conversation_id,
+                error=str(e),
+                exc_info=True,
+            )
+
+        # Update conversation token usage in context
+        # Input tokens: enriched query sent to LLM (includes summary + recent messages + current query)
+        # Output tokens: answer received from LLM
+        try:
+            tokenizer = get_tokenizer()
+            
+            # Get the enriched query that was actually sent to the LLM
+            enriched_query = final_state.get("query_builder_result", "")
+            if not enriched_query:
+                # Fallback to current question if enriched query not available
+                enriched_query = result_data.get("query") or request.query
+            
+            input_tokens = tokenizer.count_tokens(enriched_query or "")
+            output_tokens = tokenizer.count_tokens(answer or "")
+
+            update_conversation_token_usage(
+                conversation_id=conversation_id,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to update conversation token usage",
                 conversation_id=conversation_id,
                 error=str(e),
                 exc_info=True,
