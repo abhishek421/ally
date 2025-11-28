@@ -12,9 +12,9 @@ def main():
     print("=" * 60)
     
     # Database
-    if settings.database_url:
+    if settings.database_url_ally:
         # Mask password in connection string
-        db_url = settings.database_url
+        db_url = settings.database_url_ally
         if "@" in db_url:
             parts = db_url.split("@")
             if ":" in parts[0]:
@@ -27,9 +27,9 @@ def main():
                 masked = db_url
         else:
             masked = db_url
-        print(f"✓ DATABASE_URL: {masked}")
+        print(f"✓ DATABASE_URL_ALLY: {masked}")
     else:
-        print("✗ DATABASE_URL: Not set")
+        print("✗ DATABASE_URL_ALLY: Not set")
     
     # API Keys (masked)
 OPENAI_API_KEY=REDACTED
@@ -39,7 +39,7 @@ OPENAI_API_KEY=REDACTED
     # Other config
     print(f"✓ LLM_MODEL: {settings.llm_model}")
     print(f"✓ QUERY_PROCESSING_MODEL: {settings.query_processing_model}")
-    print(f"✓ DATABASE_URL required: {'Yes' if settings.database_url else 'No (will raise error)'}")
+    print(f"✓ DATABASE_URL_ALLY required: {'Yes' if settings.database_url_ally else 'No (will raise error)'}")
     
     print("\n" + "=" * 60)
     print("Testing database connection...")

@@ -19,18 +19,18 @@ _engine: Optional[Engine] = None
 _SessionLocal: Optional[sessionmaker] = None
 
 
-def get_database_url() -> str:
+def get_database_url_ally() -> str:
     """Get database URL from settings.
     
     Raises:
-        ValueError: If database_url is not set in environment variables
+        ValueError: If database_url_ally is not set in environment variables
     """
-    if not settings.database_url:
+    if not settings.database_url_ally:
         raise ValueError(
-            "DATABASE_URL is required. Please set it in your .env file. "
-            "Example: DATABASE_URL=postgresql://user:password@localhost:5433/dbname"
+            "DATABASE_URL_ALLY is required. Please set it in your .env file. "
+            "Example: DATABASE_URL_ALLY=postgresql://user:password@localhost:5433/dbname"
         )
-    return settings.database_url
+    return settings.database_url_ally
 
 
 def get_engine() -> Engine:
@@ -42,9 +42,9 @@ def get_engine() -> Engine:
     """
     global _engine
     if _engine is None:
-        database_url = get_database_url()
+        database_url_ally = get_database_url_ally()
         _engine = create_engine(
-            database_url,
+            database_url_ally,
             pool_size=settings.db_pool_size,
             max_overflow=settings.db_max_overflow,
             pool_pre_ping=True,  # Verify connections before using
@@ -58,7 +58,7 @@ def get_engine() -> Engine:
         )
         logger.info(
             "Database engine created",
-            database_url=database_url.split("@")[-1],
+            database_url_ally=database_url_ally.split("@")[-1],
             pool_size=settings.db_pool_size,
             max_overflow=settings.db_max_overflow,
             pool_recycle=settings.db_pool_recycle,
