@@ -1,4 +1,4 @@
-"""Query Processing Node - Processes queries using ReAct pattern with dspy."""
+"""Query Processing Node - Processes queries using Plan-and-Solve pattern with dspy."""
 
 import json
 import re
@@ -28,9 +28,60 @@ def _get_dspy_lm():
     global _dspy_lm
     if _dspy_lm is None:
         _dspy_lm = get_dspy_lm(model_name=settings.query_processing_model)
-        # Configure dspy with the LM and disable strict JSON adapter
-        dspy.configure(lm=_dspy_lm, adapter=dspy.ChatAdapter())
+        # Configure dspy with the LM. 
+        # We avoid enforcing a strict JSON adapter globally as it can be brittle.
+        # ChatAdapter is usually more flexible.
+        dspy.configure(lm=_dspy_lm) 
     return _dspy_lm
+
+
+class GeneratePlan(dspy.Signature):
+    """Generate a step-by-step plan to answer the user's request using available tools.
+    
+    Analyze the user's request and the available tools. Create a numbered list of steps 
+    to solve the problem efficiently. Do not execute the tools, just plan the steps.
+    The plan should be logical, efficient, and directly address the user's goal.
+    """
+    
+    context = dspy.InputField(desc="Context including available tools and conversation history")
+    question = dspy.InputField(desc="The user's question or request")
+    plan = dspy.OutputField(desc="A clear, numbered list of steps to execute")
+
+
+class Planner(dspy.Module):
+    """Planning module that generates execution plans."""
+    
+    def __init__(self):
+        super().__init__()
+        # Use Predict instead of ChainOfThought to simplify output and avoid "reasoning" field parsing issues
+        self.generate_plan = dspy.Predict(GeneratePlan)
+    
+    def forward(self, question: str, context: str) -> str:
+        """Generate a plan for the given question and context.
+        
+        Args:
+            question: User's question
+            context: Context string with tools and history
+            
+        Returns:
+            Generated plan string
+        """
+        try:
+            response = self.generate_plan(context=context, question=question)
+            return response.plan
+        except Exception as e:
+            logger.warning(f"Planner failed to generate structured plan: {e}. Fallback to simple generation.")
+            # Fallback: direct prompt if DSPy signature fails
+            lm = dspy.settings.lm
+            prompt = f"""
+            You are a planner.
+            Context: {context}
+            Question: {question}
+            
+            Create a numbered list of steps to solve this request using the available tools.
+            PLAN:
+            """
+            return lm(prompt)
 
 
 class ReActWithTools(dspy.Module):
@@ -60,11 +111,12 @@ class ReActWithTools(dspy.Module):
         if not self.workspace_id:
             logger.warning("No workspace_id provided. Tool calls may fail if workspace_id is required.")
 
-    def forward(self, question: str) -> dspy.Prediction:
+    def forward(self, question: str, plan: Optional[str] = None) -> dspy.Prediction:
         """Execute ReAct reasoning with tool support.
 
         Args:
             question: User question or full context string to answer
+            plan: Optional execution plan to follow
 
         Returns:
             Prediction with answer and reasoning steps
@@ -85,6 +137,10 @@ class ReActWithTools(dspy.Module):
         for iteration in range(self.max_iterations):
             # Build context
             context = f"Context & Request:\n{question}\n\n"
+            
+            if plan:
+                context += f"APPROVED PLAN:\n{plan}\n\n"
+                context += "INSTRUCTIONS: Execute the plan above step-by-step. Do not deviate unless necessary.\n\n"
             
             if tools_description:
                 context += f"Available tools:\n{tools_description}\n\n"
@@ -394,10 +450,12 @@ class ReActWithTools(dspy.Module):
 
 
 def query_processing_node(state: GraphState) -> Dict[str, Any]:
-    """Process query using ReAct pattern with dspy.
+    """Process query using Plan-and-Solve pattern with dspy.
 
     This node takes the enriched query from query_builder_node and processes it
-    using ReAct (Reasoning + Acting) pattern with tool support.
+    using a two-step approach:
+    1. Planner: Generates a high-level execution plan
+    2. Executor (ReAct): Executes the plan using tools
 
     Args:
         state: Current graph state containing query_builder_result
@@ -439,6 +497,21 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
         # Get user_id from state (needed for write operations)
         user_id = state.get("user_id")
 
+        # 1. GENERATE PLAN
+        logger.info("Generating execution plan...")
+        
+        planner = Planner()
+        
+        # Build simple tool list string for the planner (lighter context)
+        tools_list = "\n".join([f"- {t['name']}: {t['description']}" for t in tools])
+        planner_context = f"Available Tools:\n{tools_list}\n\nOriginal Query:\n{enriched_query}"
+        
+        generated_plan = planner(question=enriched_query, context=planner_context)
+        logger.info(f"Plan generated: {generated_plan}")
+
+        # 2. EXECUTE PLAN
+        logger.info("Executing plan with ReAct...", plan_length=len(generated_plan))
+        
         # Create ReAct module
         react_module = ReActWithTools(
             tools=tools,
@@ -447,12 +520,9 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
             user_id=user_id,
         )
 
-        # Process query
-        # Note: We pass the FULL enriched query (including context) to the module
-        logger.info("Starting ReAct processing", query_length=len(enriched_query), tools_count=len(tools))
-
-        # Execute ReAct
-        result = react_module(question=enriched_query)
+        # Execute ReAct with the generated plan
+        # Note: We pass the FULL enriched query and the plan
+        result = react_module(question=enriched_query, plan=generated_plan)
         
         # Extract answer and metadata
         answer = result.answer if hasattr(result, "answer") else str(result)
@@ -468,7 +538,8 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
             "answer": answer,
             "reasoning_steps": reasoning_steps,
             "tool_calls": tool_calls,
-            "query": enriched_query, # Return full context/query
+            "query": enriched_query,
+            "plan": generated_plan, # Return the plan in the response
             "metadata": {
                 "iterations": len(reasoning_steps),
                 "tools_used": [tc["tool"] for tc in tool_calls],
@@ -493,6 +564,7 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
                 "reasoning_steps_count": len(reasoning_steps),
                 "tool_calls_count": len(tool_calls),
                 "tools_used": [tc["tool"] for tc in tool_calls],
+                "generated_plan": generated_plan,
             },
             "tool_calls": tool_calls,
             "execution_path": execution_path,
