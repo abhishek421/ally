@@ -8,6 +8,14 @@ import dspy
 
 from ..config import get_settings
 from ..graph.state import GraphState
+from ..prompts import (
+    ANSWER_GENERATION_PROMPT_TEMPLATE,
+    FINAL_ANSWER_PROMPT_TEMPLATE,
+    PLAN_FALLBACK_PROMPT_TEMPLATE,
+    PLAN_GENERATION_INSTRUCTIONS,
+    REACT_SYSTEM_PROMPT,
+    get_premature_answer_message,
+)
 from ..tools.registry import get_tool_registry
 from ..utils.logger import get_logger
 from ..utils.dspy_adapter import get_dspy_lm
@@ -41,6 +49,14 @@ class GeneratePlan(dspy.Signature):
     Analyze the user's request and the available tools. Create a numbered list of steps 
     to solve the problem efficiently. Do not execute the tools, just plan the steps.
     The plan should be logical, efficient, and directly address the user's goal.
+    
+    CRITICAL RULES FOR PLANNING:
+    1. FRESHNESS: If the user asks for "all", "new", "list", or a quantity different from previous turns,
+       you MUST generate a plan to fetch FRESH data using tools. Do NOT rely on data from conversation history.
+    2. NO ASSUMPTIONS: Do not assume the previous search results found "everything". Always search again 
+       if the user's scope is broader (e.g. "give me ALL" vs previous "give me 3").
+    3. COMPLETENESS: If the user asks for multiple types of entities (e.g. "companies AND people"), 
+       ensure the plan includes steps to fetch BOTH.
     """
     
     context = dspy.InputField(desc="Context including available tools and conversation history")
@@ -73,14 +89,7 @@ class Planner(dspy.Module):
             logger.warning(f"Planner failed to generate structured plan: {e}. Fallback to simple generation.")
             # Fallback: direct prompt if DSPy signature fails
             lm = dspy.settings.lm
-            prompt = f"""
-            You are a planner.
-            Context: {context}
-            Question: {question}
-            
-            Create a numbered list of steps to solve this request using the available tools.
-            PLAN:
-            """
+            prompt = PLAN_FALLBACK_PROMPT_TEMPLATE.format(context=context, question=question)
             return lm(prompt)
 
 
@@ -151,39 +160,7 @@ class ReActWithTools(dspy.Module):
                     context += f"- {entry}\n"
                 context += "\n"
 
-            context += (
-                "You are a friendly, alive, and direct business analyst AI. You have a personality. "
-                "You are not just a tool; you are a partner in analysis. Be concise and direct. "
-                "If the data is large, big messages are fine. If not, keep it brief. "
-                "Avoid irrelevant long messages.\n\n"
-                "IMPORTANT: You do NOT have direct access to data. You MUST use tools to retrieve information.\n"
-                "If you cannot perform an action (like adding a person) because you lack the tool, "
-                "say so directly. Do NOT suggest logging into the CRM or navigating to the website. "
-                "I don't need that generic advice.\n\n"
-                "CRITICAL - User-Friendly Responses:\n"
-                "- NEVER include UUIDs, IDs, or technical identifiers in your responses to the user.\n"
-                "- NEVER mention workspace_id, user_id, company_id, person_id, or any internal IDs.\n"
-                "- Use names and descriptions instead of IDs (e.g., say 'Created company Entreship' NOT 'Created company with ID abc-123').\n"
-                "- Keep responses natural and conversational, as if talking to a non-technical business user.\n"
-                "- When referring to entities from previous messages, use their names, not IDs.\n"
-                "- If tool results contain duplicate entities (same name, different ID), treat them as the same entity and only list unique names.\n\n"
-                "When interpreting tool results, pay attention to metadata fields like 'total' or 'count' in the response. "
-                "If the user's question asks for a 'total', 'count', or 'number of' items, and the tool returns a 'total' field, "
-                "use this value as the answer. "
-                "However, if the user asks to 'list', 'show', or 'find' items, use the 'results' list to provide the details.\n\n"
-                "Format your final answer in clean, readable Markdown.\n\n"
-                "You MUST respond in one of these formats:\n\n"
-                "Format 1 - To use a tool (USE THIS to get information):\n"
-                "ACTION: use_tool\n"
-                "TOOL: <exact_tool_name>\n"
-                "PARAMS: {\"param1\": \"value1\", \"param2\": \"value2\"}\n\n"
-                "Format 2 - To provide final answer (ONLY after you have tool results):\n"
-                "ACTION: answer\n"
-                "ANSWER: <your comprehensive answer based on tool results>\n\n"
-                "Format 3 - To continue reasoning (if you need to think more):\n"
-                "Just explain your thoughts without ACTION keyword.\n\n"
-                "If you need information, you MUST use a tool first. Choose one format and respond now:"
-            )
+            context += REACT_SYSTEM_PROMPT
             
             try:
                 # Call LM directly to avoid JSON parsing issues
@@ -286,44 +263,67 @@ class ReActWithTools(dspy.Module):
                 else:
                     context_history.append(f"Error: Tool '{tool_name}' does not exist. Please check the Available Tools list.")
             elif action == "answer":
-                # If answer wasn't extracted from ANSWER: tag, try to generate one or use reasoning
-                if not answer:
-                    # Check if the reasoning itself looks like an answer
-                    if "answer is" in reasoning.lower() or len(reasoning) > 20:
-                         answer = reasoning
-                    else:
-                        # Generate answer
-                        answer_context = f"Original Request:\n{question}\n\n"
-                        if reasoning_steps:
-                            answer_context += "Reasoning: " + " ".join(reasoning_steps[-2:]) + "\n\n"
-                        if tool_calls:
-                            answer_context += "Tool results:\n"
-                            for call in tool_calls:
-                                answer_context += f"- {call['tool']}: {call['result'][:20000]}\n"
-                        answer_context += "\n"
-                        answer_context += "Provide a comprehensive answer based on the above information."
+                # HEURISTIC CHECK: Detect premature answers
+                # If the answer suggests future action ("I will now...", "Next I need..."), block it.
+                future_indicators = ["i will now", "i need to", "next i will", "next, i will", "i'll now"]
+                if any(indicator in answer.lower() for indicator in future_indicators):
+                    logger.warning("Detected premature answer with future tense. Forcing continuation.")
+                    # Reject the answer and force continuation
+                    context_history.append(get_premature_answer_message(answer))
+                    action = "continue" # Reset action to continue loop
+                    answer = None # Clear the extracted answer
+                else:
+                    # Valid answer (hopefully)
+                    if not answer:
+                        # Try to generate if not extracted
+                        # ... (existing logic) ...
+                        if "answer is" in reasoning.lower() or len(reasoning) > 20:
+                             answer = reasoning
+                        else:
+                            # Generate answer
+                            reasoning_section = ""
+                            if reasoning_steps:
+                                reasoning_section = "Reasoning: " + " ".join(reasoning_steps[-2:]) + "\n\n"
+                            
+                            tool_results_section = ""
+                            if tool_calls:
+                                tool_results_section = "Tool results:\n"
+                                for call in tool_calls:
+                                    tool_results_section += f"- {call['tool']}: {call['result'][:20000]}\n"
+                            
+                            answer_context = ANSWER_GENERATION_PROMPT_TEMPLATE.format(
+                                question=question,
+                                reasoning_section=reasoning_section,
+                                tool_results_section=tool_results_section,
+                            )
 
-                        try:
-                            answer = lm(answer_context)
-                        except Exception as e:
-                            logger.error(f"Answer generation failed", error=str(e))
-                            answer = "I encountered an error while generating the answer."
-                break
+                            try:
+                                answer = lm(answer_context)
+                            except Exception as e:
+                                logger.error(f"Answer generation failed", error=str(e))
+                                answer = "I encountered an error while generating the answer."
+                    break
             else:
                 # Continue reasoning
                 context_history.append(reasoning[:200])
 
         # If no answer yet, generate one
         if not answer:
-            final_context = f"Original Request:\n{question}\n\n"
+            reasoning_section = ""
             if reasoning_steps:
-                final_context += "Reasoning: " + " ".join(reasoning_steps[-3:]) + "\n\n"
+                reasoning_section = "Reasoning: " + " ".join(reasoning_steps[-3:]) + "\n\n"
+            
+            tool_results_section = ""
             if tool_calls:
-                final_context += "Tool results:\n"
+                tool_results_section = "Tool results:\n"
                 for call in tool_calls:
-                    final_context += f"- {call['tool']}: {call['result'][:20000]}\n"
-                final_context += "\n"
-            final_context += "Provide a comprehensive answer based on the above information."
+                    tool_results_section += f"- {call['tool']}: {call['result'][:20000]}\n"
+            
+            final_context = FINAL_ANSWER_PROMPT_TEMPLATE.format(
+                question=question,
+                reasoning_section=reasoning_section,
+                tool_results_section=tool_results_section,
+            )
 
             try:
                 answer = lm(final_context)
@@ -504,7 +504,16 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
         
         # Build simple tool list string for the planner (lighter context)
         tools_list = "\n".join([f"- {t['name']}: {t['description']}" for t in tools])
-        planner_context = f"Available Tools:\n{tools_list}\n\nOriginal Query:\n{enriched_query}"
+        
+        # Use a cleaner context structure for the planner
+        # We label history explicitly so the planner treats it as "Background" not "Results"
+        planner_context = f"""
+        AVAILABLE TOOLS:
+        {tools_list}
+        
+        CONVERSATION HISTORY (Use ONLY for context, do NOT assume these results answer new queries):
+        {enriched_query}
+        """
         
         generated_plan = planner(question=enriched_query, context=planner_context)
         logger.info(f"Plan generated: {generated_plan}")
