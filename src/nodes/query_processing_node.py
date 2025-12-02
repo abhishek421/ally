@@ -144,23 +144,28 @@ class ReActWithTools(dspy.Module):
 
         # ReAct loop
         for iteration in range(self.max_iterations):
-            # Build context
-            context = f"Context & Request:\n{question}\n\n"
+            # 1. STATIC PARTS FIRST (Triggers Prompt Caching)
+            # System prompt + Tools description are static for all requests
+            context = REACT_SYSTEM_PROMPT + "\n\n"
             
+            if tools_description:
+                context += f"AVAILABLE TOOLS:\n{tools_description}\n\n"
+
+            # 2. SEMI-STATIC PARTS (Plan matches for this entire request)
             if plan:
                 context += f"APPROVED PLAN:\n{plan}\n\n"
                 context += "INSTRUCTIONS: Execute the plan above step-by-step. Do not deviate unless necessary.\n\n"
-            
-            if tools_description:
-                context += f"Available tools:\n{tools_description}\n\n"
 
+            # 3. DYNAMIC PARTS LAST (History grows, Question changes)
             if context_history:
-                context += "Previous steps:\n"
+                context += "PREVIOUS STEPS:\n"
                 for entry in context_history[-5:]:  # Show last 5 entries for better context
                     context += f"- {entry}\n"
                 context += "\n"
 
-            context += REACT_SYSTEM_PROMPT
+            context += f"CURRENT REQUEST:\n{question}\n\n"
+            
+            context += "Choose your next format (ACTION: use_tool, ACTION: answer, or reasoning) and respond now:"
             
             try:
                 # Call LM directly to avoid JSON parsing issues
