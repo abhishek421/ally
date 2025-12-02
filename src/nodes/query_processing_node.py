@@ -135,6 +135,7 @@ class ReActWithTools(dspy.Module):
         tool_calls = []
         answer = None
         context_history = []
+        previous_actions = []  # Track recent actions to detect loops
 
         # Build tools description for LLM
         tools_description = self._build_tools_description()
@@ -248,23 +249,45 @@ class ReActWithTools(dspy.Module):
                     # Extract and parse tool parameters
                     tool_params = self._extract_tool_params(tool_name, tool_params_str, reasoning)
                     
-                    # Call tool
-                    tool_result = self._call_tool(tool_name, tool_params)
-                    tool_call_record = {
-                        "tool": tool_name,
-                        "params": tool_params,
-                        "result": str(tool_result)[:20000],  # Limit result length
-                        "iteration": iteration + 1,
-                    }
-                    tool_calls.append(tool_call_record)
+                    # Check for duplicate tool calls (Loop of Death prevention)
+                    # Create a canonical signature for the call: name + sorted params
+                    current_call_signature = f"{tool_name}:{json.dumps(tool_params, sort_keys=True)}"
                     
-                    # Truncate result in history to save context
-                    result_preview = str(tool_result)
-                    if len(result_preview) > settings.tool_result_limit:
-                        result_preview = result_preview[:settings.tool_result_limit] + "... (truncated)"
-                    context_history.append(f"Tool {tool_name} called with params {tool_params}\nResult: {result_preview}")
-                    
-                    logger.info(f"Tool called: {tool_name}", params=tool_params, result_preview=str(tool_result)[:100])
+                    if previous_actions and previous_actions[-1] == current_call_signature:
+                        logger.warning(f"Duplicate tool call detected: {tool_name} with same params")
+                        
+                        # Inject error message instead of running tool
+                        duplicate_msg = (
+                            f"SYSTEM: You just called tool '{tool_name}' with these exact parameters. "
+                            "Do NOT call it again. Analyze the 'Result' directly above and provide your Final Answer."
+                        )
+                        context_history.append(duplicate_msg)
+                        # We still record it to prevent infinite identical error loops if it keeps trying
+                        previous_actions.append(current_call_signature)
+                        
+                        # Reset action so we don't fall into 'else' block
+                        action = "continue"
+                    else:
+                        # Call tool
+                        tool_result = self._call_tool(tool_name, tool_params)
+                        tool_call_record = {
+                            "tool": tool_name,
+                            "params": tool_params,
+                            "result": str(tool_result)[:20000],  # Limit result length
+                            "iteration": iteration + 1,
+                        }
+                        tool_calls.append(tool_call_record)
+                        
+                        # Truncate result in history to save context
+                        result_preview = str(tool_result)
+                        if len(result_preview) > settings.tool_result_limit:
+                            result_preview = result_preview[:settings.tool_result_limit] + "... (truncated)"
+                        context_history.append(f"Tool {tool_name} called with params {tool_params}\nResult: {result_preview}")
+                        
+                        logger.info(f"Tool called: {tool_name}", params=tool_params, result_preview=str(tool_result)[:100])
+                        
+                        # Record successful action
+                        previous_actions.append(current_call_signature)
                 else:
                     context_history.append(f"Error: Tool '{tool_name}' does not exist. Please check the Available Tools list.")
             elif action == "answer":
