@@ -5,6 +5,7 @@ from typing import List
 
 from ..adapters import get_llm_adapter
 from ..config import get_settings
+from ..prompts import SUMMARIZATION_PROMPT_TEMPLATE
 from .models import Message
 
 settings = get_settings()
@@ -53,12 +54,7 @@ class LLMSummarizer(SummarizerInterface):
         # Format messages for summarization
         conversation_text = "\n".join([f"{msg.role}: {msg.content}" for msg in messages])
 
-        prompt = f"""Summarize the following conversation history. Focus on key topics, decisions, and important information that would be useful for future context. Keep the summary concise but comprehensive.
-
-Conversation:
-{conversation_text}
-
-Summary:"""
+        prompt = SUMMARIZATION_PROMPT_TEMPLATE.format(conversation_text=conversation_text)
 
         return self.adapter.invoke(prompt)
 
