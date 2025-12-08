@@ -52,6 +52,7 @@ openai_api_key="REDACTED"
     query_processing_timeout: int = 60
     max_react_iterations: int = 10
     enable_tools: bool = True
+    tool_result_limit: int = 10000  # Character limit for tool outputs in context
 
     # Graph Configuration
     max_iterations: int = 100
