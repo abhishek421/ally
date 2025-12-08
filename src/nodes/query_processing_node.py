@@ -1,4 +1,4 @@
-"""Query Processing Node - Processes queries using ReAct pattern with dspy."""
+"""Query Processing Node - Processes queries using Plan-and-Solve pattern with dspy."""
 
 import json
 import re
@@ -8,6 +8,14 @@ import dspy
 
 from ..config import get_settings
 from ..graph.state import GraphState
+from ..prompts import (
+    ANSWER_GENERATION_PROMPT_TEMPLATE,
+    FINAL_ANSWER_PROMPT_TEMPLATE,
+    PLAN_FALLBACK_PROMPT_TEMPLATE,
+    PLAN_GENERATION_INSTRUCTIONS,
+    REACT_SYSTEM_PROMPT,
+    get_premature_answer_message,
+)
 from ..tools.registry import get_tool_registry
 from ..utils.logger import get_logger
 from ..utils.dspy_adapter import get_dspy_lm
@@ -28,9 +36,61 @@ def _get_dspy_lm():
     global _dspy_lm
     if _dspy_lm is None:
         _dspy_lm = get_dspy_lm(model_name=settings.query_processing_model)
-        # Configure dspy with the LM and disable strict JSON adapter
-        dspy.configure(lm=_dspy_lm, adapter=dspy.ChatAdapter())
+        # Configure dspy with the LM. 
+        # We avoid enforcing a strict JSON adapter globally as it can be brittle.
+        # ChatAdapter is usually more flexible.
+        dspy.configure(lm=_dspy_lm) 
     return _dspy_lm
+
+
+class GeneratePlan(dspy.Signature):
+    """Generate a step-by-step plan to answer the user's request using available tools.
+    
+    Analyze the user's request and the available tools. Create a numbered list of steps 
+    to solve the problem efficiently. Do not execute the tools, just plan the steps.
+    The plan should be logical, efficient, and directly address the user's goal.
+    
+    CRITICAL RULES FOR PLANNING:
+    1. FRESHNESS: If the user asks for "all", "new", "list", or a quantity different from previous turns,
+       you MUST generate a plan to fetch FRESH data using tools. Do NOT rely on data from conversation history.
+    2. NO ASSUMPTIONS: Do not assume the previous search results found "everything". Always search again 
+       if the user's scope is broader (e.g. "give me ALL" vs previous "give me 3").
+    3. COMPLETENESS: If the user asks for multiple types of entities (e.g. "companies AND people"), 
+       ensure the plan includes steps to fetch BOTH.
+    """
+    
+    context = dspy.InputField(desc="Context including available tools and conversation history")
+    question = dspy.InputField(desc="The user's question or request")
+    plan = dspy.OutputField(desc="A clear, numbered list of steps to execute")
+
+
+class Planner(dspy.Module):
+    """Planning module that generates execution plans."""
+    
+    def __init__(self):
+        super().__init__()
+        # Use Predict instead of ChainOfThought to simplify output and avoid "reasoning" field parsing issues
+        self.generate_plan = dspy.Predict(GeneratePlan)
+    
+    def forward(self, question: str, context: str) -> str:
+        """Generate a plan for the given question and context.
+        
+        Args:
+            question: User's question
+            context: Context string with tools and history
+            
+        Returns:
+            Generated plan string
+        """
+        try:
+            response = self.generate_plan(context=context, question=question)
+            return response.plan
+        except Exception as e:
+            logger.warning(f"Planner failed to generate structured plan: {e}. Fallback to simple generation.")
+            # Fallback: direct prompt if DSPy signature fails
+            lm = dspy.settings.lm
+            prompt = PLAN_FALLBACK_PROMPT_TEMPLATE.format(context=context, question=question)
+            return lm(prompt)
 
 
 class ReActWithTools(dspy.Module):
@@ -60,11 +120,12 @@ class ReActWithTools(dspy.Module):
         if not self.workspace_id:
             logger.warning("No workspace_id provided. Tool calls may fail if workspace_id is required.")
 
-    def forward(self, question: str) -> dspy.Prediction:
+    def forward(self, question: str, plan: Optional[str] = None) -> dspy.Prediction:
         """Execute ReAct reasoning with tool support.
 
         Args:
-            question: User question to answer
+            question: User question or full context string to answer
+            plan: Optional execution plan to follow
 
         Returns:
             Prediction with answer and reasoning steps
@@ -74,6 +135,7 @@ class ReActWithTools(dspy.Module):
         tool_calls = []
         answer = None
         context_history = []
+        previous_actions = []  # Track recent actions to detect loops
 
         # Build tools description for LLM
         tools_description = self._build_tools_description()
@@ -83,50 +145,28 @@ class ReActWithTools(dspy.Module):
 
         # ReAct loop
         for iteration in range(self.max_iterations):
-            # Build context
-            context = f"Question: {question}\n\n"
+            # 1. STATIC PARTS FIRST (Triggers Prompt Caching)
+            # System prompt + Tools description are static for all requests
+            context = REACT_SYSTEM_PROMPT + "\n\n"
             
             if tools_description:
-                context += f"Available tools:\n{tools_description}\n\n"
+                context += f"AVAILABLE TOOLS:\n{tools_description}\n\n"
 
+            # 2. SEMI-STATIC PARTS (Plan matches for this entire request)
+            if plan:
+                context += f"APPROVED PLAN:\n{plan}\n\n"
+                context += "INSTRUCTIONS: Execute the plan above step-by-step. Do not deviate unless necessary.\n\n"
+
+            # 3. DYNAMIC PARTS LAST (History grows, Question changes)
             if context_history:
-                context += "Previous steps:\n"
-                for entry in context_history[-3:]:  # Last 3 entries
+                context += "PREVIOUS STEPS:\n"
+                for entry in context_history[-5:]:  # Show last 5 entries for better context
                     context += f"- {entry}\n"
                 context += "\n"
 
-            context += (
-                "You are a friendly, alive, and direct business analyst AI. You have a personality. "
-                "You are not just a tool; you are a partner in analysis. Be concise and direct. "
-                "If the data is large, big messages are fine. If not, keep it brief. "
-                "Avoid irrelevant long messages.\n\n"
-                "IMPORTANT: You do NOT have direct access to data. You MUST use tools to retrieve information.\n"
-                "If you cannot perform an action (like adding a person) because you lack the tool, "
-                "say so directly. Do NOT suggest logging into the CRM or navigating to the website. "
-                "I don't need that generic advice.\n\n"
-                "CRITICAL - User-Friendly Responses:\n"
-                "- NEVER include UUIDs, IDs, or technical identifiers in your responses to the user.\n"
-                "- NEVER mention workspace_id, user_id, company_id, person_id, or any internal IDs.\n"
-                "- Use names and descriptions instead of IDs (e.g., say 'Created company Entreship' NOT 'Created company with ID abc-123').\n"
-                "- Keep responses natural and conversational, as if talking to a non-technical business user.\n"
-                "- When referring to entities from previous messages, use their names, not IDs.\n\n"
-                "When interpreting tool results, pay attention to metadata fields like 'total' or 'count' in the response. "
-                "If the user's question asks for a 'total', 'count', or 'number of' items, and the tool returns a 'total' field, "
-                "use this value as the answer. "
-                "However, if the user asks to 'list', 'show', or 'find' items, use the 'results' list to provide the details.\n\n"
-                "Format your final answer in clean, readable Markdown.\n\n"
-                "You MUST respond in one of these formats:\n\n"
-                "Format 1 - To use a tool (USE THIS to get information):\n"
-                "ACTION: use_tool\n"
-                "TOOL: <exact_tool_name>\n"
-                "PARAMS: {\"param1\": \"value1\", \"param2\": \"value2\"}\n\n"
-                "Format 2 - To provide final answer (ONLY after you have tool results):\n"
-                "ACTION: answer\n"
-                "ANSWER: <your comprehensive answer based on tool results>\n\n"
-                "Format 3 - To continue reasoning (if you need to think more):\n"
-                "Just explain your thoughts without ACTION keyword.\n\n"
-                "If you need information, you MUST use a tool first. Choose one format and respond now:"
-            )
+            context += f"CURRENT REQUEST:\n{question}\n\n"
+            
+            context += "Choose your next format (ACTION: use_tool, ACTION: answer, or reasoning) and respond now:"
             
             try:
                 # Call LM directly to avoid JSON parsing issues
@@ -138,69 +178,65 @@ class ReActWithTools(dspy.Module):
                 tool_params_str = ""
                 reasoning = response
                 
-                # Check if response contains ACTION directive
-                response_upper = response.upper()
-                if "ACTION:" in response_upper:
-                    lines = response.split("\n")
-                    for i, line in enumerate(lines):
-                        line_upper = line.upper()
-                        line_stripped = line.strip()
+                # Robust parsing logic
+                lines = response.split("\n")
+                for i, line in enumerate(lines):
+                    line_stripped = line.strip()
+                    line_upper = line_stripped.upper()
+                    
+                    # Check for ACTION
+                    if line_upper.startswith("ACTION:"):
+                        action_value = line_stripped.split(":", 1)[1].strip().lower()
                         
-                        if "ACTION:" in line_upper:
-                            # Extract action value
-                            action_value = line.split(":", 1)[1].strip().lower() if ":" in line else ""
-                            if "use_tool" in action_value or "tool" in action_value:
-                                action = "use_tool"
-                            elif "answer" in action_value:
-                                action = "answer"
+                        # More permissive action checking
+                        if "use_tool" in action_value or "tool" in action_value or action_value in self.tools:
+                            action = "use_tool"
+                            # If the action value itself IS the tool name (e.g., "ACTION: search_companies")
+                            if action_value in self.tools:
+                                tool_name = action_value
+                        elif "answer" in action_value:
+                            action = "answer"
+                    
+                    # Check for TOOL (only if action is use_tool)
+                    if line_upper.startswith("TOOL:") and action == "use_tool":
+                        candidate_name = line_stripped.split(":", 1)[1].strip().strip("\"' ")
+                        if candidate_name:
+                            tool_name = candidate_name
+                    
+                    # Check for PARAMS (only if action is use_tool)
+                    if line_upper.startswith("PARAMS:") and action == "use_tool":
+                        # Extract params part
+                        params_part = line_stripped.split(":", 1)[1].strip()
                         
-                        if "TOOL:" in line_upper and action == "use_tool":
-                            # Extract tool name - remove "TOOL:" prefix
-                            tool_name = line.split(":", 1)[1].strip() if ":" in line else ""
-                            # Clean up tool name (remove quotes, extra spaces)
-                            tool_name = tool_name.strip("\"' ")
-                        
-                        if "PARAMS:" in line_upper and action == "use_tool":
-                            # Extract params - could be on same line or next lines
-                            params_part = line.split(":", 1)[1].strip() if ":" in line else ""
-                            # If params start with {, try to get the full JSON (might span multiple lines)
-                            if "{" in params_part:
-                                # Collect all lines until we have matching braces
-                                json_str = params_part
-                                open_braces = json_str.count("{")
-                                close_braces = json_str.count("}")
-                                j = i + 1
-                                while open_braces > close_braces and j < len(lines):
-                                    json_str += "\n" + lines[j]
-                                    open_braces = json_str.count("{")
-                                    close_braces = json_str.count("}")
-                                    j += 1
-                                tool_params_str = json_str
-                            else:
-                                tool_params_str = params_part
-                        
-                        if "ANSWER:" in line_upper and action == "answer":
-                            # Extract answer - could span multiple lines
-                            answer = line.split(":", 1)[1].strip() if ":" in line else ""
-                            # Collect remaining lines as part of answer
-                            for j in range(i + 1, len(lines)):
-                                answer += "\n" + lines[j]
-                            break
-                
-                # If action is use_tool but no tool name found, try to extract from reasoning
-                if action == "use_tool" and not tool_name:
-                    # Look for tool names mentioned in the response
-                    for potential_tool in self.tools.keys():
-                        if potential_tool.lower() in response.lower():
-                            tool_name = potential_tool
-                            logger.info(f"Extracted tool name from reasoning: {tool_name}")
-                            break
+                        # If it looks like it starts a JSON block, try to capture multi-line
+                        if not params_part or params_part.startswith("{"):
+                            # Accumulate lines until we find matching braces or end of block
+                            buffer = params_part
+                            # If it's a single line JSON, fine. If not, read ahead.
+                            if not buffer.endswith("}"):
+                                for j in range(i + 1, len(lines)):
+                                    next_line = lines[j]
+                                    buffer += "\n" + next_line
+                                    # Crude check for end of JSON
+                                    if next_line.strip().endswith("}"):
+                                        break
+                            tool_params_str = buffer
+                        else:
+                            tool_params_str = params_part
+
+                    # Check for ANSWER
+                    if line_upper.startswith("ANSWER:") and action == "answer":
+                        answer = line_stripped.split(":", 1)[1].strip()
+                        # Collect remaining lines
+                        for j in range(i + 1, len(lines)):
+                            answer += "\n" + lines[j]
+                        break
                 
             except Exception as e:
                 logger.error(f"ReAct iteration {iteration + 1} failed", error=str(e))
-                # Fallback: try to continue with simpler reasoning
                 reasoning = f"Error in reasoning: {str(e)}"
-                action = "answer"  # Force answer generation
+                # Fallback: Don't force answer immediately, try to continue
+                action = "continue" 
                 tool_name = ""
                 tool_params_str = ""
 
@@ -208,72 +244,114 @@ class ReActWithTools(dspy.Module):
             logger.info(f"ReAct iteration {iteration + 1}", reasoning=reasoning[:200], action=action)
 
             # Check if we should call a tool
-            if action == "use_tool" or (tool_name and tool_name in self.tools):
-                if not tool_name:
-                    # Try to extract tool name from reasoning
-                    for tool in self.tools.keys():
-                        if tool.lower() in reasoning.lower():
-                            tool_name = tool
-                            break
-
-                if tool_name and tool_name in self.tools:
+            if action == "use_tool" and tool_name:
+                if tool_name in self.tools:
                     # Extract and parse tool parameters
                     tool_params = self._extract_tool_params(tool_name, tool_params_str, reasoning)
                     
-                    # Call tool
-                    tool_result = self._call_tool(tool_name, tool_params)
-                    # Serialize result as JSON for proper frontend parsing
-                    try:
-                        result_json = json.dumps(tool_result) if isinstance(tool_result, dict) else str(tool_result)
-                    except (TypeError, ValueError):
-                        result_json = str(tool_result)
-                    result_json = result_json[:20000]  # Limit result length
+                    # Check for duplicate tool calls (Loop of Death prevention)
+                    # Create a canonical signature for the call: name + sorted params
+                    current_call_signature = f"{tool_name}:{json.dumps(tool_params, sort_keys=True)}"
                     
-                    tool_call_record = {
-                        "tool": tool_name,
-                        "params": tool_params,
-                        "result": result_json,
-                        "iteration": iteration + 1,
-                    }
-                    tool_calls.append(tool_call_record)
-                    context_history.append(f"Tool {tool_name} called with params {tool_params}, result: {result_json[:5000]}")
-                    logger.info(f"Tool called: {tool_name}", params=tool_params, result_preview=str(tool_result)[:100])
+                    if previous_actions and previous_actions[-1] == current_call_signature:
+                        logger.warning(f"Duplicate tool call detected: {tool_name} with same params")
+                        
+                        # Inject error message instead of running tool
+                        duplicate_msg = (
+                            f"SYSTEM: You just called tool '{tool_name}' with these exact parameters. "
+                            "Do NOT call it again. Analyze the 'Result' directly above and provide your Final Answer."
+                        )
+                        context_history.append(duplicate_msg)
+                        # We still record it to prevent infinite identical error loops if it keeps trying
+                        previous_actions.append(current_call_signature)
+                        
+                        # Reset action so we don't fall into 'else' block
+                        action = "continue"
+                    else:
+                        # Call tool
+                        tool_result = self._call_tool(tool_name, tool_params)
+                        tool_call_record = {
+                            "tool": tool_name,
+                            "params": tool_params,
+                            "result": str(tool_result)[:20000],  # Limit result length
+                            "iteration": iteration + 1,
+                        }
+                        tool_calls.append(tool_call_record)
+                        
+                        # Truncate result in history to save context
+                        result_preview = str(tool_result)
+                        if len(result_preview) > settings.tool_result_limit:
+                            result_preview = result_preview[:settings.tool_result_limit] + "... (truncated)"
+                        context_history.append(f"Tool {tool_name} called with params {tool_params}\nResult: {result_preview}")
+                        
+                        logger.info(f"Tool called: {tool_name}", params=tool_params, result_preview=str(tool_result)[:100])
+                        
+                        # Record successful action
+                        previous_actions.append(current_call_signature)
                 else:
-                    context_history.append(f"Attempted to call unknown tool: {tool_name}")
-            elif action == "answer" or "final answer" in reasoning.lower()[-100:]:
-                # If answer not already extracted, generate it
-                if not answer:
-                    answer_context = f"Question: {question}\n\n"
-                    if reasoning_steps:
-                        answer_context += "Reasoning: " + " ".join(reasoning_steps[-2:]) + "\n\n"
-                    if tool_calls:
-                        answer_context += "Tool results:\n"
-                        for call in tool_calls:
-                            answer_context += f"- {call['tool']}: {call['result'][:20000]}\n"
-                    answer_context += "\n"
-                    answer_context += "Provide a comprehensive answer based on the above information."
+                    context_history.append(f"Error: Tool '{tool_name}' does not exist. Please check the Available Tools list.")
+            elif action == "answer":
+                # HEURISTIC CHECK: Detect premature answers
+                # If the answer suggests future action ("I will now...", "Next I need..."), block it.
+                future_indicators = ["i will now", "i need to", "next i will", "next, i will", "i'll now"]
+                if any(indicator in answer.lower() for indicator in future_indicators):
+                    logger.warning("Detected premature answer with future tense. Forcing continuation.")
+                    # Reject the answer and force continuation
+                    context_history.append(get_premature_answer_message(answer))
+                    action = "continue" # Reset action to continue loop
+                    answer = None # Clear the extracted answer
+                else:
+                    # Valid answer (hopefully)
+                    if not answer:
+                        # Try to generate if not extracted
+                        # ... (existing logic) ...
+                        if "answer is" in reasoning.lower() or len(reasoning) > 20:
+                             answer = reasoning
+                        else:
+                            # Generate answer
+                            reasoning_section = ""
+                            if reasoning_steps:
+                                reasoning_section = "Reasoning: " + " ".join(reasoning_steps[-2:]) + "\n\n"
+                            
+                            tool_results_section = ""
+                            if tool_calls:
+                                tool_results_section = "Tool results:\n"
+                                for call in tool_calls:
+                                    tool_results_section += f"- {call['tool']}: {call['result'][:20000]}\n"
+                            
+                            answer_context = ANSWER_GENERATION_PROMPT_TEMPLATE.format(
+                                question=question,
+                                reasoning_section=reasoning_section,
+                                tool_results_section=tool_results_section,
+                            )
 
-                    try:
-                        answer = lm(answer_context)
-                    except Exception as e:
-                        logger.error(f"Answer generation failed", error=str(e))
-                        answer = "I encountered an error while generating the answer."
-                break
+                            try:
+                                answer = lm(answer_context)
+                            except Exception as e:
+                                logger.error(f"Answer generation failed", error=str(e))
+                                answer = "I encountered an error while generating the answer."
+                    break
             else:
                 # Continue reasoning
-                context_history.append(reasoning[:100])
+                context_history.append(reasoning[:200])
 
         # If no answer yet, generate one
         if not answer:
-            final_context = f"Question: {question}\n\n"
+            reasoning_section = ""
             if reasoning_steps:
-                final_context += "Reasoning: " + " ".join(reasoning_steps[-3:]) + "\n\n"
+                reasoning_section = "Reasoning: " + " ".join(reasoning_steps[-3:]) + "\n\n"
+            
+            tool_results_section = ""
             if tool_calls:
-                final_context += "Tool results:\n"
+                tool_results_section = "Tool results:\n"
                 for call in tool_calls:
-                    final_context += f"- {call['tool']}: {call['result'][:20000]}\n"
-                final_context += "\n"
-            final_context += "Provide a comprehensive answer based on the above information."
+                    tool_results_section += f"- {call['tool']}: {call['result'][:20000]}\n"
+            
+            final_context = FINAL_ANSWER_PROMPT_TEMPLATE.format(
+                question=question,
+                reasoning_section=reasoning_section,
+                tool_results_section=tool_results_section,
+            )
 
             try:
                 answer = lm(final_context)
@@ -325,23 +403,45 @@ class ReActWithTools(dspy.Module):
         
         # Try to parse explicit params string
         if tool_params_str:
-            # Simple JSON-like parsing
             try:
-                # Try to extract JSON from string
-                json_match = re.search(r'\{[^}]+\}', tool_params_str)
-                if json_match:
-                    params = json.loads(json_match.group())
-            except:
-                pass
+                # First, try direct JSON parse
+                params = json.loads(tool_params_str)
+            except json.JSONDecodeError:
+                # If that fails, try to extract valid JSON substring
+                try:
+                    # Match anything starting with { and ending with }
+                    # Use a more robust method for finding the matching brace
+                    start_idx = tool_params_str.find('{')
+                    if start_idx != -1:
+                        # Simple counter for balanced braces
+                        count = 0
+                        end_idx = -1
+                        for i, char in enumerate(tool_params_str[start_idx:], start_idx):
+                            if char == '{':
+                                count += 1
+                            elif char == '}':
+                                count -= 1
+                                if count == 0:
+                                    end_idx = i + 1
+                                    break
+                        
+                        if end_idx != -1:
+                            json_str = tool_params_str[start_idx:end_idx]
+                            params = json.loads(json_str)
+                except Exception:
+                    pass
 
-        # If no params extracted, try to extract from reasoning
+        # If no params extracted yet, try to extract from reasoning text (fallback)
         if not params and params_schema:
             for param_name in params_schema.keys():
                 # Look for param_name: value pattern
+                # Improved regex to handle quoted values better
                 pattern = rf"{param_name}['\"]?\s*[:=]\s*['\"]?([^,\s\)]+)"
                 match = re.search(pattern, reasoning, re.IGNORECASE)
                 if match:
-                    params[param_name] = match.group(1).strip("'\" ")
+                    # Clean up the value
+                    val = match.group(1).strip("'\" ,")
+                    params[param_name] = val
 
         return params
 
@@ -378,10 +478,12 @@ class ReActWithTools(dspy.Module):
 
 
 def query_processing_node(state: GraphState) -> Dict[str, Any]:
-    """Process query using ReAct pattern with dspy.
+    """Process query using Plan-and-Solve pattern with dspy.
 
     This node takes the enriched query from query_builder_node and processes it
-    using ReAct (Reasoning + Acting) pattern with tool support.
+    using a two-step approach:
+    1. Planner: Generates a high-level execution plan
+    2. Executor (ReAct): Executes the plan using tools
 
     Args:
         state: Current graph state containing query_builder_result
@@ -423,6 +525,30 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
         # Get user_id from state (needed for write operations)
         user_id = state.get("user_id")
 
+        # 1. GENERATE PLAN
+        logger.info("Generating execution plan...")
+        
+        planner = Planner()
+        
+        # Build simple tool list string for the planner (lighter context)
+        tools_list = "\n".join([f"- {t['name']}: {t['description']}" for t in tools])
+        
+        # Use a cleaner context structure for the planner
+        # We label history explicitly so the planner treats it as "Background" not "Results"
+        planner_context = f"""
+        AVAILABLE TOOLS:
+        {tools_list}
+        
+        CONVERSATION HISTORY (Use ONLY for context, do NOT assume these results answer new queries):
+        {enriched_query}
+        """
+        
+        generated_plan = planner(question=enriched_query, context=planner_context)
+        logger.info(f"Plan generated: {generated_plan}")
+
+        # 2. EXECUTE PLAN
+        logger.info("Executing plan with ReAct...", plan_length=len(generated_plan))
+        
         # Create ReAct module
         react_module = ReActWithTools(
             tools=tools,
@@ -431,25 +557,10 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
             user_id=user_id,
         )
 
-        # Process query
-        logger.info("Starting ReAct processing", query_length=len(enriched_query), tools_count=len(tools))
-
-        # Extract the actual question from enriched query (remove context)
-        # The enriched query has format: "Previous conversation summary: ... Recent conversation history: ... Current query: ..."
-        # We want just the current query part
-        if "Current query:" in enriched_query:
-            question = enriched_query.split("Current query:")[-1].strip()
-        else:
-            question = enriched_query
-
-        # Execute ReAct with streaming support
-        # For now, we'll collect streaming output but return final result
-        # Streaming can be implemented via callbacks or async generators in future
-        result = react_module(question=question)
+        # Execute ReAct with the generated plan
+        # Note: We pass the FULL enriched query and the plan
+        result = react_module(question=enriched_query, plan=generated_plan)
         
-        # Note: Full streaming support would require async/callback mechanism
-        # For now, we collect all results and return as JSON
-
         # Extract answer and metadata
         answer = result.answer if hasattr(result, "answer") else str(result)
         reasoning_steps = result.reasoning_steps if hasattr(result, "reasoning_steps") else []
@@ -464,11 +575,12 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
             "answer": answer,
             "reasoning_steps": reasoning_steps,
             "tool_calls": tool_calls,
-            "query": question,
+            "query": enriched_query,
+            "plan": generated_plan, # Return the plan in the response
             "metadata": {
                 "iterations": len(reasoning_steps),
                 "tools_used": [tc["tool"] for tc in tool_calls],
-                "timestamp": None,  # Will be set by caller if needed
+                "timestamp": None,
             },
         }
 
@@ -489,6 +601,7 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
                 "reasoning_steps_count": len(reasoning_steps),
                 "tool_calls_count": len(tool_calls),
                 "tools_used": [tc["tool"] for tc in tool_calls],
+                "generated_plan": generated_plan,
             },
             "tool_calls": tool_calls,
             "execution_path": execution_path,
@@ -506,4 +619,3 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
             "execution_path": state.get("execution_path", []) + ["query_processing_node"],
             "errors": (state.get("errors", []) or []) + [f"Query processing error: {str(e)}"],
         }
-
