@@ -462,3 +462,149 @@ class ConversationSummary(Base):
         Index("conversationSummary_conversationId_createdAt_idx", "conversationId", "createdAt"),
         Index("conversationSummary_workspaceId_idx", "workspaceId"),
     )
+
+
+class View(Base):
+    """View model for groups."""
+    __tablename__ = "view"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    name = Column(String, nullable=False)
+    type = Column(Enum("TABLE", "PIPELINE", "KANBAN", "CALENDAR", name="view_type"), nullable=False)
+    isDefault = Column(Boolean, default=False, nullable=False)
+    groupId = Column(PGUUID(as_uuid=True), ForeignKey("group.id", ondelete="CASCADE"), nullable=False, index=True)
+    workspaceId = Column(PGUUID(as_uuid=True), nullable=False, index=True)
+    targetEntity = Column(Enum("PEOPLE", "COMPANY", "DEAL", name="target_entity"), nullable=False)
+    groupBy = Column(String, nullable=True)
+    order = Column(Integer, default=100, nullable=False)
+    dealColumnId = Column(PGUUID(as_uuid=True), ForeignKey("column.id", ondelete="CASCADE"), nullable=True)
+    isDeleted = Column(Boolean, default=False, nullable=False)
+    condition = Column(Text, nullable=True)
+    aggregateType = Column(String, nullable=True)
+    groupColumnId = Column(PGUUID(as_uuid=True), ForeignKey("column.id", ondelete="CASCADE"), nullable=True)
+    createdAt = Column(DateTime, default=datetime.utcnow, server_default=text("now()"))
+    updatedAt = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_groupId_isDeleted", "groupId", "isDeleted"),
+        Index("idx_workspaceId_targetEntity_isDeleted", "workspaceId", "targetEntity", "isDeleted"),
+        Index("idx_workspaceId_isDefault_isDeleted", "workspaceId", "isDefault", "isDeleted"),
+        Index("idx_type_targetEntity", "type", "targetEntity"),
+    )
+
+
+class ColumnViewSetting(Base):
+    """Column view settings model."""
+    __tablename__ = "columnViewSettings"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    order = Column(Integer, nullable=False)
+    isVisible = Column(Boolean, default=True, nullable=False)
+    width = Column(Integer, nullable=True)
+    columnId = Column(PGUUID(as_uuid=True), ForeignKey("column.id", ondelete="CASCADE"), nullable=True)
+    viewId = Column(PGUUID(as_uuid=True), ForeignKey("view.id", ondelete="CASCADE"), nullable=False, index=True)
+    defaultColumnId = Column(PGUUID(as_uuid=True), ForeignKey("defaultColumn.id", ondelete="CASCADE"), nullable=True)
+    isDeleted = Column(Boolean, default=False, nullable=False)
+    createdAt = Column(DateTime, default=datetime.utcnow, server_default=text("now()"))
+    updatedAt = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("viewId", "columnId", name="columnViewSettings_viewId_columnId_key"),
+        UniqueConstraint("viewId", "defaultColumnId", name="columnViewSettings_viewId_defaultColumnId_key"),
+        Index("idx_viewId_order_isVisible", "viewId", "order", "isVisible"),
+        Index("idx_viewId_isDeleted", "viewId", "isDeleted"),
+    )
+
+
+class SelectOption(Base):
+    """Select option model for SELECT type columns."""
+    __tablename__ = "selectOption"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    value = Column(String, nullable=False)
+    color = Column(String, nullable=False)
+    order = Column(Integer, nullable=False)
+    pipelineOrder = Column(Integer, nullable=True)
+    columnId = Column(PGUUID(as_uuid=True), ForeignKey("column.id", ondelete="CASCADE"), nullable=False, index=True)
+    createdAt = Column(DateTime, default=datetime.utcnow, server_default=text("now()"))
+    updatedAt = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_columnId", "columnId"),
+        Index("idx_columnId_order", "columnId", "order"),
+        Index("idx_columnId_pipelineOrder", "columnId", "pipelineOrder"),
+        Index("idx_value", "value"),
+    )
+
+
+class SelectOptionSetting(Base):
+    """Select option setting for views."""
+    __tablename__ = "selectOptionSetting"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    selectOptionId = Column(PGUUID(as_uuid=True), ForeignKey("selectOption.id", ondelete="CASCADE"), nullable=False)
+    viewId = Column(PGUUID(as_uuid=True), ForeignKey("view.id", ondelete="CASCADE"), nullable=False)
+    isVisible = Column(Boolean, default=True, nullable=False)
+    pipelineOrder = Column(Integer, default=100, nullable=False)
+    columnId = Column(PGUUID(as_uuid=True), ForeignKey("column.id", ondelete="CASCADE"), nullable=False)
+    createdAt = Column(DateTime, default=datetime.utcnow, server_default=text("now()"))
+    updatedAt = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("columnId", "selectOptionId", "viewId", name="selectOptionSetting_columnId_selectOptionId_viewId_key"),
+        Index("idx_columnId_selectOptionId_viewId", "columnId", "selectOptionId", "viewId"),
+    )
+
+
+class DefaultColumn(Base):
+    """Default column model."""
+    __tablename__ = "defaultColumn"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    name = Column(String, nullable=False)
+    label = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    dataType = Column(
+        Enum(
+            "TEXT", "NUMBER", "DATE", "BOOLEAN", "JSON", "MULTISELECT", "SELECT",
+            "DEALS", "LARGE_TEXT", "MEMBER", "CONTACT", "URL", "PHONE_NUMBERS",
+            "EMAILS", "ADDRESS", "LONG_TEXT", "GROUPS", "CREATED_BY",
+            "GROUP_ADDED_AT", "COMPANIES", "PEOPLE", "MAGIC_FIELD",
+            name="data_type"
+        ),
+        nullable=False
+    )
+    isRequired = Column(Boolean, default=False, nullable=False)
+    type = Column(Enum("COMPANY", "PEOPLE", "DEAL", name="column_type"), nullable=False)
+    order = Column(Integer, nullable=False)
+    isVisible = Column(Boolean, default=True, nullable=False)
+    width = Column(Integer, nullable=True)
+    createdAt = Column(DateTime, default=datetime.utcnow, server_default=text("now()"))
+    updatedAt = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_type_order", "type", "order"),
+        Index("idx_dataType_type", "dataType", "type"),
+        Index("idx_isVisible_order", "isVisible", "order"),
+    )
+
+
+class ProfileColumnViewSetting(Base):
+    """Profile column view settings model."""
+    __tablename__ = "profileColumnViewSettings"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    order = Column(Integer, nullable=False)
+    isVisible = Column(Boolean, default=True, nullable=False)
+    columnId = Column(PGUUID(as_uuid=True), ForeignKey("column.id", ondelete="CASCADE"), nullable=True)
+    groupId = Column(PGUUID(as_uuid=True), ForeignKey("group.id", ondelete="CASCADE"), nullable=False, index=True)
+    defaultColumnId = Column(PGUUID(as_uuid=True), ForeignKey("defaultColumn.id", ondelete="CASCADE"), nullable=True)
+    type = Column(Enum("PEOPLE", "COMPANY", "DEAL", name="target_entity"), nullable=False)
+    createdAt = Column(DateTime, default=datetime.utcnow, server_default=text("now()"))
+    updatedAt = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("groupId", "columnId", name="profileColumnViewSettings_groupId_columnId_key"),
+        UniqueConstraint("groupId", "defaultColumnId", name="profileColumnViewSettings_groupId_defaultColumnId_key"),
+        Index("idx_groupId_order_isVisible", "groupId", "order", "isVisible"),
+    )

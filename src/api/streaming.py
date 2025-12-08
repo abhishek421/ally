@@ -137,6 +137,7 @@ async def stream_graph_response(initial_state: GraphState) -> AsyncGenerator[Dic
                     "tool_id": formatted_tool['tool_id'],
                     "params": formatted_tool['params'],
                     "status": "completed",
+                    "result": tool_call.get("result"),  # Include result for entity card display
                 }
             )
         

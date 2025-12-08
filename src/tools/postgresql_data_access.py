@@ -32,6 +32,11 @@ from .models import (
 
 logger = get_logger(__name__)
 
+# Fuzzy search configuration
+# Threshold for similarity matching (0.0 to 1.0)
+# Lower values = more fuzzy matches, higher values = stricter matching
+SIMILARITY_THRESHOLD = 0.3
+
 
 def _person_to_dict(person: Person) -> Dict[str, Any]:
     """Convert Person model to dictionary."""
@@ -129,14 +134,34 @@ class PostgreSQLDataAccess(DataAccessInterface):
             # Base query
             q = session.query(Person).filter(Person.workspaceId == workspace_uuid)
 
-            # Query filter
+            # Query filter with fuzzy matching using pg_trgm
             if query:
-                search_term = f"%{query.lower()}%"
+                query_lower = query.lower()
+                search_term = f"%{query_lower}%"
+                
+                # Combine exact LIKE matching (higher priority) with fuzzy similarity matching
+                # This ensures exact matches are found while also catching typos
                 q = q.filter(
                     or_(
+                        # Exact substring matches (LIKE)
                         func.lower(Person.firstName).like(search_term),
                         func.lower(Person.lastName).like(search_term),
                         func.lower(Person.jobTitle).like(search_term),
+                        # Fuzzy similarity matches (pg_trgm)
+                        func.similarity(func.coalesce(Person.firstName, ''), query_lower) > SIMILARITY_THRESHOLD,
+                        func.similarity(func.coalesce(Person.lastName, ''), query_lower) > SIMILARITY_THRESHOLD,
+                        func.similarity(func.coalesce(Person.jobTitle, ''), query_lower) > SIMILARITY_THRESHOLD,
+                    )
+                )
+                
+                # Order by best similarity match
+                q = q.order_by(
+                    desc(
+                        func.greatest(
+                            func.similarity(func.coalesce(Person.firstName, ''), query_lower),
+                            func.similarity(func.coalesce(Person.lastName, ''), query_lower),
+                            func.similarity(func.coalesce(Person.jobTitle, ''), query_lower),
+                        )
                     )
                 )
 
@@ -167,7 +192,7 @@ class PostgreSQLDataAccess(DataAccessInterface):
                     )
                 )
 
-            # Sorting
+            # Sorting (only apply explicit sort if specified, otherwise keep similarity order for queries)
             if sort_by == "name":
                 if sort_order == "asc":
                     q = q.order_by(Person.firstName, Person.lastName)
@@ -178,7 +203,8 @@ class PostgreSQLDataAccess(DataAccessInterface):
                     q = q.order_by(Person.createdAt)
                 else:
                     q = q.order_by(desc(Person.createdAt))
-            else:
+            elif not query:
+                # Default sort only when no search query (query has similarity-based ordering)
                 q = q.order_by(desc(Person.createdAt))
 
             # Count total
@@ -508,17 +534,35 @@ class PostgreSQLDataAccess(DataAccessInterface):
             q = session.query(Company).filter(Company.workspaceId == workspace_uuid)
 
             if query:
-                search_term = f"%{query.lower()}%"
+                query_lower = query.lower()
+                search_term = f"%{query_lower}%"
+                
+                # Combine exact LIKE matching with fuzzy similarity matching
                 q = q.filter(
                     or_(
+                        # Exact substring matches (LIKE)
                         func.lower(Company.name).like(search_term),
                         func.lower(Company.description).like(search_term),
+                        # Fuzzy similarity matches (pg_trgm)
+                        func.similarity(func.coalesce(Company.name, ''), query_lower) > SIMILARITY_THRESHOLD,
+                        func.similarity(func.coalesce(Company.description, ''), query_lower) > SIMILARITY_THRESHOLD,
+                    )
+                )
+                
+                # Order by best similarity match
+                q = q.order_by(
+                    desc(
+                        func.greatest(
+                            func.similarity(func.coalesce(Company.name, ''), query_lower),
+                            func.similarity(func.coalesce(Company.description, ''), query_lower),
+                        )
                     )
                 )
 
             if sort_by == "name":
                 q = q.order_by(Company.name if sort_order == "asc" else desc(Company.name))
-            else:
+            elif not query:
+                # Default sort only when no search query (query has similarity-based ordering)
                 q = q.order_by(desc(Company.createdAt))
 
             total = q.count()
@@ -569,7 +613,23 @@ class PostgreSQLDataAccess(DataAccessInterface):
             )
 
             if query:
-                q = q.filter(func.lower(Deal.name).like(f"%{query.lower()}%"))
+                query_lower = query.lower()
+                search_term = f"%{query_lower}%"
+                
+                # Combine exact LIKE matching with fuzzy similarity matching
+                q = q.filter(
+                    or_(
+                        # Exact substring match (LIKE)
+                        func.lower(Deal.name).like(search_term),
+                        # Fuzzy similarity match (pg_trgm)
+                        func.similarity(func.coalesce(Deal.name, ''), query_lower) > SIMILARITY_THRESHOLD,
+                    )
+                )
+                
+                # Order by best similarity match
+                q = q.order_by(
+                    desc(func.similarity(func.coalesce(Deal.name, ''), query_lower))
+                )
 
             if column_id:
                 q = q.filter(Deal.columnId == UUID(column_id))
@@ -596,7 +656,8 @@ class PostgreSQLDataAccess(DataAccessInterface):
 
             if sort_by == "name":
                 q = q.order_by(Deal.name if sort_order == "asc" else desc(Deal.name))
-            else:
+            elif not query:
+                # Default sort only when no search query (query has similarity-based ordering)
                 q = q.order_by(desc(Deal.createdAt))
 
             total = q.count()
@@ -643,11 +704,28 @@ class PostgreSQLDataAccess(DataAccessInterface):
             )
 
             if query:
-                search_term = f"%{query.lower()}%"
+                query_lower = query.lower()
+                search_term = f"%{query_lower}%"
+                
+                # Combine exact LIKE matching with fuzzy similarity matching
                 q = q.filter(
                     or_(
+                        # Exact substring matches (LIKE)
                         func.lower(Interaction.subject).like(search_term),
                         func.lower(Interaction.content).like(search_term),
+                        # Fuzzy similarity matches (pg_trgm)
+                        func.similarity(func.coalesce(Interaction.subject, ''), query_lower) > SIMILARITY_THRESHOLD,
+                        func.similarity(func.coalesce(Interaction.content, ''), query_lower) > SIMILARITY_THRESHOLD,
+                    )
+                )
+                
+                # Order by best similarity match
+                q = q.order_by(
+                    desc(
+                        func.greatest(
+                            func.similarity(func.coalesce(Interaction.subject, ''), query_lower),
+                            func.similarity(func.coalesce(Interaction.content, ''), query_lower),
+                        )
                     )
                 )
 
@@ -677,7 +755,8 @@ class PostgreSQLDataAccess(DataAccessInterface):
 
             if sort_by == "date":
                 q = q.order_by(Interaction.date if sort_order == "asc" else desc(Interaction.date))
-            else:
+            elif not query:
+                # Default sort only when no search query (query has similarity-based ordering)
                 q = q.order_by(desc(Interaction.createdAt))
 
             total = q.count()

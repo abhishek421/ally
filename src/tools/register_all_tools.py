@@ -51,6 +51,7 @@ from .write_tools import (
     CreatePersonTool,
     CreateCompanyTool,
     CreateGroupTool,
+    CreateViewTool,
     AddPersonToCompanyTool,
     AddPersonToGroupTool,
     AddCompanyToGroupTool,
@@ -126,6 +127,7 @@ def register_all_tools() -> None:
     registry.register(CreatePersonTool())
     registry.register(CreateCompanyTool())
     registry.register(CreateGroupTool())
+    registry.register(CreateViewTool())
     registry.register(AddPersonToCompanyTool())
     registry.register(AddPersonToGroupTool())
     registry.register(AddCompanyToGroupTool())

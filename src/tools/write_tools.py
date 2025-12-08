@@ -17,6 +17,13 @@ from .models import (
     MetaData,
     Email,
     PhoneNumber,
+    CustomField,
+    View,
+    ColumnViewSetting,
+    SelectOption,
+    SelectOptionSetting,
+    DefaultColumn,
+    ProfileColumnViewSetting,
 )
 
 logger = get_logger(__name__)
@@ -379,6 +386,7 @@ class CreateGroupTool(Tool):
             user_uuid = UUID(user_id)
 
             with get_db_session() as session:
+                # Create the group
                 group = Group(
                     id=uuid4(),
                     name=name,
@@ -396,12 +404,184 @@ class CreateGroupTool(Tool):
                     publicOrder=0,
                 )
                 session.add(group)
+                session.flush()  # Flush to get the group ID
+
+                # Get default columns for this group type
+                default_columns = session.query(DefaultColumn).filter(
+                    DefaultColumn.type == group_type
+                ).order_by(DefaultColumn.order).all()
+
+                if not default_columns:
+                    logger.warning(f"No default columns found for group type {group_type}")
+
+                # Create Status column
+                status_column = CustomField(
+                    id=uuid4(),
+                    name="Status",
+                    description=f"Status of {group_type}",
+                    dataType="SELECT",
+                    type=group_type,
+                    isDefault=False,
+                    isDeleted=False,
+                    groupId=group.id,
+                    dealId=None,
+                    selectOptions=None,
+                )
+                session.add(status_column)
+                session.flush()
+
+                # Create select options for Status column
+                status_options = [
+                    {"value": "No Status", "color": "#c378fd", "order": 1, "pipelineOrder": 1},
+                    {"value": "Lead", "color": "#50fdac", "order": 2, "pipelineOrder": 2},
+                    {"value": "Qualified", "color": "#ff5361", "order": 3, "pipelineOrder": 3},
+                    {"value": "Follow-up", "color": "#fdcb22", "order": 4, "pipelineOrder": 4},
+                    {"value": "Closed-lost", "color": "#ffffff", "order": 5, "pipelineOrder": 5},
+                    {"value": "Closed-won", "color": "#fd62c8", "order": 6, "pipelineOrder": 6},
+                ]
+
+                for option_data in status_options:
+                    select_option = SelectOption(
+                        id=uuid4(),
+                        value=option_data["value"],
+                        color=option_data["color"],
+                        order=option_data["order"],
+                        pipelineOrder=option_data["pipelineOrder"],
+                        columnId=status_column.id,
+                    )
+                    session.add(select_option)
+
+                # Determine view names based on group type
+                if group_type == "PEOPLE":
+                    table_view_name = "All People"
+                    target_entity = "PEOPLE"
+                else:  # COMPANY
+                    table_view_name = "All Company"
+                    target_entity = "COMPANY"
+
+                # Create views: Pipeline and Table
+                views_to_create = [
+                    {"name": "Pipeline", "type": "PIPELINE", "groupBy": str(status_column.id)},
+                    {"name": table_view_name, "type": "TABLE", "groupBy": None},
+                ]
+
+                created_views = []
+                for view_data in views_to_create:
+                    view = View(
+                        id=uuid4(),
+                        name=view_data["name"],
+                        type=view_data["type"],
+                        isDefault=True,
+                        groupId=group.id,
+                        workspaceId=workspace_uuid,
+                        targetEntity=target_entity,
+                        groupBy=view_data["groupBy"],
+                        order=100,
+                        dealColumnId=None,
+                        isDeleted=False,
+                        condition=None,
+                        aggregateType=None,
+                        groupColumnId=None,
+                    )
+                    session.add(view)
+                    session.flush()
+                    created_views.append(view)
+
+                    # Create column view settings for each view
+                    # Add default columns
+                    for default_col in default_columns:
+                        col_view_setting = ColumnViewSetting(
+                            id=uuid4(),
+                            order=default_col.order,
+                            isVisible=default_col.isVisible,
+                            width=default_col.width,
+                            columnId=None,
+                            viewId=view.id,
+                            defaultColumnId=default_col.id,
+                            isDeleted=False,
+                        )
+                        session.add(col_view_setting)
+
+                    # Add Status column
+                    if default_columns:
+                        last_order = max([dc.order for dc in default_columns])
+                    else:
+                        last_order = 0
+                    
+                    status_col_setting = ColumnViewSetting(
+                        id=uuid4(),
+                        order=last_order + 100,
+                        isVisible=True,
+                        width=100,
+                        columnId=status_column.id,
+                        viewId=view.id,
+                        defaultColumnId=None,
+                        isDeleted=False,
+                    )
+                    session.add(status_col_setting)
+
+                    # Create select option settings for Pipeline view
+                    if view_data["type"] == "PIPELINE":
+                        for option_data in status_options:
+                            # Find the select option we just created
+                            select_option = session.query(SelectOption).filter(
+                                SelectOption.columnId == status_column.id,
+                                SelectOption.value == option_data["value"]
+                            ).first()
+                            
+                            if select_option:
+                                select_option_setting = SelectOptionSetting(
+                                    id=uuid4(),
+                                    selectOptionId=select_option.id,
+                                    viewId=view.id,
+                                    isVisible=True,
+                                    pipelineOrder=option_data["pipelineOrder"],
+                                    columnId=status_column.id,
+                                )
+                                session.add(select_option_setting)
+
+                # Create profile column view settings
+                # Get all default columns (without type filter for profile)
+                all_default_columns = session.query(DefaultColumn).filter(
+                    DefaultColumn.type == group_type
+                ).order_by(DefaultColumn.order).all()
+
+                for default_col in all_default_columns:
+                    profile_setting = ProfileColumnViewSetting(
+                        id=uuid4(),
+                        order=default_col.order,
+                        isVisible=default_col.isVisible,
+                        columnId=None,
+                        groupId=group.id,
+                        defaultColumnId=default_col.id,
+                        type=target_entity,
+                    )
+                    session.add(profile_setting)
+
+                # Add Status column to profile settings
+                if all_default_columns:
+                    last_profile_order = max([dc.order for dc in all_default_columns])
+                else:
+                    last_profile_order = 0
+
+                status_profile_setting = ProfileColumnViewSetting(
+                    id=uuid4(),
+                    order=last_profile_order + 100,
+                    isVisible=True,
+                    columnId=status_column.id,
+                    groupId=group.id,
+                    defaultColumnId=None,
+                    type=target_entity,
+                )
+                session.add(status_profile_setting)
+
+                # Commit all changes
                 session.commit()
 
                 return {
                     "success": True,
                     "group_id": str(group.id),
-                    "message": f"Successfully created group: {name}",
+                    "message": f"Successfully created group: {name} with default views",
                     "group": {
                         "id": str(group.id),
                         "name": name,
@@ -410,6 +590,7 @@ class CreateGroupTool(Tool):
                         "emoji": kwargs.get("emoji"),
                         "isPrivate": kwargs.get("is_private", True),
                     },
+                    "views_created": [{"id": str(v.id), "name": v.name, "type": v.type} for v in created_views],
                 }
 
         except Exception as e:
@@ -418,6 +599,246 @@ class CreateGroupTool(Tool):
                 "success": False,
                 "error": str(e),
                 "message": f"Failed to create group: {str(e)}",
+            }
+
+
+# ==================== View Creation Tools ====================
+
+class CreateViewTool(Tool):
+    """Create a new view in a group."""
+
+    @property
+    def name(self) -> str:
+        return "create_view"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Create a new view in a group. Views can be of type TABLE, PIPELINE, KANBAN, or CALENDAR. "
+            "Views organize how data is displayed in a group. "
+            "For PIPELINE views, you can specify a groupBy column ID to group by."
+        )
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "workspace_id": {
+                    "type": "string",
+                    "description": "Workspace identifier (required)",
+                },
+                "group_id": {
+                    "type": "string",
+                    "description": "Group ID where the view will be created (required)",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "View name (required)",
+                },
+                "type": {
+                    "type": "string",
+                    "enum": ["TABLE", "PIPELINE", "KANBAN", "CALENDAR"],
+                    "description": "Type of view (required)",
+                },
+                "target_entity": {
+                    "type": "string",
+                    "enum": ["PEOPLE", "COMPANY", "DEAL"],
+                    "description": "Target entity type for the view (required)",
+                },
+                "is_default": {
+                    "type": "boolean",
+                    "description": "Whether this is the default view (default: false)",
+                },
+                "group_by": {
+                    "type": "string",
+                    "description": "Column ID to group by (optional, typically for PIPELINE views)",
+                },
+                "deal_column_id": {
+                    "type": "string",
+                    "description": "Deal column ID (optional, required for DEAL target entity)",
+                },
+            },
+            "required": ["workspace_id", "group_id", "name", "type", "target_entity"],
+        }
+
+    def execute(self, **kwargs: Any) -> Any:
+        workspace_id = kwargs.get("workspace_id")
+        group_id = kwargs.get("group_id")
+        name = kwargs.get("name")
+        view_type = kwargs.get("type")
+        target_entity = kwargs.get("target_entity")
+        is_default = kwargs.get("is_default", False)
+        group_by = kwargs.get("group_by")
+        deal_column_id = kwargs.get("deal_column_id")
+
+        if not workspace_id or not group_id or not name or not view_type or not target_entity:
+            raise ValueError("workspace_id, group_id, name, type, and target_entity are required")
+
+        if view_type not in ["TABLE", "PIPELINE", "KANBAN", "CALENDAR"]:
+            raise ValueError("type must be one of: TABLE, PIPELINE, KANBAN, CALENDAR")
+
+        if target_entity not in ["PEOPLE", "COMPANY", "DEAL"]:
+            raise ValueError("target_entity must be one of: PEOPLE, COMPANY, DEAL")
+
+        if target_entity == "DEAL" and not deal_column_id:
+            raise ValueError("deal_column_id is required when target_entity is DEAL")
+
+        logger.info(
+            "Creating view",
+            workspace_id=workspace_id,
+            group_id=group_id,
+            name=name,
+            type=view_type,
+            target_entity=target_entity,
+        )
+
+        try:
+            workspace_uuid = UUID(workspace_id)
+            group_uuid = UUID(group_id)
+
+            with get_db_session() as session:
+                # Verify group exists
+                group = session.query(Group).filter(
+                    Group.id == group_uuid,
+                    Group.workspaceId == workspace_uuid,
+                    Group.isDeleted == False
+                ).first()
+
+                if not group:
+                    raise ValueError(f"Group with ID {group_id} not found in workspace {workspace_id}")
+
+                # Create the view
+                view = View(
+                    id=uuid4(),
+                    name=name,
+                    type=view_type,
+                    isDefault=is_default,
+                    groupId=group_uuid,
+                    workspaceId=workspace_uuid,
+                    targetEntity=target_entity,
+                    groupBy=group_by,
+                    order=100,
+                    dealColumnId=UUID(deal_column_id) if deal_column_id else None,
+                    isDeleted=False,
+                    condition=None,
+                    aggregateType=None,
+                    groupColumnId=None,
+                )
+                session.add(view)
+                session.flush()
+
+                # Get default columns for the target entity
+                default_columns = session.query(DefaultColumn).filter(
+                    DefaultColumn.type == target_entity
+                ).order_by(DefaultColumn.order).all()
+
+                if not default_columns:
+                    logger.warning(f"No default columns found for target entity {target_entity}")
+
+                # Get existing custom columns for this group and target entity
+                # Note: We need to match columns by type, but CustomField.type uses group type
+                # For PEOPLE/COMPANY groups, columns have type PEOPLE/COMPANY
+                # For DEAL views, we need to handle differently
+                existing_columns = []
+                if target_entity != "DEAL":
+                    existing_columns = session.query(CustomField).filter(
+                        CustomField.groupId == group_uuid,
+                        CustomField.type == target_entity,
+                        CustomField.isDeleted == False
+                    ).all()
+
+                # Build column view settings
+                column_view_settings = []
+
+                # Add default column settings
+                for default_col in default_columns:
+                    col_view_setting = ColumnViewSetting(
+                        id=uuid4(),
+                        order=default_col.order,
+                        isVisible=default_col.isVisible,
+                        width=default_col.width,
+                        columnId=None,
+                        viewId=view.id,
+                        defaultColumnId=default_col.id,
+                        isDeleted=False,
+                    )
+                    column_view_settings.append(col_view_setting)
+                    session.add(col_view_setting)
+
+                # Add custom column settings
+                if default_columns:
+                    base_order = len(default_columns) * 100 + 100
+                else:
+                    base_order = 100
+
+                for index, custom_col in enumerate(existing_columns):
+                    col_view_setting = ColumnViewSetting(
+                        id=uuid4(),
+                        order=base_order + (index * 100),
+                        isVisible=True,
+                        width=100,  # Default width
+                        columnId=custom_col.id,
+                        viewId=view.id,
+                        defaultColumnId=None,
+                        isDeleted=False,
+                    )
+                    column_view_settings.append(col_view_setting)
+                    session.add(col_view_setting)
+
+                # For PIPELINE views with groupBy, create select option settings
+                if view_type == "PIPELINE" and group_by:
+                    try:
+                        group_by_uuid = UUID(group_by)
+                        # Find the groupBy column
+                        group_by_column = session.query(CustomField).filter(
+                            CustomField.id == group_by_uuid,
+                            CustomField.groupId == group_uuid,
+                            CustomField.isDeleted == False
+                        ).first()
+
+                        if group_by_column and group_by_column.dataType == "SELECT":
+                            # Get all select options for this column
+                            select_options = session.query(SelectOption).filter(
+                                SelectOption.columnId == group_by_uuid
+                            ).order_by(SelectOption.pipelineOrder).all()
+
+                            # Create select option settings for each option
+                            for select_option in select_options:
+                                select_option_setting = SelectOptionSetting(
+                                    id=uuid4(),
+                                    selectOptionId=select_option.id,
+                                    viewId=view.id,
+                                    isVisible=True,
+                                    pipelineOrder=select_option.pipelineOrder or select_option.order,
+                                    columnId=group_by_uuid,
+                                )
+                                session.add(select_option_setting)
+                    except (ValueError, Exception) as e:
+                        logger.warning(f"Could not create select option settings for groupBy column: {e}")
+
+                session.commit()
+
+                return {
+                    "success": True,
+                    "view_id": str(view.id),
+                    "message": f"Successfully created view: {name}",
+                    "view": {
+                        "id": str(view.id),
+                        "name": name,
+                        "type": view_type,
+                        "targetEntity": target_entity,
+                        "isDefault": is_default,
+                        "groupId": group_id,
+                    },
+                }
+
+        except Exception as e:
+            logger.error("Failed to create view", error=str(e), exc_info=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "message": f"Failed to create view: {str(e)}",
             }
 
 

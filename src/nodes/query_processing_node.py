@@ -222,14 +222,21 @@ class ReActWithTools(dspy.Module):
                     
                     # Call tool
                     tool_result = self._call_tool(tool_name, tool_params)
+                    # Serialize result as JSON for proper frontend parsing
+                    try:
+                        result_json = json.dumps(tool_result) if isinstance(tool_result, dict) else str(tool_result)
+                    except (TypeError, ValueError):
+                        result_json = str(tool_result)
+                    result_json = result_json[:20000]  # Limit result length
+                    
                     tool_call_record = {
                         "tool": tool_name,
                         "params": tool_params,
-                        "result": str(tool_result)[:20000],  # Limit result length
+                        "result": result_json,
                         "iteration": iteration + 1,
                     }
                     tool_calls.append(tool_call_record)
-                    context_history.append(f"Tool {tool_name} called with params {tool_params}, result: {str(tool_result)[:20000]}")
+                    context_history.append(f"Tool {tool_name} called with params {tool_params}, result: {result_json[:5000]}")
                     logger.info(f"Tool called: {tool_name}", params=tool_params, result_preview=str(tool_result)[:100])
                 else:
                     context_history.append(f"Attempted to call unknown tool: {tool_name}")
