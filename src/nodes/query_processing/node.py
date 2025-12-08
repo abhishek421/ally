@@ -42,6 +42,7 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
 
         workspace_id = state.get("workspace_id") or settings.workspace_id
         user_id = state.get("user_id")
+        conversation_id = state.get("conversation_id")
 
         logger.info("Generating execution plan...")
         planner = Planner()
@@ -64,6 +65,7 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
             max_iterations=settings.max_react_iterations,
             workspace_id=workspace_id,
             user_id=user_id,
+            conversation_id=conversation_id,
         )
 
         result = react_module(question=enriched_query, plan=generated_plan)

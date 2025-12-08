@@ -14,10 +14,13 @@ from ...prompts import (
     get_premature_answer_message,
 )
 from ...tools.registry import get_tool_registry
+from ...utils.conversation_service import update_conversation_context
 from ...utils.logger import get_logger
+from ...utils.tokenizer import get_tokenizer
 
 logger = get_logger(__name__)
 settings = get_settings()
+tokenizer = get_tokenizer()
 
 
 class ReActWithTools(dspy.Module):
@@ -29,6 +32,7 @@ class ReActWithTools(dspy.Module):
         max_iterations: int = 10,
         workspace_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
     ):
         """Initialize ReAct module with tools."""
         super().__init__()
@@ -37,6 +41,7 @@ class ReActWithTools(dspy.Module):
         self.tool_registry = get_tool_registry()
         self.workspace_id = workspace_id or settings.workspace_id
         self.user_id = user_id
+        self.conversation_id = conversation_id
         if not self.workspace_id:
             logger.warning("No workspace_id provided. Tool calls may fail if workspace_id is required.")
 
@@ -69,6 +74,9 @@ class ReActWithTools(dspy.Module):
 
             context += f"CURRENT REQUEST:\n{question}\n\n"
             context += "Choose your next format (ACTION: use_tool, ACTION: answer, or reasoning) and respond now:"
+
+            # Calculate and update context usage on EVERY iteration to track peak usage
+            self._record_context_usage(context)
 
             try:
                 response = lm(context)
@@ -226,6 +234,38 @@ class ReActWithTools(dspy.Module):
             reasoning_steps=reasoning_steps,
             tool_calls=tool_calls,
         )
+
+    def _record_context_usage(self, context: str) -> None:
+        """Record context usage metrics to the database.
+        
+        Args:
+            context: The full prompt string sent to the LLM
+        """
+        if not self.conversation_id:
+            return
+            
+        try:
+            # Calculate token usage
+            used_tokens = tokenizer.count_tokens(context)
+            
+            total_limit = settings.llm_context_limit or 128000
+            
+            remaining = max(0, total_limit - used_tokens)
+            percentage = min(100.0, (used_tokens / total_limit) * 100)
+            
+            metrics = {
+                "used_context_size": used_tokens,
+                "remaining_context_size": remaining,
+                "total_context_size": total_limit,
+                "used_context_percentage": round(percentage, 2)
+            }
+            
+            # Update DB
+            update_conversation_context(self.conversation_id, metrics)
+            
+        except Exception as e:
+            # Don't fail the request just because metrics failed
+            logger.error("Failed to record context usage metrics", error=str(e))
 
     def _build_tools_description(self) -> str:
         """Build tools description for LLM context."""

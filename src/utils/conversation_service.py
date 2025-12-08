@@ -397,3 +397,40 @@ def update_conversation(
         logger.error("Failed to update conversation", error=str(e), exc_info=True)
         raise
 
+
+def update_conversation_context(conversation_id: str, context_data: Dict[str, Any]) -> None:
+    """Update the context data for a conversation.
+    
+    Args:
+        conversation_id: Conversation UUID string
+        context_data: Dictionary containing context metrics
+    """
+    try:
+        conversation_uuid = UUID(conversation_id)
+        with get_db_session() as session:
+            conversation = session.query(Conversation).filter(
+                Conversation.id == conversation_uuid
+            ).first()
+            
+            if conversation:
+                # Update context column
+                current_context = dict(conversation.context) if conversation.context else {}
+                current_context.update(context_data)
+                
+                # Assign a new dict to flag it as modified for SQLAlchemy
+                conversation.context = dict(current_context)
+                session.commit()
+                
+                logger.info(
+                    "Updated conversation context", 
+                    conversation_id=conversation_id, 
+                    metrics=context_data
+                )
+            else:
+                logger.warning("Conversation not found for context update", conversation_id=conversation_id)
+                
+    except ValueError as e:
+        logger.error("Invalid UUID for context update", error=str(e))
+    except Exception as e:
+        logger.error("Failed to update conversation context", error=str(e), exc_info=True)
+
