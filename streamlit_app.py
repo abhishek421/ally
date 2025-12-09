@@ -10,8 +10,8 @@ st.set_page_config(page_title="Analyst AI", page_icon="🤖")
 API_URL = "http://localhost:8000/api/v1/chat"
 
 # Hardcoded IDs from logs for demonstration
-USER_ID = "6edf9760-c26e-4a4c-b641-1a23381f9268"
-WORKSPACE_ID = "550e8400-e29b-41d4-a716-446655440000"
+USER_ID = "5a587336-4fca-4759-8261-501ca8814647"
+WORKSPACE_ID = "efa82c4d-3e6d-4c72-a512-cdcdc0ee1099"
 
 st.title("🤖 Analyst AI Chat")
 st.caption("Ask questions about your CRM data")
@@ -57,8 +57,12 @@ if prompt := st.chat_input("What would you like to know?"):
 
     # Display assistant response placeholder
     with st.chat_message("assistant"):
+        # UI elements for streaming
+        status_container = st.status("Thinking...", expanded=True)
         message_placeholder = st.empty()
-        message_placeholder.markdown("Thinking...")
+        
+        full_answer = ""
+        tool_calls = []
         
         try:
             # Prepare payload
@@ -69,42 +73,59 @@ if prompt := st.chat_input("What would you like to know?"):
                 "conversation_id": st.session_state.conversation_id
             }
             
-            # Make API call
-            with st.spinner("Processing request..."):
-                response = requests.post(API_URL, json=payload)
-                response.raise_for_status()
-                data = response.json()
+            # Stream request
+            with requests.post(f"{API_URL}/stream", json=payload, stream=True) as response:
+                if response.status_code != 200:
+                    st.error(f"Error: {response.status_code} - {response.text}")
+                    status_container.update(label="Error", state="error")
+                else:
+                    for line in response.iter_lines():
+                        if line:
+                            line_text = line.decode('utf-8')
+                            if line_text.startswith("data: "):
+                                data_str = line_text[6:]
+                                try:
+                                    chunk = json.loads(data_str)
+                                    chunk_type = chunk.get("type")
+                                    content = chunk.get("content", "")
+                                    
+                                    if chunk_type == "reasoning":
+                                        status_container.write(f"💭 {content}")
+                                    elif chunk_type == "tool_call":
+                                        status_container.write(f"🛠️ {content}")
+                                        if chunk.get("data"):
+                                            tool_calls.append(chunk["data"])
+                                    elif chunk_type == "token":
+                                        full_answer += content
+                                        message_placeholder.markdown(full_answer + "▌")
+                                    elif chunk_type == "done":
+                                        st.session_state.conversation_id = chunk.get("data", {}).get("conversation_id")
+                                    elif chunk_type == "error":
+                                        st.error(content)
+                                        status_container.update(label="Error occurred", state="error")
+                                        
+                                except json.JSONDecodeError:
+                                    pass
             
-            # Extract data
-            answer = data.get("answer", "No answer provided.")
-            conversation_id = data.get("conversation_id")
-            tool_calls = data.get("tool_calls", [])
-            
-            # Update conversation ID in session state
-            st.session_state.conversation_id = conversation_id
-            
-            # Display answer
-            message_placeholder.markdown(answer)
-            
-            # Display tool calls if any
-            if tool_calls:
-                with st.expander("View Tool Calls"):
-                    st.json(tool_calls)
+            # Finalize
+            status_container.update(label="Finished thinking", state="complete", expanded=False)
+            message_placeholder.markdown(full_answer)
             
             # Add assistant message to history
             st.session_state.messages.append({
                 "role": "assistant", 
-                "content": answer,
+                "content": full_answer,
                 "tool_calls": tool_calls
             })
             
         except requests.exceptions.ConnectionError:
             error_msg = "❌ **Error:** Could not connect to API server. Is it running on localhost:8000?"
             message_placeholder.markdown(error_msg)
+            status_container.update(label="Connection Error", state="error")
             st.session_state.messages.append({"role": "assistant", "content": error_msg})
             
         except Exception as e:
             error_msg = f"❌ **Error:** {str(e)}"
             message_placeholder.markdown(error_msg)
+            status_container.update(label="Error", state="error")
             st.session_state.messages.append({"role": "assistant", "content": error_msg})
-

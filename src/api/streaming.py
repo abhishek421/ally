@@ -7,7 +7,7 @@ from typing import AsyncGenerator, Dict, Any, Optional
 
 from sse_starlette.sse import EventSourceResponse
 
-from ..graph.runner import astream_graph, ainvoke_graph
+from ..graph.runner import astream_graph
 from ..graph.state import GraphState
 from ..utils.conversation_service import create_conversation_sync, generate_title_from_query
 from ..utils.conversation_message_service import (
@@ -17,7 +17,7 @@ from ..utils.conversation_message_service import (
     prepare_function_calls,
 )
 from ..utils.reasoning_formatter import (
-    format_reasoning_steps,
+    format_reasoning_step,
     format_tool_call_for_display,
 )
 from .models import StreamChunk, StreamChunkType
@@ -42,8 +42,8 @@ async def stream_graph_response(initial_state: GraphState) -> AsyncGenerator[Dic
     """
     Stream graph execution results as SSE events.
     
-    This implementation runs the full graph and then streams the results
-    in a way that simulates real-time processing (reasoning first, then answer).
+    This implementation runs the graph and streams results in real-time
+    as nodes complete their execution.
     
     Args:
         initial_state: The initial state of the graph.
@@ -97,11 +97,50 @@ async def stream_graph_response(initial_state: GraphState) -> AsyncGenerator[Dic
         # Send initial reasoning chunk to indicate processing started
         yield _create_chunk(StreamChunkType.REASONING, "🔄 Let me look into that for you...")
         
-        # Execute the full graph
+        # Execute the graph with streaming
         logger.info(f"Starting graph execution for streaming, conversation_id={conversation_id}")
-        final_state = await ainvoke_graph(initial_state)
         
-        # Get the result
+        final_state = initial_state.copy()
+        
+        # Keep track of seen items to avoid duplicates if nodes yield cumulative lists
+        seen_reasoning = set()
+        
+        async for chunk in astream_graph(initial_state):
+            # chunk is a dict like {node_name: state_update}
+            for node_name, state_update in chunk.items():
+                # Update final state with the new data
+                final_state.update(state_update)
+                
+                if node_name == "agent":
+                    # Stream new reasoning steps
+                    reasoning_steps = state_update.get("reasoning_steps", [])
+                    if reasoning_steps:
+                        # Get the last step which is the new one
+                        last_step = reasoning_steps[-1]
+                        if last_step not in seen_reasoning:
+                            seen_reasoning.add(last_step)
+                            formatted_step = format_reasoning_step(last_step)
+                            if formatted_step:
+                                yield _create_chunk(StreamChunkType.REASONING, formatted_step)
+                            
+                elif node_name == "tools":
+                    # Stream new tool calls
+                    tool_calls = state_update.get("tool_calls", [])
+                    if tool_calls:
+                        last_tool_call = tool_calls[-1]
+                        formatted_tool = format_tool_call_for_display(last_tool_call)
+                        yield _create_chunk(
+                            StreamChunkType.TOOL_CALL,
+                            f"✅ {formatted_tool['tool']}",
+                            data={
+                                "tool": formatted_tool['tool'],
+                                "tool_id": formatted_tool['tool_id'],
+                                "params": formatted_tool['params'],
+                                "status": "completed",
+                            }
+                        )
+        
+        # Graph execution finished. Process final result.
         query_processing_result = final_state.get("query_processing_result", "")
         
         if not query_processing_result:
@@ -112,35 +151,13 @@ async def stream_graph_response(initial_state: GraphState) -> AsyncGenerator[Dic
         try:
             result_data = json.loads(query_processing_result)
         except json.JSONDecodeError:
-            # If not JSON, treat as plain text answer
             result_data = {
                 "answer": query_processing_result,
                 "reasoning_steps": [],
                 "tool_calls": [],
             }
         
-        # Stream reasoning steps first (formatted for user-friendliness)
-        reasoning_steps = result_data.get("reasoning_steps", [])
-        formatted_steps = format_reasoning_steps(reasoning_steps)
-        for step in formatted_steps:
-            yield _create_chunk(StreamChunkType.REASONING, step)
-        
-        # Stream tool calls (formatted for user-friendliness)
-        tool_calls = result_data.get("tool_calls", [])
-        for tool_call in tool_calls:
-            formatted_tool = format_tool_call_for_display(tool_call)
-            yield _create_chunk(
-                StreamChunkType.TOOL_CALL,
-                f"✅ {formatted_tool['tool']}",
-                data={
-                    "tool": formatted_tool['tool'],
-                    "tool_id": formatted_tool['tool_id'],
-                    "params": formatted_tool['params'],
-                    "status": "completed",
-                }
-            )
-        
-        # Stream the answer token by token (simulated streaming)
+        # Stream the answer token by token (simulated streaming for now)
         answer = result_data.get("answer", "")
         if answer:
             # Stream in chunks for better UX
@@ -162,6 +179,7 @@ async def stream_graph_response(initial_state: GraphState) -> AsyncGenerator[Dic
         # Save assistant message in background
         try:
             query_processing_metadata = final_state.get("query_processing_metadata", {})
+            tool_calls = result_data.get("tool_calls", [])
             storage_metadata = prepare_metadata_from_response(result_data, query_processing_metadata)
             storage_function_calls = prepare_function_calls(tool_calls)
             

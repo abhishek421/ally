@@ -1,6 +1,6 @@
 """Graph state schema definitions."""
 
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, TypedDict, List
 
 from typing_extensions import NotRequired
 
@@ -25,10 +25,18 @@ class GraphState(TypedDict):
     query_builder_result: NotRequired[str]
     query_processing_result: NotRequired[str]
     query_processing_metadata: NotRequired[dict[str, Any]]
-    tool_calls: NotRequired[list[dict[str, Any]]]
+    
+    # ReAct Loop State
+    plan: NotRequired[str]
+    reasoning_steps: NotRequired[List[str]]
+    tool_calls: NotRequired[List[dict[str, Any]]]
+    context_history: NotRequired[List[str]]
+    previous_actions: NotRequired[List[str]]
+    current_action: NotRequired[dict[str, Any]]
+    final_answer: NotRequired[str]
+    agent_iterations: NotRequired[int]
 
     # Metadata
     execution_path: Annotated[list[str], lambda x, y: x + [y] if y else x]
     errors: NotRequired[list[str]]
     metadata: NotRequired[dict[str, Any]]
-
