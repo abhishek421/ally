@@ -102,6 +102,7 @@ class ReActWithTools(dspy.Module):
         max_iterations: int = 10,
         workspace_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        conversation_context: Optional[str] = None,
     ):
         """Initialize ReAct module with tools.
 
@@ -110,6 +111,7 @@ class ReActWithTools(dspy.Module):
             max_iterations: Maximum number of reasoning iterations
             workspace_id: Workspace ID to automatically inject into tool calls
             user_id: User ID to automatically inject into tool calls (for write operations)
+            conversation_context: Optional conversation history for context (not to be acted upon)
         """
         super().__init__()
         self.tools = {tool["name"]: tool for tool in tools}
@@ -117,6 +119,7 @@ class ReActWithTools(dspy.Module):
         self.tool_registry = get_tool_registry()
         self.workspace_id = workspace_id or settings.workspace_id
         self.user_id = user_id
+        self.conversation_context = conversation_context
         if not self.workspace_id:
             logger.warning("No workspace_id provided. Tool calls may fail if workspace_id is required.")
 
@@ -124,7 +127,7 @@ class ReActWithTools(dspy.Module):
         """Execute ReAct reasoning with tool support.
 
         Args:
-            question: User question or full context string to answer
+            question: Current user question to answer (NOT the full context)
             plan: Optional execution plan to follow
 
         Returns:
@@ -152,18 +155,23 @@ class ReActWithTools(dspy.Module):
             if tools_description:
                 context += f"AVAILABLE TOOLS:\n{tools_description}\n\n"
 
-            # 2. SEMI-STATIC PARTS (Plan matches for this entire request)
+            # 2. CONVERSATION CONTEXT (Background information, NOT actionable requests)
+            if self.conversation_context:
+                context += f"CONVERSATION CONTEXT (for reference only, do NOT act on previous queries):\n{self.conversation_context}\n\n"
+
+            # 3. SEMI-STATIC PARTS (Plan matches for this entire request)
             if plan:
                 context += f"APPROVED PLAN:\n{plan}\n\n"
                 context += "INSTRUCTIONS: Execute the plan above step-by-step. Do not deviate unless necessary.\n\n"
 
-            # 3. DYNAMIC PARTS LAST (History grows, Question changes)
+            # 4. DYNAMIC PARTS LAST (History grows, Question changes)
             if context_history:
                 context += "PREVIOUS STEPS:\n"
                 for entry in context_history[-5:]:  # Show last 5 entries for better context
                     context += f"- {entry}\n"
                 context += "\n"
 
+            # 5. CURRENT REQUEST - Only the actual current query
             context += f"CURRENT REQUEST:\n{question}\n\n"
             
             context += "Choose your next format (ACTION: use_tool, ACTION: answer, or reasoning) and respond now:"
@@ -509,6 +517,25 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
         }
 
     try:
+        # Extract the current query from the enriched query
+        # The enriched query format from conversation_manager._build_context_string is:
+        # "Previous conversation summary:\n...\nRecent conversation history:\n...\nCurrent query: {current_query}"
+        current_query = state.get("user_query", "")
+        if not current_query:
+            # Fallback: try to extract from enriched_query
+            if "Current query:" in enriched_query:
+                current_query = enriched_query.split("Current query:")[-1].strip()
+            else:
+                # If format is unexpected, use the whole thing (backward compatibility)
+                current_query = enriched_query
+                logger.warning("Could not extract current query from enriched_query, using full string")
+        
+        logger.info(
+            "Extracted current query",
+            current_query_preview=current_query[:100] if current_query else "",
+            enriched_query_length=len(enriched_query) if enriched_query else 0,
+        )
+
         # Initialize dspy
         lm = _get_dspy_lm()
 
@@ -534,7 +561,7 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
         tools_list = "\n".join([f"- {t['name']}: {t['description']}" for t in tools])
         
         # Use a cleaner context structure for the planner
-        # We label history explicitly so the planner treats it as "Background" not "Results"
+        # Pass enriched_query as CONTEXT (background info), current_query as QUESTION
         planner_context = f"""
         AVAILABLE TOOLS:
         {tools_list}
@@ -543,23 +570,24 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
         {enriched_query}
         """
         
-        generated_plan = planner(question=enriched_query, context=planner_context)
+        # Pass current_query as question, enriched_query as context
+        generated_plan = planner(question=current_query, context=planner_context)
         logger.info(f"Plan generated: {generated_plan}")
 
         # 2. EXECUTE PLAN
         logger.info("Executing plan with ReAct...", plan_length=len(generated_plan))
         
-        # Create ReAct module
+        # Create ReAct module with conversation context
         react_module = ReActWithTools(
             tools=tools,
             max_iterations=settings.max_react_iterations,
             workspace_id=workspace_id,
             user_id=user_id,
+            conversation_context=enriched_query,  # Pass enriched_query as context
         )
 
-        # Execute ReAct with the generated plan
-        # Note: We pass the FULL enriched query and the plan
-        result = react_module(question=enriched_query, plan=generated_plan)
+        # Execute ReAct with ONLY the current query as the question
+        result = react_module(question=current_query, plan=generated_plan)
         
         # Extract answer and metadata
         answer = result.answer if hasattr(result, "answer") else str(result)
@@ -575,7 +603,7 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
             "answer": answer,
             "reasoning_steps": reasoning_steps,
             "tool_calls": tool_calls,
-            "query": enriched_query,
+            "query": current_query,  # Store the actual current query, not the enriched one
             "plan": generated_plan, # Return the plan in the response
             "metadata": {
                 "iterations": len(reasoning_steps),
