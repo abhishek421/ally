@@ -530,9 +530,20 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
                 current_query = enriched_query
                 logger.warning("Could not extract current query from enriched_query, using full string")
         
+        # Remove current query from enriched_query to get pure context (history only)
+        # This prevents duplication since we pass current_query separately
+        conversation_context = enriched_query
+        if "Current query:" in enriched_query:
+            # Remove everything from "Current query:" onwards
+            conversation_context = enriched_query.split("Current query:")[0].strip()
+            # Also remove the trailing newline if present
+            if conversation_context.endswith("\n"):
+                conversation_context = conversation_context.rstrip("\n")
+        
         logger.info(
-            "Extracted current query",
+            "Extracted current query and context",
             current_query_preview=current_query[:100] if current_query else "",
+            context_length=len(conversation_context) if conversation_context else 0,
             enriched_query_length=len(enriched_query) if enriched_query else 0,
         )
 
@@ -561,29 +572,29 @@ def query_processing_node(state: GraphState) -> Dict[str, Any]:
         tools_list = "\n".join([f"- {t['name']}: {t['description']}" for t in tools])
         
         # Use a cleaner context structure for the planner
-        # Pass enriched_query as CONTEXT (background info), current_query as QUESTION
+        # Pass conversation_context (without current query) as CONTEXT, current_query as QUESTION
         planner_context = f"""
         AVAILABLE TOOLS:
         {tools_list}
         
         CONVERSATION HISTORY (Use ONLY for context, do NOT assume these results answer new queries):
-        {enriched_query}
+        {conversation_context}
         """
         
-        # Pass current_query as question, enriched_query as context
+        # Pass current_query as question, conversation_context (without current query) as context
         generated_plan = planner(question=current_query, context=planner_context)
         logger.info(f"Plan generated: {generated_plan}")
 
         # 2. EXECUTE PLAN
         logger.info("Executing plan with ReAct...", plan_length=len(generated_plan))
         
-        # Create ReAct module with conversation context
+        # Create ReAct module with conversation context (without current query)
         react_module = ReActWithTools(
             tools=tools,
             max_iterations=settings.max_react_iterations,
             workspace_id=workspace_id,
             user_id=user_id,
-            conversation_context=enriched_query,  # Pass enriched_query as context
+            conversation_context=conversation_context,  # Pass context without current query
         )
 
         # Execute ReAct with ONLY the current query as the question
