@@ -1,135 +1,146 @@
-# LangGraph Orchestration Application
+# Ally AI Copilot
 
-A production-grade LangGraph-based orchestration system with modular node architecture.
+A LangGraph-based intelligent assistant for the Allyos CRM application.
 
-## Project Structure
+## Features
 
-```
-.
-├── src/
-│   ├── __init__.py
-│   ├── main.py                 # Application entry point
-│   ├── graph/
-│   │   ├── __init__.py
-│   │   ├── builder.py          # Graph construction logic
-│   │   └── state.py            # State schema definitions
-│   ├── nodes/
-│   │   ├── __init__.py
-│   │   ├── base.py             # Base node class
-│   │   └── query_builder_node.py # Query Builder Node
-│   ├── utils/
-│   │   ├── __init__.py
-│   │   ├── logger.py           # Logging configuration
-│   │   └── exceptions.py       # Custom exceptions
-│   └── config/
-│       ├── __init__.py
-│       └── settings.py         # Configuration management
-├── tests/
-│   ├── __init__.py
-│   ├── test_nodes.py
-│   └── test_graph.py
-├── data/
-│   ├── input/
-│   └── output/
-├── logs/
-├── requirements.txt
-├── .env.example
-└── README.md
-```
+- **ReAct Pattern**: Reasoning before action for thoughtful responses
+- **Streaming Responses**: Real-time streaming of thinking steps, tool calls, and final responses
+- **Conversation Memory**: PostgreSQL-backed persistence for conversation history
+- **CRM Tools**: Read, create, and update companies, people, and groups
+- **Multi-LLM Support**: Works with both OpenAI and Anthropic models
+
+## Prerequisites
+
+- Python 3.11+
+- PostgreSQL database
+- OpenAI API key or Anthropic API key
 
 ## Installation
 
-### Using uv (Recommended)
-
-1. Install [uv](https://github.com/astral-sh/uv) if you haven't already:
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-2. Sync dependencies (creates virtual environment automatically):
-```bash
-uv sync
-```
-
-3. Copy environment file:
-```bash
-cp .env.example .env
-```
-
-4. Update `.env` with your configuration.
-
-### Using pip (Alternative)
-
-1. Create a virtual environment:
-```bash
+# Create virtual environment
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
 
-2. Install dependencies:
-```bash
+# Install dependencies
 pip install -r requirements.txt
+
+# Or install in development mode
+pip install -e ".[dev]"
 ```
 
-3. Copy environment file:
-```bash
-cp .env.example .env
+## Environment Variables
+
+Create a `.env` file in the root directory with the following variables:
+
+```env
+# LLM Configuration
+# Options: "openai" or "anthropic"
+LLM_PROVIDER=openai
+
+# OpenAI API Key (required if LLM_PROVIDER=openai)
+OPENAI_API_KEY=sk-your-openai-api-key
+
+# Anthropic API Key (required if LLM_PROVIDER=anthropic)
+ANTHROPIC_API_KEY=REDACTED_OPENAI_API_KEY
+
+# Model Configuration
+# OpenAI: gpt-4o, gpt-4-turbo, gpt-4o-mini
+# Anthropic: claude-3-5-sonnet-latest, claude-3-opus-latest
+LLM_MODEL=gpt-4o
+
+# Backend GraphQL Endpoint
+BACKEND_GRAPHQL_URL=http://localhost:3000/graphql
+
+# PostgreSQL Database URL (for LangGraph checkpointer)
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/allyos
+
+# Server Configuration
+HOST=0.0.0.0
+PORT=8000
+DEBUG=true
+
+# AWS Cognito Configuration (for JWT validation)
+AWS_COGNITO_REGION=us-east-1
+AWS_COGNITO_USER_POOL_ID=your-user-pool-id
+AWS_COGNITO_CLIENT_ID=your-client-id
 ```
 
-4. Update `.env` with your configuration.
+## Running the Server
 
-## Usage
-
-### Using uv
-
-Run the Streamlit web interface:
 ```bash
-uv run streamlit run streamlit_app.py
+# Development mode with auto-reload
+uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+
+# Production mode
+uvicorn src.main:app --host 0.0.0.0 --port 8000 --workers 4
 ```
 
-Run the API server:
-```bash
-uv run python api_server.py
+## API Endpoints
+
+### POST /api/v1/chat
+
+Stream a chat message to Ally.
+
+**Headers:**
+- `Authorization: Bearer <token>` - JWT token from frontend
+- `X-Workspace-ID: <workspace_id>` - Current workspace ID
+
+**Request Body:**
+```json
+{
+  "conversation_id": "uuid",
+  "message": "What companies do we have?"
+}
 ```
 
-Run the CLI application:
-```bash
-uv run python -m src.main
+**Response:** Server-Sent Events (SSE) stream with chunks:
+- `thinking` - Agent's reasoning process
+- `tool_call` - Tool execution details
+- `response` - Final response text
+- `error` - Error messages (if any)
+- `done` - Stream completion signal
+
+### GET /health
+
+Health check endpoint.
+
+## Architecture
+
 ```
-
-### Using pip
-
-Run the Streamlit web interface:
-```bash
-streamlit run streamlit_app.py
-```
-
-Run the API server:
-```bash
-python api_server.py
-```
-
-Run the CLI application:
-```bash
-python -m src.main
-```
-
-## Testing
-
-Run tests:
-```bash
-pytest tests/
+src/
+├── main.py              # FastAPI entry point
+├── config.py            # Environment configuration
+├── agent/
+│   ├── graph.py         # LangGraph ReAct agent
+│   ├── state.py         # Agent state schema
+│   └── prompts.py       # System prompts
+├── tools/
+│   ├── base.py          # Base tool with GraphQL client
+│   ├── read_tools.py    # List/Get/Search tools
+│   ├── create_tools.py  # Create tools
+│   └── update_tools.py  # Update tools
+├── graphql/
+│   └── client.py        # GraphQL client wrapper
+└── api/
+    ├── routes.py        # API routes
+    └── middleware.py    # Auth middleware
 ```
 
 ## Development
 
-Format code:
 ```bash
-black src/ tests/
-```
+# Run tests
+pytest
 
-Lint code:
-```bash
-ruff check src/ tests/
+# Format code
+black src tests
+
+# Lint code
+ruff check src tests
+
+# Type check
+mypy src
 ```
 

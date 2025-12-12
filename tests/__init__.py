@@ -1,2 +1,2 @@
-"""Test suite for LangGraph orchestration."""
+"""Tests for Ally AI service."""
 
