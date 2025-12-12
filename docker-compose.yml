@@ -39,7 +39,7 @@ OPENAI_API_KEY=REDACTED
       BACKEND_GRAPHQL_URL: "${BACKEND_GRAPHQL_URL:-http://host.docker.internal:3000/graphql}"
       
       # PostgreSQL connection for LangGraph checkpointer
-      DATABASE_URL: "postgresql://ally:ally_secret@postgres:5432/allyos"
+      DATABASE_URL_ALLY: "postgresql://ally:ally_secret@postgres:5432/allyos"
       
       # AWS Cognito (optional, for JWT validation)
       AWS_COGNITO_REGION: "${AWS_COGNITO_REGION:-}"

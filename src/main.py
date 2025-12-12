@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info(f"Starting Ally AI service with {settings.llm_provider} provider")
     logger.info(f"Backend GraphQL URL: {settings.backend_graphql_url}")
-    logger.info(f"Database URL configured: {bool(settings.database_url)}")
+    logger.info(f"Database URL configured: {bool(settings.DATABASE_URL_ALLY)}")
     
     # Initialize checkpointer eagerly to see if persistence is working
     try:
