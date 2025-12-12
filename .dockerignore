@@ -1,29 +1,81 @@
+# ============================================
+# Docker Build Ignore File
+# Speeds up builds by excluding unnecessary files
+# ============================================
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
 __pycache__
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
 .Python
-env/
+*.egg-info
+*.egg
+.eggs
+dist/
+build/
+*.whl
+
+# Virtual environments
 venv/
 .venv/
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.log
-.git
-.mypy_cache
-.pytest_cache
-.hypothesis
-build/
-dist/
-*.egg-info/
-.DS_Store
-.env
+ENV/
+env/
+
+# IDE and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
 .cursor/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+
+# Linting
+.ruff_cache/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Local environment files (secrets should be injected at runtime)
+.env
+.env.*
+!.env.example
+
+# Docker files (no need to include in context)
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.circleci/
+
+# Misc
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+*.bak
+
+# Tests (optional - uncomment if you don't need tests in the image)
+# tests/
 

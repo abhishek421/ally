@@ -1,9 +1,33 @@
-"""Tool system for query processing."""
+"""Tools module for Ally AI agent."""
 
-from .base import Tool
-from .registry import ToolRegistry, get_tool_registry
+from src.tools.base import BaseTool, ToolContext
+from src.tools.read_tools import get_read_tools
+from src.tools.create_tools import get_create_tools
+from src.tools.update_tools import get_update_tools
 
-# Import registration to auto-register all tools
-from . import register_all_tools  # noqa: F401
 
-__all__ = ["Tool", "ToolRegistry", "get_tool_registry"]
+def get_all_tools(context: ToolContext) -> list:
+    """Get all available tools for the agent.
+    
+    Args:
+        context: Tool context with auth and workspace info
+        
+    Returns:
+        List of all tool functions
+    """
+    tools = []
+    tools.extend(get_read_tools(context))
+    tools.extend(get_create_tools(context))
+    tools.extend(get_update_tools(context))
+    return tools
+
+
+__all__ = [
+    "BaseTool",
+    "ToolContext",
+    "get_all_tools",
+    "get_read_tools",
+    "get_create_tools",
+    "get_update_tools",
+]
+

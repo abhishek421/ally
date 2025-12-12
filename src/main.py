@@ -1,127 +1,83 @@
-"""Main application entry point."""
+"""Main entry point for the Ally AI service."""
 
-import sys
-from typing import Any
+import logging
+from contextlib import asynccontextmanager
 
-from .config import get_settings
-from .graph.runner import ainvoke_graph, invoke_graph
-from .graph.state import GraphState
-from .utils.exceptions import GraphExecutionError
-from .utils.logger import configure_logging, get_logger
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-# Configure logging first
-configure_logging()
-logger = get_logger(__name__)
+from src.config import get_settings
+from src.api.routes import router as api_router
+from src.agent.graph import cleanup_checkpointer, get_checkpointer
 
-
-def create_initial_state(input_data: str | None = None, user_query: str | None = None) -> GraphState:
-    """Create initial graph state.
-
-    Args:
-        input_data: Optional input data string
-        user_query: Optional user query string
-
-    Returns:
-        Initial GraphState
-    """
-    return GraphState(
-        input_data=input_data or "Sample input data",
-        user_query=user_query or "Process this data",
-        execution_path=[],
-        metadata={"initialized": True},
-    )
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG if get_settings().debug else logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
-async def run_graph_async(input_data: str | None = None, user_query: str | None = None) -> dict[str, Any]:
-    """Run the graph asynchronously.
-
-    Args:
-        input_data: Optional input data string
-        user_query: Optional user query string
-
-    Returns:
-        Final state after graph execution
-    """
-    try:
-        logger.info("Starting graph execution")
-
-        # Create initial state
-        initial_state = create_initial_state(input_data=input_data, user_query=user_query)
-
-        logger.info("Executing graph", initial_state_keys=list(initial_state.keys()))
-
-        # Execute the graph
-        final_state = await ainvoke_graph(initial_state)
-
-        logger.info(
-            "Graph execution completed",
-            execution_path=final_state.get("execution_path", []),
-            has_query_builder_result="query_builder_result" in final_state,
-        )
-
-        return final_state
-
-    except GraphExecutionError:
-        raise
-    except Exception as e:
-        logger.error("Unexpected error during graph execution", error=str(e), exc_info=True)
-        raise GraphExecutionError(f"Graph execution failed: {str(e)}", e) from e
-
-
-def run_graph_sync(input_data: str | None = None, user_query: str | None = None) -> dict[str, Any]:
-    """Run the graph synchronously.
-
-    Args:
-        input_data: Optional input data string
-        user_query: Optional user query string
-
-    Returns:
-        Final state after graph execution
-    """
-    initial_state = create_initial_state(input_data=input_data, user_query=user_query)
-    logger.info("Executing graph synchronously", initial_state_keys=list(initial_state.keys()))
-    return invoke_graph(initial_state)
-
-
-def main() -> int:
-    """Main entry point.
-
-    Returns:
-        Exit code (0 for success, 1 for error)
-    """
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan handler."""
     settings = get_settings()
-
-    logger.info(
-        "Starting application",
-        app_name=settings.app_name,
-        app_version=settings.app_version,
-    )
-
+    logger.info(f"Starting Ally AI service with {settings.llm_provider} provider")
+    logger.info(f"Backend GraphQL URL: {settings.backend_graphql_url}")
+    logger.info(f"Database URL configured: {bool(settings.database_url)}")
+    
+    # Initialize checkpointer eagerly to see if persistence is working
     try:
-        # Run the graph
-        result = run_graph_sync(
-            input_data="Hello from LangGraph",
-            user_query="Process this message",
-        )
-
-        # Print results
-        print("\n" + "=" * 60)
-        print("Graph Execution Results")
-        print("=" * 60)
-        print(f"Execution Path: {' -> '.join(result.get('execution_path', []))}")
-        print(f"\nQuery Builder Result: {result.get('query_builder_result', 'N/A')}")
-        print(f"\nMetadata: {result.get('metadata', {})}")
-        print("=" * 60 + "\n")
-
-        logger.info("Application completed successfully")
-        return 0
-
+        checkpointer = await get_checkpointer()
+        checkpointer_type = type(checkpointer).__name__
+        logger.info(f"Checkpointer initialized: {checkpointer_type}")
+        if checkpointer_type == "MemorySaver":
+            logger.warning("⚠️  Using in-memory storage - conversation history will NOT persist across restarts!")
+        else:
+            logger.info("✓ Using PostgreSQL storage - conversation history WILL persist across restarts")
     except Exception as e:
-        logger.error("Application failed", error=str(e), exc_info=True)
-        print(f"\nError: {e}\n", file=sys.stderr)
-        return 1
+        logger.error(f"Failed to initialize checkpointer: {e}")
+    
+    yield
+    # Cleanup on shutdown
+    logger.info("Shutting down Ally AI service")
+    await cleanup_checkpointer()
+
+
+app = FastAPI(
+    title="Ally AI Copilot",
+    description="A LangGraph-based intelligent assistant for CRM",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure appropriately for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include API routes
+app.include_router(api_router, prefix="/api/v1")
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy", "service": "ally-ai"}
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import uvicorn
+
+    settings = get_settings()
+    uvicorn.run(
+        "src.main:app",
+        host=settings.host,
+        port=settings.port,
+        reload=settings.debug,
+    )
 

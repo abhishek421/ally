@@ -1,28 +1,101 @@
-version: '3.8'
+# ============================================
+# Ally AI Copilot - Local Development Setup
+# ============================================
+# Usage:
+#   docker-compose up -d        # Start all services
+#   docker-compose up -d ally   # Start only ally (uses external DB)
+#   docker-compose logs -f ally # View ally logs
+#   docker-compose down -v      # Stop and remove volumes
+# ============================================
 
 services:
-  api:
+  # ----------------------------------------
+  # Ally AI Service
+  # ----------------------------------------
+  ally:
     build:
       context: .
       dockerfile: Dockerfile
-    image: analyst-ai:latest
-    container_name: analyst-ai-api
+      args:
+        PYTHON_VERSION: "3.11"
+        ENVIRONMENT: development
+    image: ally:local
+    container_name: ally-ai
     ports:
       - "8000:8000"
-    env_file:
-      - .env
-    volumes:
-      - .:/app
-      # Prevent masking the container's python packages
-      - /app/__pycache__
+    environment:
+      # Server Configuration
+      HOST: "0.0.0.0"
+      PORT: "8000"
+      DEBUG: "true"
+      
+      # LLM Configuration (override via .env file or CLI)
+      LLM_PROVIDER: "${LLM_PROVIDER:-openai}"
+      LLM_MODEL: "${LLM_MODEL:-gpt-4o}"
+OPENAI_API_KEY=REDACTED
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      
+      # Backend GraphQL (adjust to your backend service)
+      BACKEND_GRAPHQL_URL: "${BACKEND_GRAPHQL_URL:-http://host.docker.internal:3000/graphql}"
+      
+      # PostgreSQL connection for LangGraph checkpointer
+      DATABASE_URL: "postgresql://ally:ally_secret@postgres:5432/allyos"
+      
+      # AWS Cognito (optional, for JWT validation)
+      AWS_COGNITO_REGION: "${AWS_COGNITO_REGION:-}"
+      AWS_COGNITO_USER_POOL_ID: "${AWS_COGNITO_USER_POOL_ID:-}"
+      AWS_COGNITO_CLIENT_ID: "${AWS_COGNITO_CLIENT_ID:-}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
     networks:
-      - analyst-network
+      - ally-network
+    # For development: mount source for hot-reload (uncomment if needed)
+    # volumes:
+    #   - ./src:/app/src:ro
 
+  # ----------------------------------------
+  # PostgreSQL Database (LangGraph Checkpointer)
+  # ----------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: ally-postgres
+    environment:
+      POSTGRES_USER: ally
+      POSTGRES_PASSWORD: ally_secret
+      POSTGRES_DB: allyos
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ally -d allyos"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - ally-network
+
+# ----------------------------------------
+# Networks
+# ----------------------------------------
 networks:
-  analyst-network:
+  ally-network:
     driver: bridge
 
+# ----------------------------------------
+# Volumes
+# ----------------------------------------
 volumes:
   postgres_data:
+    driver: local
 
