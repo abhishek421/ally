@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     backend_graphql_url: str = "http://localhost:3000/graphql"
 
     # Database
-    database_url: str = "postgresql://postgres:postgres@localhost:5432/allyos"
+    DATABASE_URL_ALLY: str = "postgresql://postgres:postgres@localhost:5432/allyos"
 
     # Server
     host: str = "0.0.0.0"

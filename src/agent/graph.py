@@ -49,7 +49,7 @@ def get_llm():
 async def get_checkpointer():
     """Get the checkpointer for conversation persistence.
     
-    Uses PostgreSQL if DATABASE_URL is configured, otherwise falls back
+    Uses PostgreSQL if DATABASE_URL_ALLY is configured, otherwise falls back
     to in-memory checkpointer.
     
     Returns:
@@ -64,11 +64,11 @@ async def get_checkpointer():
         return _checkpointer
     
     # Try PostgreSQL if configured
-    if settings.database_url:
+    if settings.DATABASE_URL_ALLY:
         try:
             logger.info(f"Attempting to connect to PostgreSQL for conversation persistence...")
             # Create the async context manager
-            _checkpointer_context = AsyncPostgresSaver.from_conn_string(settings.database_url)
+            _checkpointer_context = AsyncPostgresSaver.from_conn_string(settings.DATABASE_URL_ALLY)
             # Enter the context to get the actual checkpointer
             _checkpointer = await _checkpointer_context.__aenter__()
             # Setup the checkpointer tables
@@ -80,7 +80,7 @@ async def get_checkpointer():
             logger.warning("Falling back to in-memory storage - conversations will NOT persist across restarts!")
             _checkpointer_context = None
     else:
-        logger.warning("DATABASE_URL not configured - using in-memory storage")
+        logger.warning("DATABASE_URL_ALLY not configured - using in-memory storage")
     
     # Fallback to in-memory checkpointer
     if _memory_saver is None:

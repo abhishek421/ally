@@ -54,7 +54,7 @@ LLM_MODEL=gpt-4o
 BACKEND_GRAPHQL_URL=http://localhost:3000/graphql
 
 # PostgreSQL Database URL (for LangGraph checkpointer)
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/allyos
+DATABASE_URL_ALLY=postgresql://postgres:postgres@localhost:5432/allyos
 
 # Server Configuration
 HOST=0.0.0.0
