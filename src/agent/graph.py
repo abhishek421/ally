@@ -8,6 +8,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
+from langgraph.types import Command, interrupt
 
 from src.config import get_settings
 from src.agent.prompts import SYSTEM_PROMPT
@@ -203,6 +204,10 @@ async def stream_agent(
     This generator yields events as the agent processes the request,
     including thinking steps, tool calls, and the final response.
     
+    When a tool requests user confirmation via interrupt(), this function
+    yields a confirmation_required event and stops. The caller should then
+    use resume_agent() to continue execution after user responds.
+    
     Args:
         context: Tool context with auth and workspace info
         message: User message
@@ -219,60 +224,192 @@ async def stream_agent(
         }
     }
     
-    # Stream using updates mode to get step-by-step progress
-    async for chunk in agent.astream(
-        {
-            "messages": [{"role": "user", "content": message}],
-        },
-        config=config,
-        stream_mode="updates",
-    ):
-        # Process each update chunk
-        for node_name, node_output in chunk.items():
-            if node_name == "agent":
-                # This is the LLM response
-                messages = node_output.get("messages", [])
-                for msg in messages:
-                    if hasattr(msg, "tool_calls") and msg.tool_calls:
-                        # Agent decided to call tools
-                        for tool_call in msg.tool_calls:
+    try:
+        # Stream using updates mode to get step-by-step progress
+        async for chunk in agent.astream(
+            {
+                "messages": [{"role": "user", "content": message}],
+            },
+            config=config,
+            stream_mode="updates",
+        ):
+            # Debug: log chunk keys to understand structure
+            logger.debug(f"Stream chunk keys: {list(chunk.keys())}")
+            
+            # Check for interrupt FIRST (confirmation request from tools)
+            if "__interrupt__" in chunk:
+                interrupt_info = chunk["__interrupt__"]
+                logger.info(f"Interrupt detected! Info: {interrupt_info}")
+                if interrupt_info and len(interrupt_info) > 0:
+                    interrupt_data = interrupt_info[0].value if hasattr(interrupt_info[0], 'value') else interrupt_info[0]
+                    logger.info(f"Agent interrupted for confirmation: {interrupt_data.get('title', 'Unknown')}")
+                    yield {
+                        "type": "confirmation_required",
+                        "data": interrupt_data,
+                    }
+                    return  # Stop streaming, wait for user response
+            
+            # Process each update chunk
+            for node_name, node_output in chunk.items():
+                if node_name == "__interrupt__":
+                    continue  # Already handled above
+                
+                if node_name == "agent":
+                    # This is the LLM response
+                    messages = node_output.get("messages", [])
+                    for msg in messages:
+                        if hasattr(msg, "tool_calls") and msg.tool_calls:
+                            # Agent decided to call tools
+                            for tool_call in msg.tool_calls:
+                                yield {
+                                    "type": "tool_call",
+                                    "data": {
+                                        "name": tool_call.get("name"),
+                                        "args": tool_call.get("args", {}),
+                                    },
+                                }
+                        elif hasattr(msg, "content") and msg.content:
+                            # Agent response
                             yield {
-                                "type": "tool_call",
+                                "type": "response",
+                                "data": {"content": msg.content},
+                            }
+                elif node_name == "tools":
+                    # Tool execution results
+                    messages = node_output.get("messages", [])
+                    for msg in messages:
+                        if hasattr(msg, "content"):
+                            # Parse result to extract any data change metadata
+                            cleaned_result, change_data = parse_data_change(msg.content)
+                            
+                            # Yield the tool result (with cleaned content)
+                            yield {
+                                "type": "tool_result",
                                 "data": {
-                                    "name": tool_call.get("name"),
-                                    "args": tool_call.get("args", {}),
+                                    "name": getattr(msg, "name", "unknown"),
+                                    "result": cleaned_result,
                                 },
                             }
-                    elif hasattr(msg, "content") and msg.content:
-                        # Agent response
-                        yield {
-                            "type": "response",
-                            "data": {"content": msg.content},
-                        }
-            elif node_name == "tools":
-                # Tool execution results
-                messages = node_output.get("messages", [])
-                for msg in messages:
-                    if hasattr(msg, "content"):
-                        # Parse result to extract any data change metadata
-                        cleaned_result, change_data = parse_data_change(msg.content)
-                        
-                        # Yield the tool result (with cleaned content)
-                        yield {
-                            "type": "tool_result",
-                            "data": {
-                                "name": getattr(msg, "name", "unknown"),
-                                "result": cleaned_result,
-                            },
-                        }
-                        
-                        # If there was a data change, emit a separate event for frontend cache invalidation
-                        if change_data:
-                            yield {
-                                "type": "data_changed",
-                                "data": change_data,
-                            }
+                            
+                            # If there was a data change, emit a separate event for frontend cache invalidation
+                            if change_data:
+                                yield {
+                                    "type": "data_changed",
+                                    "data": change_data,
+                                }
+        
+        # Signal completion
+        yield {"type": "done", "data": {}}
+        
+    except Exception as e:
+        logger.error(f"Error in stream_agent: {e}")
+        yield {"type": "error", "data": {"message": str(e)}}
+        yield {"type": "done", "data": {}}
+
+
+async def resume_agent(
+    context: ToolContext,
+    conversation_id: str,
+    confirmation_response: dict,
+):
+    """Resume agent execution after user confirmation.
     
-    # Signal completion
-    yield {"type": "done", "data": {}}
+    This function continues the agent from where it was interrupted,
+    passing the user's confirmation response to the tool that requested it.
+    
+    Args:
+        context: Tool context with auth and workspace info
+        conversation_id: Conversation thread ID
+        confirmation_response: User's response to the confirmation request
+            - confirmed: bool - whether user confirmed
+            - selected_id: str | None - selected option for SELECT_ONE
+            - selected_ids: list[str] | None - selected options for SELECT_MANY
+            - feedback: str | None - optional feedback from user
+            
+    Yields:
+        Event dictionaries with type and data (same as stream_agent)
+    """
+    agent = await get_agent(context)
+    
+    config = {
+        "configurable": {
+            "thread_id": conversation_id,
+        }
+    }
+    
+    logger.info(f"Resuming agent for conversation {conversation_id} with response: {confirmation_response}")
+    
+    try:
+        # Resume the agent by invoking with a Command that provides the interrupt response
+        # The response will be passed to the tool that called interrupt()
+        async for chunk in agent.astream(
+            Command(resume=confirmation_response),
+            config=config,
+            stream_mode="updates",
+        ):
+            # Debug: log chunk keys
+            logger.debug(f"Resume chunk keys: {list(chunk.keys())}")
+            
+            # Check for another interrupt FIRST (nested confirmation)
+            if "__interrupt__" in chunk:
+                interrupt_info = chunk["__interrupt__"]
+                logger.info(f"Nested interrupt detected! Info: {interrupt_info}")
+                if interrupt_info and len(interrupt_info) > 0:
+                    interrupt_data = interrupt_info[0].value if hasattr(interrupt_info[0], 'value') else interrupt_info[0]
+                    logger.info(f"Agent interrupted again for confirmation: {interrupt_data.get('title', 'Unknown')}")
+                    yield {
+                        "type": "confirmation_required",
+                        "data": interrupt_data,
+                    }
+                    return  # Stop streaming, wait for user response
+            
+            # Process each update chunk (same logic as stream_agent)
+            for node_name, node_output in chunk.items():
+                if node_name == "__interrupt__":
+                    continue  # Already handled above
+                
+                if node_name == "agent":
+                    messages = node_output.get("messages", [])
+                    for msg in messages:
+                        if hasattr(msg, "tool_calls") and msg.tool_calls:
+                            for tool_call in msg.tool_calls:
+                                yield {
+                                    "type": "tool_call",
+                                    "data": {
+                                        "name": tool_call.get("name"),
+                                        "args": tool_call.get("args", {}),
+                                    },
+                                }
+                        elif hasattr(msg, "content") and msg.content:
+                            yield {
+                                "type": "response",
+                                "data": {"content": msg.content},
+                            }
+                elif node_name == "tools":
+                    messages = node_output.get("messages", [])
+                    for msg in messages:
+                        if hasattr(msg, "content"):
+                            cleaned_result, change_data = parse_data_change(msg.content)
+                            
+                            yield {
+                                "type": "tool_result",
+                                "data": {
+                                    "name": getattr(msg, "name", "unknown"),
+                                    "result": cleaned_result,
+                                },
+                            }
+                            
+                            if change_data:
+                                yield {
+                                    "type": "data_changed",
+                                    "data": change_data,
+                                }
+        
+        # Signal completion
+        yield {"type": "done", "data": {}}
+        
+    except Exception as e:
+        logger.error(f"Error resuming agent: {e}")
+        yield {"type": "error", "data": {"message": str(e)}}
+        yield {"type": "done", "data": {}}
 
