@@ -15,6 +15,9 @@ from src.tools.base import (
     get_best_match,
     format_fuzzy_suggestions,
 )
+from src.tools.confirmation import (
+    request_entity_selection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -898,11 +901,14 @@ def get_read_tools(context: ToolContext) -> list:
         - Partial names (e.g., "Acme" → "Acme Corporation")
         - Case differences (e.g., "APPLE" → "Apple Inc.")
         
+        When multiple matches are found with similar confidence, the user will be asked
+        to select the correct company.
+        
         Args:
             name: The company name (can include typos or be partial)
             
         Returns:
-            The company ID and details, or suggestions if multiple matches found
+            The company ID and details, or asks user to select if ambiguous
         """
         client = context.get_client()
         
@@ -950,17 +956,32 @@ def get_read_tools(context: ToolContext) -> list:
                 matches = fuzzy_match_entities(name, companies, name_key="name", threshold=50.0, limit=5)
                 
                 if matches:
-                    if len(matches) == 1 or matches[0][1] >= 90:
-                        # High confidence single match
+                    # Check if we have a single unambiguous match
+                    top_score = matches[0][1]
+                    second_score = matches[1][1] if len(matches) > 1 else 0
+                    score_gap = top_score - second_score
+                    
+                    if len(matches) == 1 or score_gap >= 15:
+                        # Single match or clear winner - proceed without asking
                         company = matches[0][0]
                         return f"RESOLVED: Company '{company['name']}' has ID: {company['id']}"
                     else:
-                        # Multiple potential matches
-                        lines = [f"Multiple companies match '{name}'. Please confirm which one:\n"]
-                        for company, score in matches:
-                            confidence = "high" if score >= 85 else "medium" if score >= 70 else "possible"
-                            lines.append(f"- **{company['name']}** (ID: {company['id']}) - {confidence} match")
-                        return "\n".join(lines)
+                        # Multiple matches with similar scores - ask user to select
+                        response = request_entity_selection(
+                            entity_type="company",
+                            name_query=name,
+                            matches=matches,
+                            name_key="name",
+                        )
+                        
+                        if response.confirmed and response.selected_id:
+                            # Find the selected company's name
+                            selected = next((m[0] for m in matches if m[0]["id"] == response.selected_id), None)
+                            selected_name = selected["name"] if selected else "Unknown"
+                            return f"RESOLVED: Company '{selected_name}' has ID: {response.selected_id}"
+                        else:
+                            feedback = f" User feedback: {response.feedback}" if response.feedback else ""
+                            return f"User cancelled company selection.{feedback}"
             
             # Fallback: try listing companies directly from database
             list_query = """
@@ -977,6 +998,7 @@ def get_read_tools(context: ToolContext) -> list:
                     data {
                         id
                         name
+                        description
                     }
                 }
             }
@@ -994,14 +1016,31 @@ def get_read_tools(context: ToolContext) -> list:
                 matches = fuzzy_match_entities(name, companies, name_key="name", threshold=50.0, limit=5)
                 
                 if matches:
-                    if len(matches) == 1 or matches[0][1] >= 85:
+                    # Check if we have a single unambiguous match
+                    top_score = matches[0][1]
+                    second_score = matches[1][1] if len(matches) > 1 else 0
+                    score_gap = top_score - second_score
+                    
+                    if len(matches) == 1 or score_gap >= 15:
+                        # Single match or clear winner - proceed without asking
                         company = matches[0][0]
                         return f"RESOLVED: Company '{company['name']}' has ID: {company['id']}"
                     else:
-                        lines = [f"Multiple companies might match '{name}':\n"]
-                        for company, score in matches:
-                            lines.append(f"- **{company['name']}** (ID: {company['id']})")
-                        return "\n".join(lines)
+                        # Multiple matches with similar scores - ask user to select
+                        response = request_entity_selection(
+                            entity_type="company",
+                            name_query=name,
+                            matches=matches,
+                            name_key="name",
+                        )
+                        
+                        if response.confirmed and response.selected_id:
+                            selected = next((m[0] for m in matches if m[0]["id"] == response.selected_id), None)
+                            selected_name = selected["name"] if selected else "Unknown"
+                            return f"RESOLVED: Company '{selected_name}' has ID: {response.selected_id}"
+                        else:
+                            feedback = f" User feedback: {response.feedback}" if response.feedback else ""
+                            return f"User cancelled company selection.{feedback}"
             
             return f"Could not find any company matching '{name}'. Please check the spelling or list all companies to see available options."
             
@@ -1021,11 +1060,14 @@ def get_read_tools(context: ToolContext) -> list:
         - Partial names (e.g., "John" → "John Smith")
         - Name reordering (e.g., "Smith John" → "John Smith")
         
+        When multiple matches are found with similar confidence, the user will be asked
+        to select the correct person.
+        
         Args:
             name: The person's name (can include typos, be partial, or in different order)
             
         Returns:
-            The person ID and details, or suggestions if multiple matches found
+            The person ID and details, or asks user to select if ambiguous
         """
         client = context.get_client()
         
@@ -1073,15 +1115,34 @@ def get_read_tools(context: ToolContext) -> list:
                 matches = fuzzy_match_entities(name, people, name_key="name", threshold=50.0, limit=5)
                 
                 if matches:
-                    if len(matches) == 1 or matches[0][1] >= 90:
+                    # Check if we have a single unambiguous match
+                    # Only skip confirmation if:
+                    # 1. There's exactly one match, OR
+                    # 2. Top match is significantly better than second match (15+ point gap)
+                    top_score = matches[0][1]
+                    second_score = matches[1][1] if len(matches) > 1 else 0
+                    score_gap = top_score - second_score
+                    
+                    if len(matches) == 1 or score_gap >= 15:
+                        # Single match or clear winner - proceed without asking
                         person = matches[0][0]
                         return f"RESOLVED: Person '{person['name']}' has ID: {person['id']}"
                     else:
-                        lines = [f"Multiple people match '{name}'. Please confirm which one:\n"]
-                        for person, score in matches:
-                            confidence = "high" if score >= 85 else "medium" if score >= 70 else "possible"
-                            lines.append(f"- **{person['name']}** (ID: {person['id']}) - {confidence} match")
-                        return "\n".join(lines)
+                        # Multiple matches with similar scores - ask user to select
+                        response = request_entity_selection(
+                            entity_type="person",
+                            name_query=name,
+                            matches=matches,
+                            name_key="name",
+                        )
+                        
+                        if response.confirmed and response.selected_id:
+                            selected = next((m[0] for m in matches if m[0]["id"] == response.selected_id), None)
+                            selected_name = selected["name"] if selected else "Unknown"
+                            return f"RESOLVED: Person '{selected_name}' has ID: {response.selected_id}"
+                        else:
+                            feedback = f" User feedback: {response.feedback}" if response.feedback else ""
+                            return f"User cancelled person selection.{feedback}"
             
             # Fallback: try listing people directly from database
             list_query = """
@@ -1099,6 +1160,7 @@ def get_read_tools(context: ToolContext) -> list:
                         id
                         firstName
                         lastName
+                        jobTitle
                     }
                 }
             }
@@ -1117,16 +1179,35 @@ def get_read_tools(context: ToolContext) -> list:
                 matches = fuzzy_match_entities(name, people, name_key="fullName", threshold=50.0, limit=5)
                 
                 if matches:
-                    if len(matches) == 1 or matches[0][1] >= 85:
+                    # Check if we have a single unambiguous match
+                    top_score = matches[0][1]
+                    second_score = matches[1][1] if len(matches) > 1 else 0
+                    score_gap = top_score - second_score
+                    
+                    if len(matches) == 1 or score_gap >= 15:
+                        # Single match or clear winner - proceed without asking
                         person = matches[0][0]
                         full_name = f"{person.get('firstName', '')} {person.get('lastName', '')}".strip()
                         return f"RESOLVED: Person '{full_name}' has ID: {person['id']}"
                     else:
-                        lines = [f"Multiple people might match '{name}':\n"]
-                        for person, score in matches:
-                            full_name = f"{person.get('firstName', '')} {person.get('lastName', '')}".strip()
-                            lines.append(f"- **{full_name}** (ID: {person['id']})")
-                        return "\n".join(lines)
+                        # Multiple matches with similar scores - ask user to select
+                        response = request_entity_selection(
+                            entity_type="person",
+                            name_query=name,
+                            matches=matches,
+                            name_key="fullName",
+                        )
+                        
+                        if response.confirmed and response.selected_id:
+                            selected = next((m[0] for m in matches if m[0]["id"] == response.selected_id), None)
+                            if selected:
+                                selected_name = f"{selected.get('firstName', '')} {selected.get('lastName', '')}".strip()
+                            else:
+                                selected_name = "Unknown"
+                            return f"RESOLVED: Person '{selected_name}' has ID: {response.selected_id}"
+                        else:
+                            feedback = f" User feedback: {response.feedback}" if response.feedback else ""
+                            return f"User cancelled person selection.{feedback}"
             
             return f"Could not find any person matching '{name}'. Please check the spelling or list all people to see available options."
             
@@ -1146,11 +1227,14 @@ def get_read_tools(context: ToolContext) -> list:
         - Partial names (e.g., "Custom" → "Customers")
         - Case differences (e.g., "LEADS" → "Leads")
         
+        When multiple matches are found with similar confidence, the user will be asked
+        to select the correct group.
+        
         Args:
             name: The group name (can include typos or be partial)
             
         Returns:
-            The group ID and details, or suggestions if multiple matches found
+            The group ID and details, or asks user to select if ambiguous
         """
         client = context.get_client()
         
@@ -1161,6 +1245,7 @@ def get_read_tools(context: ToolContext) -> list:
                 name
                 type
                 emoji
+                description
             }
         }
         """
@@ -1183,17 +1268,35 @@ def get_read_tools(context: ToolContext) -> list:
                 matches = fuzzy_match_entities(name, groups, name_key="name", threshold=30.0, limit=3)
             
             if matches:
-                if len(matches) == 1 or matches[0][1] >= 85:
+                # Check if we have a single unambiguous match
+                top_score = matches[0][1]
+                second_score = matches[1][1] if len(matches) > 1 else 0
+                score_gap = top_score - second_score
+                
+                if len(matches) == 1 or score_gap >= 15:
+                    # Single match or clear winner - proceed without asking
                     group = matches[0][0]
                     emoji = group.get('emoji', '')
                     return f"RESOLVED: Group '{emoji} {group['name']}' (type: {group.get('type', 'unknown')}) has ID: {group['id']}"
                 else:
-                    lines = [f"Multiple groups match '{name}'. Please confirm which one:\n"]
-                    for group, score in matches:
-                        emoji = group.get('emoji', '')
-                        confidence = "high" if score >= 85 else "medium" if score >= 70 else "possible"
-                        lines.append(f"- **{emoji} {group['name']}** (ID: {group['id']}, Type: {group.get('type', '')}) - {confidence} match")
-                    return "\n".join(lines)
+                    # Multiple matches with similar scores - ask user to select
+                    response = request_entity_selection(
+                        entity_type="group",
+                        name_query=name,
+                        matches=matches,
+                        name_key="name",
+                    )
+                    
+                    if response.confirmed and response.selected_id:
+                        selected = next((m[0] for m in matches if m[0]["id"] == response.selected_id), None)
+                        if selected:
+                            emoji = selected.get('emoji', '')
+                            selected_name = f"{emoji} {selected['name']}".strip()
+                            return f"RESOLVED: Group '{selected_name}' (type: {selected.get('type', 'unknown')}) has ID: {response.selected_id}"
+                        return f"RESOLVED: Group has ID: {response.selected_id}"
+                    else:
+                        feedback = f" User feedback: {response.feedback}" if response.feedback else ""
+                        return f"User cancelled group selection.{feedback}"
             
             # No matches - list available groups
             group_names = [f"{g.get('emoji', '')} {g.get('name', '')}".strip() for g in groups[:10]]

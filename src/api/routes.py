@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from src.api.middleware import AuthContext, get_current_user
-from src.agent.graph import stream_agent
+from src.agent.graph import stream_agent, resume_agent
 from src.graphql.client import GraphQLClient
 from src.tools.base import ToolContext
 
@@ -121,6 +121,7 @@ async def chat(
     - `tool_call` - Tool being called with arguments
     - `tool_result` - Result from tool execution
     - `response` - Final response text
+    - `confirmation_required` - Agent needs user confirmation before proceeding
     - `error` - Error message if something went wrong
     - `done` - Stream completion signal
     """
@@ -142,6 +143,108 @@ async def chat(
     
     return EventSourceResponse(
         event_generator(context, request.message, request.conversation_id),
+        media_type="text/event-stream",
+    )
+
+
+class ConfirmationRequest(BaseModel):
+    """Request body for the confirmation endpoint."""
+    
+    conversation_id: str = Field(..., description="ID of the conversation thread")
+    confirmed: bool = Field(False, description="Whether the user confirmed the action")
+    selected_id: str | None = Field(None, description="Selected option ID for SELECT_ONE")
+    selected_ids: list[str] | None = Field(None, description="Selected option IDs for SELECT_MANY")
+    feedback: str | None = Field(None, description="Optional feedback from user")
+
+
+async def confirmation_event_generator(
+    context: ToolContext,
+    conversation_id: str,
+    confirmation_response: dict,
+) -> AsyncGenerator[dict, None]:
+    """Generate SSE events from resumed agent stream.
+    
+    Args:
+        context: Tool context with auth and workspace info
+        conversation_id: Conversation thread ID
+        confirmation_response: User's confirmation response
+        
+    Yields:
+        SSE event dictionaries
+    """
+    try:
+        async for event in resume_agent(context, conversation_id, confirmation_response):
+            event_type = event.get("type", "unknown")
+            event_data = event.get("data", {})
+            
+            yield {
+                "event": event_type,
+                "data": json.dumps(event_data),
+            }
+            
+    except Exception as e:
+        logger.error(f"Error in resumed agent stream: {e}")
+        yield {
+            "event": "error",
+            "data": json.dumps({"message": str(e)}),
+        }
+        yield {
+            "event": "done",
+            "data": json.dumps({}),
+        }
+
+
+@router.post("/chat/confirm")
+async def confirm_action(
+    request: ConfirmationRequest,
+    auth: AuthContext = Depends(get_current_user),
+):
+    """Resume agent execution after user confirmation.
+    
+    This endpoint is called when the user responds to a confirmation request.
+    It resumes the agent from where it was interrupted and continues streaming
+    the response.
+    
+    **Headers:**
+    - `Authorization: Bearer <token>` - JWT token
+    - `X-Workspace-ID: <workspace_id>` - Current workspace ID
+    
+    **Request Body:**
+    - `conversation_id` - ID of the conversation thread
+    - `confirmed` - Whether the user confirmed the action
+    - `selected_id` - Selected option ID for SELECT_ONE confirmations
+    - `selected_ids` - Selected option IDs for SELECT_MANY confirmations
+    - `feedback` - Optional feedback from user (e.g., on cancel)
+    
+    **Response (SSE):**
+    Same event types as /chat endpoint.
+    """
+    # Resolve the database user ID upfront
+    db_user_id = await resolve_database_user_id(auth)
+    
+    logger.info(
+        f"Confirmation request - conversation: {request.conversation_id}, "
+        f"confirmed: {request.confirmed}, user: {db_user_id}"
+    )
+    
+    # Create tool context
+    context = ToolContext(
+        auth_token=auth.auth_token,
+        workspace_id=auth.workspace_id,
+        user_id=db_user_id,
+        session_id=auth.session_id,
+    )
+    
+    # Build confirmation response dict
+    confirmation_response = {
+        "confirmed": request.confirmed,
+        "selected_id": request.selected_id,
+        "selected_ids": request.selected_ids,
+        "feedback": request.feedback,
+    }
+    
+    return EventSourceResponse(
+        confirmation_event_generator(context, request.conversation_id, confirmation_response),
         media_type="text/event-stream",
     )
 

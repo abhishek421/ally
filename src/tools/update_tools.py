@@ -14,6 +14,14 @@ from src.tools.base import (
     EntityType,
     ChangeAction,
 )
+from src.tools.confirmation import (
+    request_update_confirmation,
+    request_delete_confirmation,
+    request_column_update_confirmation,
+    ConfirmationType,
+    ConfirmationRequest,
+    request_confirmation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,16 +89,37 @@ def get_update_tools(context: ToolContext) -> list:
             await client.close()
 
     @tool
-    async def remove_company_from_group(company_id: str, group_id: str) -> str:
+    async def remove_company_from_group(
+        company_id: str,
+        group_id: str,
+        company_name: str,
+        group_name: str,
+    ) -> str:
         """Remove a company from a group.
+        
+        This tool will ask for user confirmation before removing the company
+        from the group.
         
         Args:
             company_id: ID of the company to remove
             group_id: ID of the group to remove the company from
+            company_name: Name of the company (for display)
+            group_name: Name of the group (for display)
             
         Returns:
             Confirmation message
         """
+        # Request user confirmation for this destructive action
+        confirmation = request_delete_confirmation(
+            entity_type="company",
+            entity_name=company_name,
+            context=f"Remove '{company_name}' from group '{group_name}'?",
+        )
+        
+        if not confirmation.confirmed:
+            feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
+            return f"Removal cancelled by user.{feedback}"
+        
         client = context.get_client()
         
         mutation = """
@@ -111,7 +140,7 @@ def get_update_tools(context: ToolContext) -> list:
             data = result.get("deleteGroupCompany")
             
             if data:
-                result = f"Successfully removed company {company_id} from group {group_id}."
+                result = f"Successfully removed '{company_name}' from group '{group_name}'."
                 # Add change metadata for frontend cache invalidation
                 change = DataChange(
                     entity_type=EntityType.COMPANY,
@@ -182,16 +211,37 @@ def get_update_tools(context: ToolContext) -> list:
             await client.close()
 
     @tool
-    async def remove_person_from_group(person_id: str, group_id: str) -> str:
+    async def remove_person_from_group(
+        person_id: str,
+        group_id: str,
+        person_name: str,
+        group_name: str,
+    ) -> str:
         """Remove a person from a group.
+        
+        This tool will ask for user confirmation before removing the person
+        from the group.
         
         Args:
             person_id: ID of the person to remove
             group_id: ID of the group to remove the person from
+            person_name: Name of the person (for display)
+            group_name: Name of the group (for display)
             
         Returns:
             Confirmation message
         """
+        # Request user confirmation for this destructive action
+        confirmation = request_delete_confirmation(
+            entity_type="person",
+            entity_name=person_name,
+            context=f"Remove '{person_name}' from group '{group_name}'?",
+        )
+        
+        if not confirmation.confirmed:
+            feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
+            return f"Removal cancelled by user.{feedback}"
+        
         client = context.get_client()
         
         mutation = """
@@ -212,7 +262,7 @@ def get_update_tools(context: ToolContext) -> list:
             data = result.get("deleteGroupPeople")
             
             if data:
-                result = f"Successfully removed person {person_id} from group {group_id}."
+                result = f"Successfully removed '{person_name}' from group '{group_name}'."
                 # Add change metadata for frontend cache invalidation
                 change = DataChange(
                     entity_type=EntityType.PERSON,
@@ -328,19 +378,45 @@ def get_update_tools(context: ToolContext) -> list:
     @tool
     async def update_company(
         company_id: str,
+        company_name: str,
         name: Optional[str] = None,
         description: Optional[str] = None,
     ) -> str:
         """Update a company's information.
         
+        This tool will ask for user confirmation before applying the updates,
+        showing a preview of the changes.
+        
         Args:
             company_id: ID of the company to update (required)
+            company_name: Current name of the company (for display purposes)
             name: New company name (optional)
             description: New company description (optional)
             
         Returns:
             Confirmation message with updated company details
         """
+        # Build changes dict for confirmation preview
+        changes = {}
+        if name is not None:
+            changes["name"] = name
+        if description is not None:
+            changes["description"] = description
+        
+        if not changes:
+            return "No updates specified. Please provide at least one field to update (name, description)."
+        
+        # Request user confirmation before updating
+        confirmation = request_update_confirmation(
+            entity_type="company",
+            entity_name=company_name,
+            changes=changes,
+        )
+        
+        if not confirmation.confirmed:
+            feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
+            return f"Company update cancelled by user.{feedback}"
+        
         client = context.get_client()
         
         mutation = """
@@ -363,9 +439,6 @@ def get_update_tools(context: ToolContext) -> list:
         
         if description is not None:
             input_data["description"] = description
-        
-        if len(input_data) == 1:
-            return "No updates specified. Please provide at least one field to update (name, description)."
         
         try:
             result = await client.mutate(mutation, {"input": input_data})
@@ -393,6 +466,7 @@ def get_update_tools(context: ToolContext) -> list:
     @tool
     async def update_person(
         person_id: str,
+        person_name: str,
         first_name: Optional[str] = None,
         last_name: Optional[str] = None,
         job_title: Optional[str] = None,
@@ -400,8 +474,12 @@ def get_update_tools(context: ToolContext) -> list:
     ) -> str:
         """Update a person's information.
         
+        This tool will ask for user confirmation before applying the updates,
+        showing a preview of the changes.
+        
         Args:
             person_id: ID of the person to update (required)
+            person_name: Current name of the person (for display purposes)
             first_name: New first name (optional)
             last_name: New last name (optional)
             job_title: New job title (optional)
@@ -410,6 +488,31 @@ def get_update_tools(context: ToolContext) -> list:
         Returns:
             Confirmation message with updated person details
         """
+        # Build changes dict for confirmation preview
+        changes = {}
+        if first_name is not None:
+            changes["first_name"] = first_name
+        if last_name is not None:
+            changes["last_name"] = last_name
+        if job_title is not None:
+            changes["job_title"] = job_title
+        if description is not None:
+            changes["description"] = description
+        
+        if not changes:
+            return "No updates specified. Please provide at least one field to update (first_name, last_name, job_title, description)."
+        
+        # Request user confirmation before updating
+        confirmation = request_update_confirmation(
+            entity_type="person",
+            entity_name=person_name,
+            changes=changes,
+        )
+        
+        if not confirmation.confirmed:
+            feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
+            return f"Person update cancelled by user.{feedback}"
+        
         client = context.get_client()
         
         mutation = """
@@ -440,9 +543,6 @@ def get_update_tools(context: ToolContext) -> list:
         
         if description is not None:
             input_data["description"] = description
-        
-        if len(input_data) == 1:
-            return "No updates specified. Please provide at least one field to update (first_name, last_name, job_title, description)."
         
         try:
             result = await client.mutate(mutation, {"input": input_data})
@@ -549,15 +649,90 @@ def get_update_tools(context: ToolContext) -> list:
         finally:
             await client.close()
 
+    async def _get_current_select_option_value(
+        client, 
+        column_id: str, 
+        company_id: Optional[str] = None, 
+        person_id: Optional[str] = None
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Fetch the current selected option value for a company or person.
+        
+        Returns:
+            Tuple of (value_label, color) or (None, None) if not set
+        """
+        try:
+            # Query the company/person to see which option is selected
+            if company_id:
+                entity_query = """
+                query GetCompanyColumnValue($id: ID!) {
+                    getOneCompany(id: $id) {
+                        columnValueSelectOption {
+                            columnId
+                            selectOptionId
+                            selectOption {
+                                id
+                                value
+                                color
+                            }
+                        }
+                    }
+                }
+                """
+                entity_result = await client.query(entity_query, {"id": company_id})
+                entity = entity_result.get("getOneCompany", {})
+                selected_options = entity.get("columnValueSelectOption", []) if entity else []
+            elif person_id:
+                entity_query = """
+                query GetPersonColumnValue($id: ID!) {
+                    getPerson(id: $id) {
+                        columnValueSelectOption {
+                            columnId
+                            selectOptionId
+                            selectOption {
+                                id
+                                value
+                                color
+                            }
+                        }
+                    }
+                }
+                """
+                entity_result = await client.query(entity_query, {"id": person_id})
+                entity = entity_result.get("getPerson", {})
+                selected_options = entity.get("columnValueSelectOption", []) if entity else []
+            else:
+                return None, None
+            
+            # Find the selected option for this column
+            for selected in selected_options:
+                if selected.get("columnId") == column_id:
+                    option = selected.get("selectOption", {})
+                    if option:
+                        return option.get("value"), option.get("color")
+            
+            return None, None
+            
+        except Exception as e:
+            logger.warning(f"Could not fetch current column value: {e}")
+            return None, None
+
     @tool
     async def update_company_column_value(
         company_id: str,
         group_id: str,
         column_id: str,
+        company_name: str,
+        column_name: str,
+        new_value_label: str,
         value: Optional[str] = None,
         select_option_id: Optional[str] = None,
+        group_name: Optional[str] = None,
+        new_value_color: Optional[str] = None,
     ) -> str:
         """Update a company's column value within a group.
+        
+        This tool will ask for user confirmation before applying the update,
+        showing a preview of the change (old value → new value).
         
         Use this tool to update group-specific fields like Status, Priority, etc.
         For SELECT/MULTISELECT columns, use select_option_id.
@@ -568,14 +743,19 @@ def get_update_tools(context: ToolContext) -> list:
         2. Resolve the group name to get group_id  
         3. Get group columns to find the Status column_id
         4. Get column options to find the Followup option's select_option_id
-        5. Call this tool with company_id, group_id, column_id, and select_option_id
+        5. Call this tool with all the IDs AND the display names for confirmation
         
         Args:
             company_id: ID of the company to update (required)
-            group_id: ID of the group context for the update (required for cache invalidation)
+            group_id: ID of the group context for the update (required)
             column_id: ID of the column to update (required)
+            company_name: Display name of the company (required for confirmation UI)
+            column_name: Display name of the column, e.g. "Status" (required for confirmation UI)
+            new_value_label: Display label of the new value, e.g. "Lead" (required for confirmation UI)
             value: New value for TEXT/NUMBER columns (optional)
             select_option_id: ID of the select option for SELECT/MULTISELECT columns (optional)
+            group_name: Display name of the group (optional, for confirmation UI)
+            new_value_color: Color of new value badge (optional)
             
         Returns:
             Confirmation message
@@ -586,6 +766,30 @@ def get_update_tools(context: ToolContext) -> list:
         client = context.get_client()
         
         try:
+            # Fetch the current value before showing confirmation
+            current_value_label = None
+            current_value_color = None
+            if select_option_id:
+                current_value_label, current_value_color = await _get_current_select_option_value(
+                    client, column_id, company_id=company_id
+                )
+            
+            # Request user confirmation before updating
+            confirmation = request_column_update_confirmation(
+                entity_type="company",
+                entity_name=company_name,
+                column_name=column_name,
+                current_value=current_value_label,
+                new_value=new_value_label,
+                group_name=group_name,
+                current_value_color=current_value_color,
+                new_value_color=new_value_color,
+            )
+            
+            if not confirmation.confirmed:
+                feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
+                return f"Column update cancelled by user.{feedback}"
+            
             if select_option_id:
                 # Use saveSelectOptionSelectedValue for SELECT columns
                 mutation = """
@@ -609,7 +813,7 @@ def get_update_tools(context: ToolContext) -> list:
                 option = result.get("saveSelectOptionSelectedValue")
                 
                 if option:
-                    result_msg = f"Successfully updated company column to '{option.get('value', 'Unknown')}'."
+                    result_msg = f"Successfully updated {column_name} for '{company_name}' to '{option.get('value', new_value_label)}'."
                     change = DataChange(
                         entity_type=EntityType.COMPANY,
                         action=ChangeAction.UPDATED,
@@ -642,7 +846,7 @@ def get_update_tools(context: ToolContext) -> list:
                 column_value = result.get("upsertColumnValue")
                 
                 if column_value:
-                    result_msg = f"Successfully updated company column value to '{value}'."
+                    result_msg = f"Successfully updated {column_name} for '{company_name}' to '{value}'."
                     change = DataChange(
                         entity_type=EntityType.COMPANY,
                         action=ChangeAction.UPDATED,
@@ -664,10 +868,18 @@ def get_update_tools(context: ToolContext) -> list:
         person_id: str,
         group_id: str,
         column_id: str,
+        person_name: str,
+        column_name: str,
+        new_value_label: str,
         value: Optional[str] = None,
         select_option_id: Optional[str] = None,
+        group_name: Optional[str] = None,
+        new_value_color: Optional[str] = None,
     ) -> str:
         """Update a person's column value within a group.
+        
+        This tool will ask for user confirmation before applying the update,
+        showing a preview of the change (old value → new value).
         
         Use this tool to update group-specific fields like Status, Priority, etc.
         For SELECT/MULTISELECT columns, use select_option_id.
@@ -678,14 +890,19 @@ def get_update_tools(context: ToolContext) -> list:
         2. Resolve the group name to get group_id
         3. Get group columns to find the Status column_id
         4. Get column options to find the Qualified option's select_option_id
-        5. Call this tool with person_id, group_id, column_id, and select_option_id
+        5. Call this tool with all the IDs AND the display names for confirmation
         
         Args:
             person_id: ID of the person to update (required)
-            group_id: ID of the group context for the update (required for cache invalidation)
+            group_id: ID of the group context for the update (required)
             column_id: ID of the column to update (required)
+            person_name: Display name of the person (required for confirmation UI)
+            column_name: Display name of the column, e.g. "Status" (required for confirmation UI)
+            new_value_label: Display label of the new value, e.g. "Qualified" (required for confirmation UI)
             value: New value for TEXT/NUMBER columns (optional)
             select_option_id: ID of the select option for SELECT/MULTISELECT columns (optional)
+            group_name: Display name of the group (optional, for confirmation UI)
+            new_value_color: Color of new value badge (optional)
             
         Returns:
             Confirmation message
@@ -696,6 +913,30 @@ def get_update_tools(context: ToolContext) -> list:
         client = context.get_client()
         
         try:
+            # Fetch the current value before showing confirmation
+            current_value_label = None
+            current_value_color = None
+            if select_option_id:
+                current_value_label, current_value_color = await _get_current_select_option_value(
+                    client, column_id, person_id=person_id
+                )
+            
+            # Request user confirmation before updating
+            confirmation = request_column_update_confirmation(
+                entity_type="person",
+                entity_name=person_name,
+                column_name=column_name,
+                current_value=current_value_label,
+                new_value=new_value_label,
+                group_name=group_name,
+                current_value_color=current_value_color,
+                new_value_color=new_value_color,
+            )
+            
+            if not confirmation.confirmed:
+                feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
+                return f"Column update cancelled by user.{feedback}"
+            
             if select_option_id:
                 # Use saveSelectOptionSelectedValue for SELECT columns
                 mutation = """
@@ -719,7 +960,7 @@ def get_update_tools(context: ToolContext) -> list:
                 option = result.get("saveSelectOptionSelectedValue")
                 
                 if option:
-                    result_msg = f"Successfully updated person column to '{option.get('value', 'Unknown')}'."
+                    result_msg = f"Successfully updated {column_name} for '{person_name}' to '{option.get('value', new_value_label)}'."
                     change = DataChange(
                         entity_type=EntityType.PERSON,
                         action=ChangeAction.UPDATED,
@@ -752,7 +993,7 @@ def get_update_tools(context: ToolContext) -> list:
                 column_value = result.get("upsertColumnValue")
                 
                 if column_value:
-                    result_msg = f"Successfully updated person column value to '{value}'."
+                    result_msg = f"Successfully updated {column_name} for '{person_name}' to '{value}'."
                     change = DataChange(
                         entity_type=EntityType.PERSON,
                         action=ChangeAction.UPDATED,
