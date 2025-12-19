@@ -4,6 +4,17 @@ from src.tools.base import BaseTool, ToolContext
 from src.tools.read_tools import get_read_tools
 from src.tools.create_tools import get_create_tools
 from src.tools.update_tools import get_update_tools
+from src.tools.confirmation import (
+    ConfirmationType,
+    ConfirmationRequest,
+    ConfirmationResponse,
+    ConfirmationOption,
+    request_confirmation,
+    request_entity_selection,
+    request_create_confirmation,
+    request_update_confirmation,
+    request_delete_confirmation,
+)
 
 
 def get_all_tools(context: ToolContext) -> list:
@@ -29,5 +40,15 @@ __all__ = [
     "get_read_tools",
     "get_create_tools",
     "get_update_tools",
+    # Confirmation utilities
+    "ConfirmationType",
+    "ConfirmationRequest",
+    "ConfirmationResponse",
+    "ConfirmationOption",
+    "request_confirmation",
+    "request_entity_selection",
+    "request_create_confirmation",
+    "request_update_confirmation",
+    "request_delete_confirmation",
 ]
 

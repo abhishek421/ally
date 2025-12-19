@@ -14,6 +14,9 @@ from src.tools.base import (
     EntityType,
     ChangeAction,
 )
+from src.tools.confirmation import (
+    request_create_confirmation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,9 @@ def get_create_tools(context: ToolContext) -> list:
     ) -> str:
         """Create a new company in the workspace.
         
+        This tool will ask for user confirmation before creating the company,
+        showing a preview of the data to be created.
+        
         Args:
             name: Company name (required)
             description: Company description (optional)
@@ -50,6 +56,29 @@ def get_create_tools(context: ToolContext) -> list:
         Returns:
             Confirmation message with the created company details
         """
+        # Build draft data for confirmation preview
+        draft_data = {"name": name}
+        if description:
+            draft_data["description"] = description
+        if email:
+            draft_data["email"] = email
+        if phone:
+            draft_data["phone"] = phone
+        if website:
+            draft_data["website"] = website
+        if group_id:
+            draft_data["group_id"] = group_id
+        
+        # Request user confirmation before creating
+        confirmation = request_create_confirmation(
+            entity_type="company",
+            draft_data=draft_data,
+        )
+        
+        if not confirmation.confirmed:
+            feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
+            return f"Company creation cancelled by user.{feedback}"
+        
         client = context.get_client()
         
         mutation = """
@@ -97,7 +126,7 @@ def get_create_tools(context: ToolContext) -> list:
             company = result.get("createCompany")
             
             if company:
-                group_msg = f" and added to group {group_id}" if group_id else ""
+                group_msg = f" and added to group" if group_id else ""
                 result = f"Successfully created company{group_msg}:\n\n{format_company(company)}"
                 # Add change metadata for frontend cache invalidation
                 change = DataChange(
@@ -128,6 +157,9 @@ def get_create_tools(context: ToolContext) -> list:
     ) -> str:
         """Create a new person (contact) in the workspace.
         
+        This tool will ask for user confirmation before creating the person,
+        showing a preview of the data to be created.
+        
         Args:
             first_name: First name (required)
             last_name: Last name (optional)
@@ -140,6 +172,31 @@ def get_create_tools(context: ToolContext) -> list:
         Returns:
             Confirmation message with the created person details
         """
+        # Build draft data for confirmation preview
+        draft_data = {"first_name": first_name}
+        if last_name:
+            draft_data["last_name"] = last_name
+        if job_title:
+            draft_data["job_title"] = job_title
+        if description:
+            draft_data["description"] = description
+        if email:
+            draft_data["email"] = email
+        if phone:
+            draft_data["phone"] = phone
+        if group_id:
+            draft_data["group_id"] = group_id
+        
+        # Request user confirmation before creating
+        confirmation = request_create_confirmation(
+            entity_type="person",
+            draft_data=draft_data,
+        )
+        
+        if not confirmation.confirmed:
+            feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
+            return f"Person creation cancelled by user.{feedback}"
+        
         client = context.get_client()
         
         mutation = """
@@ -191,7 +248,7 @@ def get_create_tools(context: ToolContext) -> list:
             person = result.get("createPerson")
             
             if person:
-                group_msg = f" and added to group {group_id}" if group_id else ""
+                group_msg = f" and added to group" if group_id else ""
                 result = f"Successfully created person{group_msg}:\n\n{format_person(person)}"
                 # Add change metadata for frontend cache invalidation
                 change = DataChange(
@@ -220,6 +277,9 @@ def get_create_tools(context: ToolContext) -> list:
     ) -> str:
         """Create a new group in the workspace.
         
+        This tool will ask for user confirmation before creating the group,
+        showing a preview of the data to be created.
+        
         Args:
             name: Group name (required)
             group_type: Type of group - "PEOPLE" or "COMPANY" (default: PEOPLE)
@@ -230,6 +290,32 @@ def get_create_tools(context: ToolContext) -> list:
         Returns:
             Confirmation message with the created group details
         """
+        # Validate group type
+        valid_types = ["PEOPLE", "COMPANY"]
+        if group_type.upper() not in valid_types:
+            return f"Invalid group type '{group_type}'. Must be one of: {', '.join(valid_types)}"
+        
+        # Build draft data for confirmation preview
+        draft_data = {
+            "name": name,
+            "type": group_type.upper(),
+            "is_private": is_private,
+        }
+        if description:
+            draft_data["description"] = description
+        if emoji:
+            draft_data["emoji"] = emoji
+        
+        # Request user confirmation before creating
+        confirmation = request_create_confirmation(
+            entity_type="group",
+            draft_data=draft_data,
+        )
+        
+        if not confirmation.confirmed:
+            feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
+            return f"Group creation cancelled by user.{feedback}"
+        
         client = context.get_client()
         
         mutation = """
@@ -250,11 +336,6 @@ def get_create_tools(context: ToolContext) -> list:
             }
         }
         """
-        
-        # Validate group type
-        valid_types = ["PEOPLE", "COMPANY"]
-        if group_type.upper() not in valid_types:
-            return f"Invalid group type '{group_type}'. Must be one of: {', '.join(valid_types)}"
         
         try:
             input_data = {
