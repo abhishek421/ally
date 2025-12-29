@@ -7,14 +7,55 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.config import get_settings
+
+# Configure logging BEFORE importing other modules
+def configure_logging():
+    """Configure logging with clean, human-readable format.
+
+    Suppresses verbose third-party loggers and keeps ally-ai logs clean.
+    """
+    settings = get_settings()
+
+    # Set root level
+    root_level = logging.DEBUG if settings.debug else logging.INFO
+
+    # Clean format for our logs
+    log_format = "%(asctime)s | %(levelname)-7s | %(message)s"
+    date_format = "%H:%M:%S"
+
+    logging.basicConfig(
+        level=root_level,
+        format=log_format,
+        datefmt=date_format,
+    )
+
+    # Suppress noisy third-party loggers
+    noisy_loggers = [
+        "httpcore",
+        "httpcore.connection",
+        "httpcore.http11",
+        "httpx",
+        "openai",
+        "openai._base_client",
+        "gql",
+        "gql.transport",
+        "gql.transport.httpx",
+        "sse_starlette",
+        "sse_starlette.sse",
+        "uvicorn.access",  # Health check spam
+    ]
+
+    for logger_name in noisy_loggers:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+
+    # Keep uvicorn error logs
+    logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+
+configure_logging()
+
 from src.api.routes import router as api_router
 from src.agent.graph import cleanup_checkpointer, get_checkpointer
 
-# Configure logging
-logging.basicConfig(
-    level=logging.DEBUG if get_settings().debug else logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
 logger = logging.getLogger(__name__)
 
 
