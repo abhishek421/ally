@@ -988,17 +988,19 @@ def get_read_tools(context: ToolContext) -> list:
                 # ES results weren't good enough, fall through to database query
                 logger.info(f"Autocomplete results for '{name}' had low confidence, trying database query")
 
-            # Fallback: try listing companies directly from database
+            # Fallback: try searching companies directly from database
             list_query = """
             query GetWorkspaceCompany(
                 $workspaceId: ID!
                 $userId: ID!
                 $limit: Int
+                $search: String
             ) {
                 getWorkspaceCompany(
                     workspaceId: $workspaceId
                     userId: $userId
                     limit: $limit
+                    search: $search
                 ) {
                     data {
                         id
@@ -1008,11 +1010,12 @@ def get_read_tools(context: ToolContext) -> list:
                 }
             }
             """
-            
+
             result = await client.query(list_query, {
                 "workspaceId": context.workspace_id,
                 "userId": context.user_id,
-                "limit": 100,
+                "limit": 50,
+                "search": name,  # Use the name as search query!
             })
             
             companies = result.get("getWorkspaceCompany", {}).get("data", [])
@@ -1154,17 +1157,19 @@ def get_read_tools(context: ToolContext) -> list:
                 # ES results weren't good enough, fall through to database query
                 logger.info(f"Autocomplete results for '{name}' had low confidence, trying database query")
             
-            # Fallback: try listing people directly from database
+            # Fallback: try searching people directly from database
             list_query = """
             query GetWorkspacePeople(
                 $workspaceId: ID!
                 $userId: ID!
                 $limit: Int
+                $search: String
             ) {
                 getWorkspacePeople(
                     workspaceId: $workspaceId
                     userId: $userId
                     limit: $limit
+                    search: $search
                 ) {
                     data {
                         id
@@ -1175,11 +1180,12 @@ def get_read_tools(context: ToolContext) -> list:
                 }
             }
             """
-            
+
             result = await client.query(list_query, {
                 "workspaceId": context.workspace_id,
                 "userId": context.user_id,
-                "limit": 100,
+                "limit": 50,
+                "search": name,  # Use the name as search query!
             })
             
             people = result.get("getWorkspacePeople", {}).get("data", [])
