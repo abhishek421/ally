@@ -951,16 +951,18 @@ def get_read_tools(context: ToolContext) -> list:
             if autocomplete_results:
                 # Convert to format for fuzzy matching
                 companies = [{"id": r["id"], "name": r["text"]} for r in autocomplete_results]
-                
+
                 # Apply fuzzy matching for better results
                 matches = fuzzy_match_entities(name, companies, name_key="name", threshold=50.0, limit=5)
-                
-                if matches:
+
+                # Only use ES results if we have a reasonably good match (score >= 70)
+                # Otherwise fall through to database query which is more reliable
+                if matches and matches[0][1] >= 70:
                     # Check if we have a single unambiguous match
                     top_score = matches[0][1]
                     second_score = matches[1][1] if len(matches) > 1 else 0
                     score_gap = top_score - second_score
-                    
+
                     if len(matches) == 1 or score_gap >= 15:
                         # Single match or clear winner - proceed without asking
                         company = matches[0][0]
@@ -973,7 +975,7 @@ def get_read_tools(context: ToolContext) -> list:
                             matches=matches,
                             name_key="name",
                         )
-                        
+
                         if response.confirmed and response.selected_id:
                             # Find the selected company's name
                             selected = next((m[0] for m in matches if m[0]["id"] == response.selected_id), None)
@@ -982,7 +984,10 @@ def get_read_tools(context: ToolContext) -> list:
                         else:
                             feedback = f" User feedback: {response.feedback}" if response.feedback else ""
                             return f"User cancelled company selection.{feedback}"
-            
+
+                # ES results weren't good enough, fall through to database query
+                logger.info(f"Autocomplete results for '{name}' had low confidence, trying database query")
+
             # Fallback: try listing companies directly from database
             list_query = """
             query GetWorkspaceCompany(
@@ -1110,11 +1115,13 @@ def get_read_tools(context: ToolContext) -> list:
             if autocomplete_results:
                 # Convert to format for fuzzy matching
                 people = [{"id": r["id"], "name": r["text"]} for r in autocomplete_results]
-                
+
                 # Apply fuzzy matching
                 matches = fuzzy_match_entities(name, people, name_key="name", threshold=50.0, limit=5)
-                
-                if matches:
+
+                # Only use ES results if we have a reasonably good match (score >= 70)
+                # Otherwise fall through to database query which is more reliable
+                if matches and matches[0][1] >= 70:
                     # Check if we have a single unambiguous match
                     # Only skip confirmation if:
                     # 1. There's exactly one match, OR
@@ -1122,7 +1129,7 @@ def get_read_tools(context: ToolContext) -> list:
                     top_score = matches[0][1]
                     second_score = matches[1][1] if len(matches) > 1 else 0
                     score_gap = top_score - second_score
-                    
+
                     if len(matches) == 1 or score_gap >= 15:
                         # Single match or clear winner - proceed without asking
                         person = matches[0][0]
@@ -1135,7 +1142,7 @@ def get_read_tools(context: ToolContext) -> list:
                             matches=matches,
                             name_key="name",
                         )
-                        
+
                         if response.confirmed and response.selected_id:
                             selected = next((m[0] for m in matches if m[0]["id"] == response.selected_id), None)
                             selected_name = selected["name"] if selected else "Unknown"
@@ -1143,6 +1150,9 @@ def get_read_tools(context: ToolContext) -> list:
                         else:
                             feedback = f" User feedback: {response.feedback}" if response.feedback else ""
                             return f"User cancelled person selection.{feedback}"
+
+                # ES results weren't good enough, fall through to database query
+                logger.info(f"Autocomplete results for '{name}' had low confidence, trying database query")
             
             # Fallback: try listing people directly from database
             list_query = """
