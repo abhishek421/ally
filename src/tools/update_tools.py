@@ -18,6 +18,7 @@ from src.tools.confirmation import (
     request_update_confirmation,
     request_delete_confirmation,
     request_column_update_confirmation,
+    request_entity_selection,
     ConfirmationType,
     ConfirmationRequest,
     request_confirmation,
@@ -683,8 +684,8 @@ def get_update_tools(context: ToolContext) -> list:
                 selected_options = entity.get("columnValueSelectOption", []) if entity else []
             elif person_id:
                 entity_query = """
-                query GetPersonColumnValue($id: ID!) {
-                    getPerson(id: $id) {
+                query GetPersonColumnValue($peopleId: ID!) {
+                    getPerson(peopleId: $peopleId) {
                         columnValueSelectOption {
                             columnId
                             selectOptionId
@@ -697,7 +698,7 @@ def get_update_tools(context: ToolContext) -> list:
                     }
                 }
                 """
-                entity_result = await client.query(entity_query, {"id": person_id})
+                entity_result = await client.query(entity_query, {"peopleId": person_id})
                 entity = entity_result.get("getPerson", {})
                 selected_options = entity.get("columnValueSelectOption", []) if entity else []
             else:
@@ -796,12 +797,12 @@ def get_update_tools(context: ToolContext) -> list:
                 mutation SaveSelectOptionValue($input: SelectOptionValueModel!) {
                     saveSelectOptionSelectedValue(selectOptionValueModel: $input) {
                         id
-                        value
-                        color
+                        selectOptionId
+                        selectOption { id value color }
                     }
                 }
                 """
-                
+
                 result = await client.mutate(mutation, {
                     "input": {
                         "columnId": column_id,
@@ -809,11 +810,12 @@ def get_update_tools(context: ToolContext) -> list:
                         "selectOptionId": select_option_id,
                     }
                 })
-                
+
                 option = result.get("saveSelectOptionSelectedValue")
-                
+
                 if option:
-                    result_msg = f"Successfully updated {column_name} for '{company_name}' to '{option.get('value', new_value_label)}'."
+                    option_value = option.get("selectOption", {}).get("value", new_value_label)
+                    result_msg = f"Successfully updated {column_name} for '{company_name}' to '{option_value}'."
                     change = DataChange(
                         entity_type=EntityType.COMPANY,
                         action=ChangeAction.UPDATED,
@@ -943,12 +945,12 @@ def get_update_tools(context: ToolContext) -> list:
                 mutation SaveSelectOptionValue($input: SelectOptionValueModel!) {
                     saveSelectOptionSelectedValue(selectOptionValueModel: $input) {
                         id
-                        value
-                        color
+                        selectOptionId
+                        selectOption { id value color }
                     }
                 }
                 """
-                
+
                 result = await client.mutate(mutation, {
                     "input": {
                         "columnId": column_id,
@@ -956,11 +958,12 @@ def get_update_tools(context: ToolContext) -> list:
                         "selectOptionId": select_option_id,
                     }
                 })
-                
+
                 option = result.get("saveSelectOptionSelectedValue")
-                
+
                 if option:
-                    result_msg = f"Successfully updated {column_name} for '{person_name}' to '{option.get('value', new_value_label)}'."
+                    option_value = option.get("selectOption", {}).get("value", new_value_label)
+                    result_msg = f"Successfully updated {column_name} for '{person_name}' to '{option_value}'."
                     change = DataChange(
                         entity_type=EntityType.PERSON,
                         action=ChangeAction.UPDATED,
@@ -1010,6 +1013,444 @@ def get_update_tools(context: ToolContext) -> list:
         finally:
             await client.close()
 
+    @tool
+    async def update_person_status(
+        person_name: str,
+        group_name: str,
+        new_status: str,
+    ) -> str:
+        """Update a person's status in a group - simplified tool for status changes.
+
+        This is a convenience tool that handles the entire status update flow:
+        1. Finds the person by name
+        2. Finds the group by name
+        3. Finds the Status column and matches the new status value
+        4. Asks for confirmation
+        5. Applies the update
+
+        Use this tool when the user wants to change someone's status, like:
+        - "Move John to Lead status in Recruiters"
+        - "Change Sarah's status to Qualified in Sales Pipeline"
+        - "Update Chen Reddy to Closed-Won in Deals"
+
+        Args:
+            person_name: Name of the person (handles typos and partial matches)
+            group_name: Name of the group (handles typos and partial matches)
+            new_status: The new status value (e.g., "Lead", "Qualified", "Closed")
+
+        Returns:
+            Success message or error
+        """
+        from src.tools.base import fuzzy_match_entities
+
+        client = context.get_client()
+
+        # Variables to hold resolved data
+        person_id = None
+        resolved_person_name = None
+        group_id = None
+        resolved_group_name = None
+        status_column = None
+        option_id = None
+        option_value = None
+        option_color = None
+        current_value = None
+        current_color = None
+
+        # Step 1-5: Lookup and resolve all entities (in try block)
+        try:
+            # Step 1: Find the person using search API
+            search_query = """
+            query Search($workspaceId: String!, $query: String, $type: String, $size: Int) {
+                search(workspaceId: $workspaceId, query: $query, type: $type, size: $size) {
+                    hits { id name score }
+                }
+            }
+            """
+
+            person_result = await client.query(search_query, {
+                "workspaceId": context.workspace_id,
+                "query": person_name,
+                "type": "person",
+                "size": 10,
+            })
+
+            people = person_result.get("search", {}).get("hits", [])
+            if not people:
+                await client.close()
+                return f"Could not find any person matching '{person_name}'."
+
+            # Fuzzy match to find best person
+            person_matches = fuzzy_match_entities(person_name, people, name_key="name", threshold=50.0, limit=3)
+            if not person_matches:
+                await client.close()
+                return f"Could not find a person matching '{person_name}'."
+
+            # Auto-select best match (disambiguation handled separately if needed)
+            person = person_matches[0][0]
+            person_id = person["id"]
+            resolved_person_name = person["name"]
+
+            # Step 2: Find the group
+            groups_query = """
+            query GetGroups($workspaceId: String!) {
+                getGroups(workspaceId: $workspaceId) {
+                    id
+                    name
+                    emoji
+                    peopleColumns { id name dataType type }
+                }
+            }
+            """
+
+            groups_result = await client.query(groups_query, {"workspaceId": context.workspace_id})
+            groups = groups_result.get("getGroups", [])
+
+            if not groups:
+                await client.close()
+                return "No groups found in this workspace."
+
+            # Fuzzy match to find best group
+            group_matches = fuzzy_match_entities(group_name, groups, name_key="name", threshold=50.0, limit=3)
+            if not group_matches:
+                available = [f"{g.get('emoji', '')} {g['name']}".strip() for g in groups[:5]]
+                await client.close()
+                return f"Could not find a group matching '{group_name}'. Available: {', '.join(available)}"
+
+            group = group_matches[0][0]
+            group_id = group["id"]
+            resolved_group_name = f"{group.get('emoji', '')} {group['name']}".strip()
+
+            # Step 3: Find the Status column
+            columns = group.get("peopleColumns", [])
+            for col in columns:
+                if col["name"].lower() == "status" and col["dataType"] in ["SELECT", "MULTISELECT"]:
+                    status_column = col
+                    break
+
+            if not status_column:
+                for col in columns:
+                    if "status" in col["name"].lower() and col["dataType"] in ["SELECT", "MULTISELECT"]:
+                        status_column = col
+                        break
+
+            if not status_column:
+                col_names = [c["name"] for c in columns if c["dataType"] in ["SELECT", "MULTISELECT"]]
+                await client.close()
+                return f"No Status column found in group '{resolved_group_name}'. Available select columns: {', '.join(col_names) or 'None'}"
+
+            # Step 4: Get status options and find matching option
+            options_query = """
+            query GetSelectOptions($columnId: String!) {
+                getSelectOptionsByColumnId(columnId: $columnId) { id value color order }
+            }
+            """
+
+            options_result = await client.query(options_query, {"columnId": status_column["id"]})
+            options = options_result.get("getSelectOptionsByColumnId", [])
+
+            if not options:
+                await client.close()
+                return f"No status options found for the Status column."
+
+            # Fuzzy match the status value
+            status_matches = fuzzy_match_entities(new_status, options, name_key="value", threshold=50.0, limit=3)
+            if not status_matches:
+                available = [opt["value"] for opt in options]
+                await client.close()
+                return f"Could not match status '{new_status}'. Available options: {', '.join(available)}"
+
+            selected_option = status_matches[0][0]
+            option_id = selected_option["id"]
+            option_value = selected_option["value"]
+            option_color = selected_option.get("color")
+
+            # Step 5: Get current value for confirmation display
+            current_value, current_color = await _get_current_select_option_value(
+                client, status_column["id"], person_id=person_id
+            )
+
+        except Exception as e:
+            logger.error(f"Error looking up person status data: {e}")
+            await client.close()
+            return f"Error looking up data: {str(e)}"
+
+        # Step 6: Request confirmation (OUTSIDE try block so interrupt propagates)
+        confirmation = request_column_update_confirmation(
+            entity_type="person",
+            entity_name=resolved_person_name,
+            column_name="Status",
+            current_value=current_value,
+            new_value=option_value,
+            group_name=resolved_group_name,
+            current_value_color=current_color,
+            new_value_color=option_color,
+        )
+
+        if not confirmation.confirmed:
+            await client.close()
+            feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
+            return f"Status update cancelled.{feedback}"
+
+        # Step 7: Apply the update (in try block)
+        try:
+            mutation = """
+            mutation SaveSelectOptionValue($input: SelectOptionValueModel!) {
+                saveSelectOptionSelectedValue(selectOptionValueModel: $input) {
+                    id
+                    selectOptionId
+                    selectOption { id value color }
+                }
+            }
+            """
+
+            result = await client.mutate(mutation, {
+                "input": {
+                    "columnId": status_column["id"],
+                    "peopleId": person_id,
+                    "selectOptionId": option_id,
+                }
+            })
+
+            saved = result.get("saveSelectOptionSelectedValue")
+            if saved:
+                saved_value = saved.get("selectOption", {}).get("value", option_value)
+                result_msg = f"Successfully updated status for '{resolved_person_name}' to '{saved_value}' in {resolved_group_name}."
+                change = DataChange(
+                    entity_type=EntityType.PERSON,
+                    action=ChangeAction.UPDATED,
+                    entity_id=person_id,
+                    group_id=group_id,
+                )
+                return result_msg + change.to_marker()
+            else:
+                return "Failed to update status - no data returned."
+
+        except Exception as e:
+            logger.error(f"Error updating person status: {e}")
+            return f"Error updating person status: {str(e)}"
+        finally:
+            await client.close()
+
+    @tool
+    async def update_company_status(
+        company_name: str,
+        group_name: str,
+        new_status: str,
+    ) -> str:
+        """Update a company's status in a group - simplified tool for status changes.
+
+        This is a convenience tool that handles the entire status update flow:
+        1. Finds the company by name
+        2. Finds the group by name
+        3. Finds the Status column and matches the new status value
+        4. Asks for confirmation
+        5. Applies the update
+
+        Use this tool when the user wants to change a company's status, like:
+        - "Move Acme Corp to Lead status in Sales Pipeline"
+        - "Change Google's status to Qualified in Prospects"
+        - "Update Microsoft to Partner in Companies"
+
+        Args:
+            company_name: Name of the company (handles typos and partial matches)
+            group_name: Name of the group (handles typos and partial matches)
+            new_status: The new status value (e.g., "Lead", "Qualified", "Closed")
+
+        Returns:
+            Success message or error
+        """
+        from src.tools.base import fuzzy_match_entities
+
+        client = context.get_client()
+
+        # Variables to hold resolved data
+        company_id = None
+        resolved_company_name = None
+        group_id = None
+        resolved_group_name = None
+        status_column = None
+        option_id = None
+        option_value = None
+        option_color = None
+        current_value = None
+        current_color = None
+
+        # Step 1-5: Lookup and resolve all entities (in try block)
+        try:
+            # Step 1: Find the company using search API
+            search_query = """
+            query Search($workspaceId: String!, $query: String, $type: String, $size: Int) {
+                search(workspaceId: $workspaceId, query: $query, type: $type, size: $size) {
+                    hits { id name score }
+                }
+            }
+            """
+
+            company_result = await client.query(search_query, {
+                "workspaceId": context.workspace_id,
+                "query": company_name,
+                "type": "company",
+                "size": 10,
+            })
+
+            companies = company_result.get("search", {}).get("hits", [])
+            if not companies:
+                await client.close()
+                return f"Could not find any company matching '{company_name}'."
+
+            # Fuzzy match to find best company
+            company_matches = fuzzy_match_entities(company_name, companies, name_key="name", threshold=50.0, limit=3)
+            if not company_matches:
+                await client.close()
+                return f"Could not find a company matching '{company_name}'."
+
+            # Auto-select best match
+            company = company_matches[0][0]
+            company_id = company["id"]
+            resolved_company_name = company["name"]
+
+            # Step 2: Find the group
+            groups_query = """
+            query GetGroups($workspaceId: String!) {
+                getGroups(workspaceId: $workspaceId) {
+                    id
+                    name
+                    emoji
+                    companyColumns { id name dataType type }
+                }
+            }
+            """
+
+            groups_result = await client.query(groups_query, {"workspaceId": context.workspace_id})
+            groups = groups_result.get("getGroups", [])
+
+            if not groups:
+                await client.close()
+                return "No groups found in this workspace."
+
+            # Fuzzy match to find best group
+            group_matches = fuzzy_match_entities(group_name, groups, name_key="name", threshold=50.0, limit=3)
+            if not group_matches:
+                available = [f"{g.get('emoji', '')} {g['name']}".strip() for g in groups[:5]]
+                await client.close()
+                return f"Could not find a group matching '{group_name}'. Available: {', '.join(available)}"
+
+            group = group_matches[0][0]
+            group_id = group["id"]
+            resolved_group_name = f"{group.get('emoji', '')} {group['name']}".strip()
+
+            # Step 3: Find the Status column
+            columns = group.get("companyColumns", [])
+            for col in columns:
+                if col["name"].lower() == "status" and col["dataType"] in ["SELECT", "MULTISELECT"]:
+                    status_column = col
+                    break
+
+            if not status_column:
+                for col in columns:
+                    if "status" in col["name"].lower() and col["dataType"] in ["SELECT", "MULTISELECT"]:
+                        status_column = col
+                        break
+
+            if not status_column:
+                col_names = [c["name"] for c in columns if c["dataType"] in ["SELECT", "MULTISELECT"]]
+                await client.close()
+                return f"No Status column found in group '{resolved_group_name}'. Available select columns: {', '.join(col_names) or 'None'}"
+
+            # Step 4: Get status options and find matching option
+            options_query = """
+            query GetSelectOptions($columnId: String!) {
+                getSelectOptionsByColumnId(columnId: $columnId) { id value color order }
+            }
+            """
+
+            options_result = await client.query(options_query, {"columnId": status_column["id"]})
+            options = options_result.get("getSelectOptionsByColumnId", [])
+
+            if not options:
+                await client.close()
+                return f"No status options found for the Status column."
+
+            # Fuzzy match the status value
+            status_matches = fuzzy_match_entities(new_status, options, name_key="value", threshold=50.0, limit=3)
+            if not status_matches:
+                available = [opt["value"] for opt in options]
+                await client.close()
+                return f"Could not match status '{new_status}'. Available options: {', '.join(available)}"
+
+            selected_option = status_matches[0][0]
+            option_id = selected_option["id"]
+            option_value = selected_option["value"]
+            option_color = selected_option.get("color")
+
+            # Step 5: Get current value for confirmation display
+            current_value, current_color = await _get_current_select_option_value(
+                client, status_column["id"], company_id=company_id
+            )
+
+        except Exception as e:
+            logger.error(f"Error looking up company status data: {e}")
+            await client.close()
+            return f"Error looking up data: {str(e)}"
+
+        # Step 6: Request confirmation (OUTSIDE try block so interrupt propagates)
+        confirmation = request_column_update_confirmation(
+            entity_type="company",
+            entity_name=resolved_company_name,
+            column_name="Status",
+            current_value=current_value,
+            new_value=option_value,
+            group_name=resolved_group_name,
+            current_value_color=current_color,
+            new_value_color=option_color,
+        )
+
+        if not confirmation.confirmed:
+            await client.close()
+            feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
+            return f"Status update cancelled.{feedback}"
+
+        # Step 7: Apply the update (in try block)
+        try:
+            mutation = """
+            mutation SaveSelectOptionValue($input: SelectOptionValueModel!) {
+                saveSelectOptionSelectedValue(selectOptionValueModel: $input) {
+                    id
+                    selectOptionId
+                    selectOption { id value color }
+                }
+            }
+            """
+
+            result = await client.mutate(mutation, {
+                "input": {
+                    "columnId": status_column["id"],
+                    "companyId": company_id,
+                    "selectOptionId": option_id,
+                }
+            })
+
+            saved = result.get("saveSelectOptionSelectedValue")
+            if saved:
+                saved_value = saved.get("selectOption", {}).get("value", option_value)
+                result_msg = f"Successfully updated status for '{resolved_company_name}' to '{saved_value}' in {resolved_group_name}."
+                change = DataChange(
+                    entity_type=EntityType.COMPANY,
+                    action=ChangeAction.UPDATED,
+                    entity_id=company_id,
+                    group_id=group_id,
+                )
+                return result_msg + change.to_marker()
+            else:
+                return "Failed to update status - no data returned."
+
+        except Exception as e:
+            logger.error(f"Error updating company status: {e}")
+            return f"Error updating company status: {str(e)}"
+        finally:
+            await client.close()
+
     return [
         # Group membership tools
         add_company_to_group,
@@ -1026,5 +1467,8 @@ def get_update_tools(context: ToolContext) -> list:
         # Group column value update tools
         update_company_column_value,
         update_person_column_value,
+        # Simplified status update tools
+        update_person_status,
+        update_company_status,
     ]
 

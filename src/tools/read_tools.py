@@ -894,141 +894,94 @@ def get_read_tools(context: ToolContext) -> list:
     @tool
     async def resolve_company_name(name: str) -> str:
         """Resolve a company name (even with typos) to get its ID for use in other operations.
-        
-        USE THIS TOOL FIRST when user mentions a company by name before performing any 
+
+        USE THIS TOOL FIRST when user mentions a company by name before performing any
         operations that require a company ID. This tool handles:
         - Typos (e.g., "Gogle" → "Google")
         - Partial names (e.g., "Acme" → "Acme Corporation")
         - Case differences (e.g., "APPLE" → "Apple Inc.")
-        
+        - Multi-word names (e.g., "Acme Corp" searches both parts if full name fails)
+
         When multiple matches are found with similar confidence, the user will be asked
         to select the correct company.
-        
+
         Args:
             name: The company name (can include typos or be partial)
-            
+
         Returns:
             The company ID and details, or asks user to select if ambiguous
         """
         client = context.get_client()
-        
-        # First try the autocomplete API (uses Elasticsearch)
-        gql_query = """
-        query Autocomplete(
+
+        # Use the search API (Elasticsearch-backed)
+        search_query = """
+        query Search(
             $workspaceId: String!
-            $query: String!
-            $types: [String!]
+            $query: String
+            $type: String
             $size: Int
         ) {
-            autocomplete(
+            search(
                 workspaceId: $workspaceId
                 query: $query
-                types: $types
+                type: $type
                 size: $size
             ) {
-                id
-                text
-                type
-                score
+                hits {
+                    id
+                    name
+                    score
+                }
             }
         }
         """
-        
-        autocomplete_results = []
+
         try:
-            result = await client.query(gql_query, {
+            # First, try searching with the full name
+            result = await client.query(search_query, {
                 "workspaceId": context.workspace_id,
                 "query": name,
-                "types": ["company"],
-                "size": 10,
+                "type": "company",
+                "size": 20,
             })
-            autocomplete_results = result.get("autocomplete", [])
-        except Exception as e:
-            # Autocomplete may fail (e.g., Elasticsearch index not found), continue to fallback
-            logger.warning(f"Autocomplete failed, falling back to direct query: {e}")
-        
-        try:
-            if autocomplete_results:
-                # Convert to format for fuzzy matching
-                companies = [{"id": r["id"], "name": r["text"]} for r in autocomplete_results]
 
+            companies = result.get("search", {}).get("hits", [])
+
+            # If full name search yields no results, try searching each name part separately
+            if not companies:
+                name_parts = name.strip().split()
+                if len(name_parts) > 1:
+                    logger.info(f"Full name search for '{name}' returned 0 results, trying individual parts: {name_parts}")
+                    combined_results = {}  # Use dict for deduplication by ID
+
+                    for part in name_parts:
+                        if len(part) < 2:  # Skip single-character parts
+                            continue
+                        part_result = await client.query(search_query, {
+                            "workspaceId": context.workspace_id,
+                            "query": part,
+                            "type": "company",
+                            "size": 20,
+                        })
+                        part_hits = part_result.get("search", {}).get("hits", [])
+                        for hit in part_hits:
+                            if hit.get("id") and hit["id"] not in combined_results:
+                                combined_results[hit["id"]] = hit
+
+                    companies = list(combined_results.values())
+                    if companies:
+                        logger.info(f"Split-name search found {len(companies)} candidates")
+
+            if companies:
                 # Apply fuzzy matching for better results
                 matches = fuzzy_match_entities(name, companies, name_key="name", threshold=50.0, limit=5)
 
-                # Only use ES results if we have a reasonably good match (score >= 70)
-                # Otherwise fall through to database query which is more reliable
-                if matches and matches[0][1] >= 70:
-                    # Check if we have a single unambiguous match
-                    top_score = matches[0][1]
-                    second_score = matches[1][1] if len(matches) > 1 else 0
-                    score_gap = top_score - second_score
-
-                    if len(matches) == 1 or score_gap >= 15:
-                        # Single match or clear winner - proceed without asking
-                        company = matches[0][0]
-                        return f"RESOLVED: Company '{company['name']}' has ID: {company['id']}"
-                    else:
-                        # Multiple matches with similar scores - ask user to select
-                        response = request_entity_selection(
-                            entity_type="company",
-                            name_query=name,
-                            matches=matches,
-                            name_key="name",
-                        )
-
-                        if response.confirmed and response.selected_id:
-                            # Find the selected company's name
-                            selected = next((m[0] for m in matches if m[0]["id"] == response.selected_id), None)
-                            selected_name = selected["name"] if selected else "Unknown"
-                            return f"RESOLVED: Company '{selected_name}' has ID: {response.selected_id}"
-                        else:
-                            feedback = f" User feedback: {response.feedback}" if response.feedback else ""
-                            return f"User cancelled company selection.{feedback}"
-
-                # ES results weren't good enough, fall through to database query
-                logger.info(f"Autocomplete results for '{name}' had low confidence, trying database query")
-
-            # Fallback: try searching companies directly from database
-            list_query = """
-            query GetWorkspaceCompany(
-                $workspaceId: ID!
-                $userId: ID!
-                $limit: Int
-                $search: String
-            ) {
-                getWorkspaceCompany(
-                    workspaceId: $workspaceId
-                    userId: $userId
-                    limit: $limit
-                    search: $search
-                ) {
-                    data {
-                        id
-                        name
-                        description
-                    }
-                }
-            }
-            """
-
-            result = await client.query(list_query, {
-                "workspaceId": context.workspace_id,
-                "userId": context.user_id,
-                "limit": 50,
-                "search": name,  # Use the name as search query!
-            })
-            
-            companies = result.get("getWorkspaceCompany", {}).get("data", [])
-            
-            if companies:
-                matches = fuzzy_match_entities(name, companies, name_key="name", threshold=50.0, limit=5)
-                
                 if matches:
                     # Check if we have a single unambiguous match
                     top_score = matches[0][1]
                     second_score = matches[1][1] if len(matches) > 1 else 0
                     score_gap = top_score - second_score
-                    
+
                     if len(matches) == 1 or score_gap >= 15:
                         # Single match or clear winner - proceed without asking
                         company = matches[0][0]
@@ -1041,7 +994,7 @@ def get_read_tools(context: ToolContext) -> list:
                             matches=matches,
                             name_key="name",
                         )
-                        
+
                         if response.confirmed and response.selected_id:
                             selected = next((m[0] for m in matches if m[0]["id"] == response.selected_id), None)
                             selected_name = selected["name"] if selected else "Unknown"
@@ -1049,9 +1002,9 @@ def get_read_tools(context: ToolContext) -> list:
                         else:
                             feedback = f" User feedback: {response.feedback}" if response.feedback else ""
                             return f"User cancelled company selection.{feedback}"
-            
+
             return f"Could not find any company matching '{name}'. Please check the spelling or list all companies to see available options."
-            
+
         except Exception as e:
             logger.error(f"Error resolving company name: {e}")
             return f"Error resolving company name: {str(e)}"
@@ -1061,74 +1014,91 @@ def get_read_tools(context: ToolContext) -> list:
     @tool
     async def resolve_person_name(name: str) -> str:
         """Resolve a person's name (even with typos) to get their ID for use in other operations.
-        
-        USE THIS TOOL FIRST when user mentions a person by name before performing any 
+
+        USE THIS TOOL FIRST when user mentions a person by name before performing any
         operations that require a person ID. This tool handles:
         - Typos (e.g., "Jonh" → "John")
         - Partial names (e.g., "John" → "John Smith")
         - Name reordering (e.g., "Smith John" → "John Smith")
-        
+        - Full name searches (e.g., "Chen Reddy" searches both parts if full name fails)
+
         When multiple matches are found with similar confidence, the user will be asked
         to select the correct person.
-        
+
         Args:
             name: The person's name (can include typos, be partial, or in different order)
-            
+
         Returns:
             The person ID and details, or asks user to select if ambiguous
         """
         client = context.get_client()
-        
-        # First try the autocomplete API (uses Elasticsearch)
-        gql_query = """
-        query Autocomplete(
+
+        # Use the search API (Elasticsearch-backed)
+        search_query = """
+        query Search(
             $workspaceId: String!
-            $query: String!
-            $types: [String!]
+            $query: String
+            $type: String
             $size: Int
         ) {
-            autocomplete(
+            search(
                 workspaceId: $workspaceId
                 query: $query
-                types: $types
+                type: $type
                 size: $size
             ) {
-                id
-                text
-                type
-                score
+                hits {
+                    id
+                    name
+                    jobTitle
+                    score
+                }
             }
         }
         """
-        
-        autocomplete_results = []
+
         try:
-            result = await client.query(gql_query, {
+            # First, try searching with the full name
+            result = await client.query(search_query, {
                 "workspaceId": context.workspace_id,
                 "query": name,
-                "types": ["person"],
-                "size": 10,
+                "type": "person",
+                "size": 20,
             })
-            autocomplete_results = result.get("autocomplete", [])
-        except Exception as e:
-            # Autocomplete may fail (e.g., Elasticsearch index not found), continue to fallback
-            logger.warning(f"Autocomplete failed, falling back to direct query: {e}")
-        
-        try:
-            if autocomplete_results:
-                # Convert to format for fuzzy matching
-                people = [{"id": r["id"], "name": r["text"]} for r in autocomplete_results]
 
-                # Apply fuzzy matching
+            people = result.get("search", {}).get("hits", [])
+
+            # If full name search yields no results, try searching each name part separately
+            if not people:
+                name_parts = name.strip().split()
+                if len(name_parts) > 1:
+                    logger.info(f"Full name search for '{name}' returned 0 results, trying individual parts: {name_parts}")
+                    combined_results = {}  # Use dict for deduplication by ID
+
+                    for part in name_parts:
+                        if len(part) < 2:  # Skip single-character parts
+                            continue
+                        part_result = await client.query(search_query, {
+                            "workspaceId": context.workspace_id,
+                            "query": part,
+                            "type": "person",
+                            "size": 20,
+                        })
+                        part_hits = part_result.get("search", {}).get("hits", [])
+                        for hit in part_hits:
+                            if hit.get("id") and hit["id"] not in combined_results:
+                                combined_results[hit["id"]] = hit
+
+                    people = list(combined_results.values())
+                    if people:
+                        logger.info(f"Split-name search found {len(people)} candidates")
+
+            if people:
+                # Apply fuzzy matching for better results
                 matches = fuzzy_match_entities(name, people, name_key="name", threshold=50.0, limit=5)
 
-                # Only use ES results if we have a reasonably good match (score >= 70)
-                # Otherwise fall through to database query which is more reliable
-                if matches and matches[0][1] >= 70:
+                if matches:
                     # Check if we have a single unambiguous match
-                    # Only skip confirmation if:
-                    # 1. There's exactly one match, OR
-                    # 2. Top match is significantly better than second match (15+ point gap)
                     top_score = matches[0][1]
                     second_score = matches[1][1] if len(matches) > 1 else 0
                     score_gap = top_score - second_score
@@ -1154,79 +1124,8 @@ def get_read_tools(context: ToolContext) -> list:
                             feedback = f" User feedback: {response.feedback}" if response.feedback else ""
                             return f"User cancelled person selection.{feedback}"
 
-                # ES results weren't good enough, fall through to database query
-                logger.info(f"Autocomplete results for '{name}' had low confidence, trying database query")
-            
-            # Fallback: try searching people directly from database
-            list_query = """
-            query GetWorkspacePeople(
-                $workspaceId: ID!
-                $userId: ID!
-                $limit: Int
-                $search: String
-            ) {
-                getWorkspacePeople(
-                    workspaceId: $workspaceId
-                    userId: $userId
-                    limit: $limit
-                    search: $search
-                ) {
-                    data {
-                        id
-                        firstName
-                        lastName
-                        jobTitle
-                    }
-                }
-            }
-            """
-
-            result = await client.query(list_query, {
-                "workspaceId": context.workspace_id,
-                "userId": context.user_id,
-                "limit": 50,
-                "search": name,  # Use the name as search query!
-            })
-            
-            people = result.get("getWorkspacePeople", {}).get("data", [])
-            
-            if people:
-                # Use fullName key for combined first+last matching
-                matches = fuzzy_match_entities(name, people, name_key="fullName", threshold=50.0, limit=5)
-                
-                if matches:
-                    # Check if we have a single unambiguous match
-                    top_score = matches[0][1]
-                    second_score = matches[1][1] if len(matches) > 1 else 0
-                    score_gap = top_score - second_score
-                    
-                    if len(matches) == 1 or score_gap >= 15:
-                        # Single match or clear winner - proceed without asking
-                        person = matches[0][0]
-                        full_name = f"{person.get('firstName', '')} {person.get('lastName', '')}".strip()
-                        return f"RESOLVED: Person '{full_name}' has ID: {person['id']}"
-                    else:
-                        # Multiple matches with similar scores - ask user to select
-                        response = request_entity_selection(
-                            entity_type="person",
-                            name_query=name,
-                            matches=matches,
-                            name_key="fullName",
-                        )
-                        
-                        if response.confirmed and response.selected_id:
-                            selected = next((m[0] for m in matches if m[0]["id"] == response.selected_id), None)
-                            if selected:
-                                selected_name = f"{selected.get('firstName', '')} {selected.get('lastName', '')}".strip()
-                            else:
-                                selected_name = "Unknown"
-                            return f"RESOLVED: Person '{selected_name}' has ID: {response.selected_id}"
-                        else:
-                            feedback = f" User feedback: {response.feedback}" if response.feedback else ""
-                            return f"User cancelled person selection.{feedback}"
-            
             return f"Could not find any person matching '{name}'. Please check the spelling or list all people to see available options."
-            
+
         except Exception as e:
             logger.error(f"Error resolving person name: {e}")
             return f"Error resolving person name: {str(e)}"

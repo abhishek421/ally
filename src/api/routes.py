@@ -20,13 +20,13 @@ router = APIRouter()
 
 async def resolve_database_user_id(auth: AuthContext) -> str:
     """Resolve the Cognito sub to the actual database user ID.
-    
+
     The JWT token contains a Cognito sub, but the backend database uses
     its own user IDs. This function calls the backend to get the real ID.
-    
+
     Args:
         auth: Auth context from the request
-        
+
     Returns:
         The database user ID
     """
@@ -34,10 +34,9 @@ async def resolve_database_user_id(auth: AuthContext) -> str:
     try:
         db_user_id = await client.get_current_user_id()
         if db_user_id:
-            logger.debug(f"Resolved user ID: {auth.user_id} -> {db_user_id}")
             return db_user_id
         else:
-            logger.warning(f"Could not resolve database user ID, using JWT sub: {auth.user_id}")
+            logger.warning(f"Could not resolve database user ID, using JWT sub")
             return auth.user_id
     except Exception as e:
         logger.error(f"Error resolving database user ID: {e}")
@@ -127,11 +126,10 @@ async def chat(
     """
     # Resolve the database user ID upfront (JWT contains Cognito sub, not DB ID)
     db_user_id = await resolve_database_user_id(auth)
-    
-    logger.info(
-        f"Chat request - conversation: {request.conversation_id}, "
-        f"user: {db_user_id}, workspace: {auth.workspace_id}"
-    )
+
+    # Log the incoming query in a clean format
+    query_preview = request.message[:80] + "..." if len(request.message) > 80 else request.message
+    logger.info(f"📩 QUERY: \"{query_preview}\"")
     
     # Create tool context with the resolved database user ID
     context = ToolContext(
@@ -221,11 +219,6 @@ async def confirm_action(
     """
     # Resolve the database user ID upfront
     db_user_id = await resolve_database_user_id(auth)
-    
-    logger.info(
-        f"Confirmation request - conversation: {request.conversation_id}, "
-        f"confirmed: {request.confirmed}, user: {db_user_id}"
-    )
     
     # Create tool context
     context = ToolContext(
