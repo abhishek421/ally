@@ -23,4 +23,7 @@ class AgentState(TypedDict):
     
     # Auth token for GraphQL calls
     auth_token: str
+    
+    # Active URL context from frontend
+    activeURL: str | None
 

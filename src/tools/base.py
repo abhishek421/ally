@@ -240,6 +240,7 @@ class ToolContext:
     workspace_id: str
     user_id: str  # Database user ID (resolved from Cognito sub at API layer)
     session_id: str = ""
+    activeURL: str | None = None  # Current active URL from frontend
     
     def get_client(self) -> GraphQLClient:
         """Get a GraphQL client with the current context."""

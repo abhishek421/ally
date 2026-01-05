@@ -4,8 +4,8 @@ import json
 import logging
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from pydantic import BaseModel, Field, ConfigDict
 from sse_starlette.sse import EventSourceResponse
 
 from src.api.middleware import AuthContext, get_current_user
@@ -48,8 +48,11 @@ async def resolve_database_user_id(auth: AuthContext) -> str:
 class ChatRequest(BaseModel):
     """Request body for the chat endpoint."""
     
+    model_config = ConfigDict(populate_by_name=True)  # Allow both activeURL and active_url
+    
     conversation_id: str = Field(..., description="ID of the conversation thread")
     message: str = Field(..., min_length=1, description="User message to send")
+    activeURL: str | None = Field(None, description="Current active URL from the frontend")
 
 
 class ChatResponse(BaseModel):
@@ -63,6 +66,7 @@ async def event_generator(
     context: ToolContext,
     message: str,
     conversation_id: str,
+    activeURL: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Generate SSE events from the agent stream.
     
@@ -70,12 +74,13 @@ async def event_generator(
         context: Tool context with auth and workspace info
         message: User message
         conversation_id: Conversation thread ID
+        activeURL: Current active URL from frontend
         
     Yields:
         SSE event dictionaries
     """
     try:
-        async for event in stream_agent(context, message, conversation_id):
+       async for event in stream_agent(context, message, conversation_id, activeURL):
             event_type = event.get("type", "unknown")
             event_data = event.get("data", {})
             
@@ -98,7 +103,7 @@ async def event_generator(
 
 @router.post("/chat")
 async def chat(
-    request: ChatRequest,
+    raw_request: Request,
     auth: AuthContext = Depends(get_current_user),
 ):
     """Stream a chat response from Ally.
@@ -124,6 +129,27 @@ async def chat(
     - `error` - Error message if something went wrong
     - `done` - Stream completion signal
     """
+    # DEBUG: Log immediately when endpoint is hit
+    
+    # Parse request body manually to ensure we get activeURL
+    import json
+    body_bytes = await raw_request.body()
+    body_dict = json.loads(body_bytes.decode()) if body_bytes else {}
+    
+    # Parse with Pydantic
+    try:
+        request = ChatRequest(**body_dict)
+    except Exception as e:
+        request = ChatRequest(
+            conversation_id=body_dict.get('conversation_id', ''),
+            message=body_dict.get('message', ''),
+            activeURL=body_dict.get('activeURL') or body_dict.get('active_url')
+        )
+    
+    # MANUAL OVERRIDE: Always use activeURL from raw body if it exists
+    active_url_from_body = body_dict.get('activeURL') or body_dict.get('active_url')
+    if active_url_from_body:
+        request.activeURL = active_url_from_body
     # Resolve the database user ID upfront (JWT contains Cognito sub, not DB ID)
     db_user_id = await resolve_database_user_id(auth)
 
@@ -131,16 +157,24 @@ async def chat(
     query_preview = request.message[:80] + "..." if len(request.message) > 80 else request.message
     logger.info(f"📩 QUERY: \"{query_preview}\"")
     
+    # Log final activeURL value
+    active_url_value = request.activeURL
+    if active_url_value:
+        logger.info(f"🌐 [API] ✅ FINAL ACTIVE URL: {active_url_value}")
+    else:
+        logger.warning("⚠️  [API] ❌ FINAL ACTIVE URL: None/Empty")
+    
     # Create tool context with the resolved database user ID
     context = ToolContext(
         auth_token=auth.auth_token,
         workspace_id=auth.workspace_id,
         user_id=db_user_id,
         session_id=auth.session_id,
+        activeURL=active_url_value,  # Use the fallback value
     )
     
     return EventSourceResponse(
-        event_generator(context, request.message, request.conversation_id),
+        event_generator(context, request.message, request.conversation_id, request.activeURL),
         media_type="text/event-stream",
     )
 

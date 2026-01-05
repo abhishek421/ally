@@ -240,6 +240,7 @@ async def stream_agent(
     context: ToolContext,
     message: str,
     conversation_id: str,
+    activeURL: str | None = None,
 ):
     """Stream agent response for a message.
 
@@ -254,6 +255,7 @@ async def stream_agent(
         context: Tool context with auth and workspace info
         message: User message
         conversation_id: Conversation thread ID
+        activeURL: Current active URL from frontend
 
     Yields:
         Event dictionaries with type and data
@@ -269,12 +271,91 @@ async def stream_agent(
     # Track tool calls for summary logging
     tool_calls_summary = []
 
+    # DIRECT INTERCEPTION: Handle location questions immediately if we have activeURL
+    # message_lower = message.lower().strip()
+    
+    if is_location_question and activeURL:
+        # Yield the response directly
+        yield {
+            "type": "response",
+            "data": {
+                "content": f"You are on `{activeURL}`",
+            },
+        }
+        yield {"type": "done", "data": {}}
+        return  # Exit early, don't process through LLM
+
+    # Prepare messages with activeURL context
+    messages_with_context = []
+    
+    # Add system message with activeURL context if available
+    if activeURL:
+        # Parse URL to extract useful information
+        url_parts = activeURL.split('/')
+        group_id = None
+        view_id = None
+        view_type = None
+        
+        # Try to extract groupId and viewId from URL pattern: /apps/groups/{groupId}/pipeline|table/{viewId}
+        if '/apps/groups/' in activeURL:
+            try:
+                groups_idx = url_parts.index('groups')
+                if len(url_parts) > groups_idx + 1:
+                    group_id = url_parts[groups_idx + 1]
+                if len(url_parts) > groups_idx + 3:
+                    view_type = url_parts[groups_idx + 2]  # 'pipeline' or 'table'
+                    view_id = url_parts[groups_idx + 3]
+            except (ValueError, IndexError):
+                pass
+        
+        context_message = f"""🚨 CRITICAL: ACTIVE URL CONTEXT 🚨
+
+The user is currently viewing this page: {activeURL}
+
+**YOU MUST USE THIS URL TO ANSWER LOCATION QUESTIONS**
+
+When the user asks:
+- "what page am I on?"
+- "where am I?"
+- "which page am I on?"
+- "what page are we on?"
+
+**YOU MUST RESPOND WITH THE ACTIVE URL ABOVE: {activeURL}**
+
+**URL Breakdown:**
+- Full URL: {activeURL}
+{f"- Group ID: {group_id}" if group_id else ""}
+{f"- View Type: {view_type}" if view_type else ""}
+{f"- View ID: {view_id}" if view_id else ""}
+
+**How to Use This Context:**
+1. **For location questions**: Directly tell the user they are on: {activeURL}
+2. **For "this group" references**: If groupId is present ({group_id if group_id else "N/A"}), use it automatically
+3. **For context-aware actions**: Extract groupId/viewId from the URL to understand the user's context
+
+**IMPORTANT**: If the user asks about their location or current page, you MUST use the activeURL provided above. Do NOT say "I don't know" or "I can't see your screen" - you have the URL context!"""
+        
+        # logger.info(f"📝 [AGENT] Adding system message with activeURL context: {activeURL}")
+        messages_with_context.append({
+            "role": "system",
+            "content": context_message
+        })
+    # Add user message
+    messages_with_context.append({"role": "user", "content": message})
+
+    # Build initial state with all required fields
+    initial_state = {
+        "messages": messages_with_context,
+        "workspace_id": context.workspace_id,
+        "user_id": context.user_id,
+        "auth_token": context.auth_token,
+        "activeURL": activeURL,
+    }
+
     try:
         # Stream using updates mode to get step-by-step progress
         async for chunk in agent.astream(
-            {
-                "messages": [{"role": "user", "content": message}],
-            },
+            initial_state,
             config=config,
             stream_mode="updates",
         ):
@@ -284,7 +365,6 @@ async def stream_agent(
                 interrupt_info = chunk["__interrupt__"]
                 if interrupt_info and len(interrupt_info) > 0:
                     interrupt_data = interrupt_info[0].value if hasattr(interrupt_info[0], 'value') else interrupt_info[0]
-                    logger.info(f"⏸️  CONFIRMATION REQUIRED: {interrupt_data.get('title', 'Unknown')}")
                     yield {
                         "type": "confirmation_required",
                         "data": interrupt_data,
