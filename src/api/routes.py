@@ -319,7 +319,6 @@ async def chat(
     # DEBUG: Log immediately when endpoint is hit
     
     # Parse request body manually to ensure we get activeURL
-    import json
     body_bytes = await raw_request.body()
     body_dict = json.loads(body_bytes.decode()) if body_bytes else {}
     
