@@ -128,6 +128,95 @@ class GraphQLClient:
             logger.error(f"Failed to get current user ID: {e}")
             return None
 
+    async def get_current_user_first_name(self) -> str | None:
+        """Get the current user's first name from the backend.
+        
+        Returns:
+            The user's first name or None if not found
+        """
+        query = """
+        query GetCurrentUser {
+            currentLoggedInUser {
+                firstName
+            }
+        }
+        """
+        
+        try:
+            result = await self.execute(query)
+            user = result.get("currentLoggedInUser")
+            if user:
+                first_name = user.get("firstName", "").strip()
+                return first_name if first_name else None
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get current user first name: {e}")
+            return None
+
+    async def get_conversation_title(self, conversation_id: str) -> str | None:
+        """Get the current title of a conversation.
+        
+        Args:
+            conversation_id: The conversation ID
+            
+        Returns:
+            The conversation title or None if not found
+        """
+        query = """
+        query GetConversation($id: ID!) {
+            getAllyConversation(conversationId: $id) {
+                title
+            }
+        }
+        """
+        
+        try:
+            result = await self.execute(query, {"id": conversation_id})
+            conversation = result.get("getAllyConversation")
+            if conversation:
+                return conversation.get("title")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get conversation title: {e}")
+            return None
+
+    async def update_conversation_title(self, conversation_id: str, title: str) -> bool:
+        """Update the title of a conversation.
+        
+        Args:
+            conversation_id: The conversation ID
+            title: The new title (will be truncated to 255 chars)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        # Truncate title to max 255 characters (GraphQL schema limit)
+        truncated_title = title[:255] if len(title) > 255 else title
+        
+        mutation = """
+        mutation UpdateAllyConversation($input: UpdateConversationInput!) {
+            updateAllyConversation(input: $input) {
+                id
+                title
+            }
+        }
+        """
+        
+        try:
+            result = await self.execute(
+                mutation,
+                {
+                    "input": {
+                        "id": conversation_id,
+                        "title": truncated_title,
+                    }
+                }
+            )
+            return result.get("updateAllyConversation") is not None
+        except Exception as e:
+            logger.error(f"Failed to update conversation title: {e}")
+            return False
+
     async def close(self):
         """Close the client connection."""
         if self._client is not None:

@@ -272,14 +272,88 @@ async def stream_agent(
     tool_calls_summary = []
 
     # DIRECT INTERCEPTION: Handle location questions immediately if we have activeURL
-    # message_lower = message.lower().strip()
+    message_lower = message.lower().strip()
+    is_location_question = any(
+        phrase in message_lower
+        for phrase in ["where am i", "what page", "current page", "what page am i", "where are we", "what page is this"]
+    )
     
     if is_location_question and activeURL:
-        # Yield the response directly
+        # Extract group ID from URL
+        url_parts = activeURL.split('/')
+        group_id = None
+        view_type = None
+        view_id = None
+        
+        if '/apps/groups/' in activeURL:
+            try:
+                groups_idx = url_parts.index('groups')
+                if len(url_parts) > groups_idx + 1:
+                    group_id = url_parts[groups_idx + 1]
+                if len(url_parts) > groups_idx + 3:
+                    view_type = url_parts[groups_idx + 2]  # 'pipeline' or 'table'
+                    view_id = url_parts[groups_idx + 3]
+            except (ValueError, IndexError):
+                pass
+        
+        # Try to fetch group name if we have a group ID
+        group_name = None
+        view_name = None
+        if group_id:
+            try:
+                client = context.get_client()
+                
+                # Fetch group details
+                query = """
+                query GetGroups($workspaceId: String!) {
+                    getGroups(workspaceId: $workspaceId) {
+                        id
+                        name
+                        emoji
+                        views {
+                            id
+                            name
+                            type
+                        }
+                    }
+                }
+                """
+                result = await client.query(query, {"workspaceId": context.workspace_id})
+                groups = result.get("getGroups", [])
+                group = next((g for g in groups if g.get("id") == group_id), None)
+                
+                if group:
+                    emoji = group.get("emoji", "")
+                    group_name = f"{emoji} {group.get('name', 'Unknown')}".strip()
+                    
+                    # If we have a view ID, try to find the view name
+                    if view_id and view_type:
+                        views = group.get("views", [])
+                        view = next((v for v in views if v.get("id") == view_id), None)
+                        if view:
+                            view_name = view.get("name", view_type)
+                
+                await client.close()
+            except Exception as e:
+                logger.warning(f"Error fetching group name for location question: {e}")
+                # Fall through to generic response
+        
+        # Build response with group name if available
+        if group_name:
+            if view_name and view_type:
+                response_text = f"You are on the **{group_name}** group, viewing the **{view_name}** {view_type} view."
+            elif view_type:
+                response_text = f"You are on the **{group_name}** group, viewing a {view_type} view."
+            else:
+                response_text = f"You are on the **{group_name}** group."
+        else:
+            # Fallback to URL if we couldn't fetch group name
+            response_text = f"You are on `{activeURL}`"
+        
         yield {
             "type": "response",
             "data": {
-                "content": f"You are on `{activeURL}`",
+                "content": response_text,
             },
         }
         yield {"type": "done", "data": {}}
@@ -287,6 +361,96 @@ async def stream_agent(
 
     # Prepare messages with activeURL context
     messages_with_context = []
+    
+    # Check if this is a new conversation and fetch user's first name
+    user_first_name = None
+    is_new_chat = False
+    try:
+        # Check if conversation is new by checking checkpointer state
+        checkpointer = await get_checkpointer()
+        config = {"configurable": {"thread_id": conversation_id}}
+        state = await checkpointer.aget(config)
+        
+        # If no state or no messages, it's new
+        if not state or not state.values.get("messages"):
+            is_new_chat = True
+        else:
+            messages = state.values.get("messages", [])
+            user_or_assistant_messages = [
+                msg for msg in messages
+                if hasattr(msg, "type") and msg.type in ["human", "ai", "user", "assistant"]
+            ]
+            # If no user/assistant messages yet, it's new
+            is_new_chat = len(user_or_assistant_messages) == 0
+        
+        if is_new_chat:
+            # Fetch user's first name for new chats
+            client = context.get_client()
+            try:
+                user_first_name = await client.get_current_user_first_name()
+                if user_first_name:
+                    logger.info(f"👤 [USER CONTEXT] New chat detected, user's first name: {user_first_name}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch user's first name: {e}")
+            finally:
+                await client.close()
+    except Exception as e:
+        logger.warning(f"Error checking if conversation is new: {e}")
+    
+    # Add system message with user context for new chats - MUST BE FIRST
+    if is_new_chat and user_first_name:
+        user_context_message = f"""🚨 CRITICAL: NEW CHAT - USER GREETING REQUIRED 🚨
+
+**THIS IS A BRAND NEW CONVERSATION - NO PREVIOUS MESSAGES**
+
+The user's first name is: **{user_first_name}**
+
+**MANDATORY INSTRUCTION - YOU MUST FOLLOW THIS:**
+Your FIRST response MUST start with a warm, natural greeting that includes the user's first name "{user_first_name}".
+
+**GREETING STYLE - CHOOSE NATURALLY:**
+You can use any of these greeting styles naturally (don't force one):
+- "Hey, {user_first_name}!"
+- "Hi {user_first_name}!"
+- "Hello {user_first_name}!"
+- "Hey {user_first_name}!"
+- Or any other natural variation that feels appropriate
+
+**IMPORTANT:**
+- Choose the greeting style that feels most natural for the conversation
+- Match the user's tone if they started with a greeting (e.g., if they said "hey", you can say "Hey, {user_first_name}!")
+- Make it feel warm and personal, not robotic or forced
+- After the greeting, immediately proceed to help with their request
+
+**EXAMPLES:**
+- User says: "hey i want to see the leads records"
+- You could respond: "Hey, {user_first_name}! Here are your leads records..." (then show data)
+- Or: "Hi {user_first_name}! Here are your leads records..." (then show data)
+
+- User says: "show me companies"
+- You could respond: "Hello {user_first_name}! Here are the companies..." (then show data)
+- Or: "Hey {user_first_name}! Here are the companies..." (then show data)
+
+**DO NOT:**
+- Skip the greeting with their name
+- Start with just "Here are..." without greeting
+- Forget to use their name in the first response
+- Use the exact same greeting every time - vary it naturally
+
+This is ONLY for NEW chats. After this first message, you can use their name naturally but don't need to greet every time."""
+        
+        # Insert at the beginning - this is critical
+        messages_with_context.insert(0, {
+            "role": "system",
+            "content": user_context_message
+        })
+        logger.info(f"✅ [USER CONTEXT] Added greeting instruction for new chat with user: {user_first_name}")
+    elif is_new_chat:
+        # New chat but couldn't fetch name - still be friendly
+        messages_with_context.insert(0, {
+            "role": "system",
+            "content": "🚨 CRITICAL: This is a NEW conversation with no previous messages. You MUST greet the user warmly in your first response. Be friendly, conversational, and helpful."
+        })
     
     # Add system message with activeURL context if available
     if activeURL:
@@ -330,8 +494,14 @@ When the user asks:
 
 **How to Use This Context:**
 1. **For location questions**: Directly tell the user they are on: {activeURL}
-2. **For "this group" references**: If groupId is present ({group_id if group_id else "N/A"}), use it automatically
-3. **For context-aware actions**: Extract groupId/viewId from the URL to understand the user's context
+2. **For "this group" references**: If user says "this group", "current group", "here", use the groupId from URL ({group_id if group_id else "N/A"})
+3. **For named group references**: If user mentions a group BY NAME (e.g., "leads", "sales"), you MUST use `resolve_group_name()` first - DO NOT use the URL groupId
+4. **For context-aware actions**: Extract groupId/viewId from the URL to understand the user's context
+
+**CRITICAL RULE**: 
+- User says "this group" → Use groupId from URL: {group_id if group_id else "N/A"}
+- User says "leads group" or "show data on leads" → MUST call `resolve_group_name("leads")` first, ignore URL groupId
+- NEVER use placeholder IDs like "abc-123" - always resolve names to real IDs
 
 **IMPORTANT**: If the user asks about their location or current page, you MUST use the activeURL provided above. Do NOT say "I don't know" or "I can't see your screen" - you have the URL context!"""
         

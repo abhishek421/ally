@@ -45,6 +45,193 @@ async def resolve_database_user_id(auth: AuthContext) -> str:
         await client.close()
 
 
+def is_substantial_message(message: str) -> bool:
+    """Check if a message is substantial (not just a greeting).
+    
+    Args:
+        message: The user's message
+        
+    Returns:
+        True if message is substantial, False if it's just a greeting
+    """
+    message_lower = message.lower().strip()
+    
+    # Common greeting patterns
+    greeting_patterns = [
+        "hey", "hi", "hello", "hey ally", "hi ally", "hello ally",
+        "hey there", "hi there", "what's up", "whats up", "sup",
+        "good morning", "good afternoon", "good evening",
+        "gm", "gn", "morning", "afternoon", "evening"
+    ]
+    
+    # Check if message is just a greeting (very short or matches patterns)
+    if len(message_lower) <= 10:
+        for pattern in greeting_patterns:
+            if message_lower == pattern or message_lower.startswith(pattern + " ") or message_lower.startswith(pattern + ","):
+                return False
+    
+    # If message is longer than 10 chars and doesn't match greeting patterns, it's substantial
+    return len(message_lower) > 10
+
+
+async def generate_conversation_title(message: str) -> str:
+    """Generate a concise, meaningful title from the user's message using LLM.
+    
+    Args:
+        message: The user's first message
+        
+    Returns:
+        A concise title (max 80 characters for display, will be truncated to 255 for DB)
+    """
+    try:
+        from src.agent.graph import get_llm
+        from src.config import get_settings
+        
+        settings = get_settings()
+        
+        # Create a non-streaming LLM instance for quick title generation
+        if settings.is_openai:
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI(
+                model=settings.llm_model,
+openai_api_key="REDACTED"
+                temperature=0.3,  # Lower temperature for more consistent titles
+                streaming=False,  # Non-streaming for faster response
+            )
+        else:
+            from langchain_anthropic import ChatAnthropic
+            llm = ChatAnthropic(
+                model=settings.llm_model,
+                api_key=settings.anthropic_api_key,
+                temperature=0.3,  # Lower temperature for more consistent titles
+                streaming=False,  # Non-streaming for faster response
+            )
+        
+        prompt = f"""Generate a concise, meaningful title (maximum 60 characters) for a conversation that starts with this user message:
+
+"{message}"
+
+Rules:
+- Make it descriptive but short (max 60 characters)
+- Use title case
+- Remove filler words like "please", "can you", "could you"
+- Focus on the main action or topic
+- Don't include quotes or special characters unless necessary
+
+Examples:
+- "give me info of all the people in leads" → "All People in Leads"
+- "show me companies in the sales pipeline" → "Companies in Sales Pipeline"
+- "create a new group called investors" → "Create Investors Group"
+- "what's the status of deal XYZ" → "Status of Deal XYZ"
+
+Title:"""
+        
+        # Use non-streaming LLM call for title generation
+        response = await llm.ainvoke(prompt)
+        title = response.content if hasattr(response, 'content') else str(response)
+        
+        # Clean up the title
+        title = title.strip()
+        # Remove quotes if LLM added them
+        if title.startswith('"') and title.endswith('"'):
+            title = title[1:-1]
+        if title.startswith("'") and title.endswith("'"):
+            title = title[1:-1]
+        
+        # Truncate to 80 characters for better display (DB allows 255)
+        if len(title) > 80:
+            title = title[:77] + "..."
+        
+        return title
+        
+    except Exception as e:
+        logger.error(f"Error generating conversation title: {e}")
+        # Fallback: use first 60 chars of message
+        fallback = message.strip()[:60]
+        if len(message) > 60:
+            fallback += "..."
+        return fallback
+
+
+async def is_new_conversation_without_title(conversation_id: str, context: ToolContext) -> bool:
+    """Check if this is a new conversation that doesn't have a title yet.
+    
+    Args:
+        conversation_id: The conversation thread ID
+        context: Tool context with auth info
+        
+    Returns:
+        True if conversation is new and has no title, False otherwise
+    """
+    try:
+        client = context.get_client()
+        
+        # Check if conversation has a title
+        title = await client.get_conversation_title(conversation_id)
+        
+        # If title is None or empty or "New Chat", it's considered new
+        if not title or title.strip() == "" or title.strip().lower() == "new chat":
+            # Also check if it's truly a new conversation (no messages in checkpointer)
+            from src.agent.graph import get_checkpointer
+            
+            checkpointer = await get_checkpointer()
+            config = {"configurable": {"thread_id": conversation_id}}
+            state = await checkpointer.aget(config)
+            
+            # If no state or no user/assistant messages, it's new
+            if not state or not state.values.get("messages"):
+                return True
+            
+            messages = state.values.get("messages", [])
+            user_or_assistant_messages = [
+                msg for msg in messages
+                if hasattr(msg, "type") and msg.type in ["human", "ai", "user", "assistant"]
+            ]
+            
+            # If no user/assistant messages yet, it's new
+            return len(user_or_assistant_messages) == 0
+        
+        return False
+    except Exception as e:
+        logger.error(f"Error checking if conversation is new: {e}")
+        return False
+
+
+async def is_new_conversation(conversation_id: str, context: ToolContext) -> bool:
+    """Check if this is a new conversation (has no previous messages).
+    
+    Args:
+        conversation_id: The conversation thread ID
+        context: Tool context with auth info
+        
+    Returns:
+        True if conversation is new (no previous messages), False otherwise
+    """
+    try:
+        from src.agent.graph import get_checkpointer
+        
+        checkpointer = await get_checkpointer()
+        config = {"configurable": {"thread_id": conversation_id}}
+        state = await checkpointer.aget(config)
+        
+        # If no state or no messages, it's new
+        if not state or not state.values.get("messages"):
+            return True
+        
+        messages = state.values.get("messages", [])
+        user_or_assistant_messages = [
+            msg for msg in messages
+            if hasattr(msg, "type") and msg.type in ["human", "ai", "user", "assistant"]
+        ]
+        
+        # If no user/assistant messages yet, it's new
+        return len(user_or_assistant_messages) == 0
+    except Exception as e:
+        logger.error(f"Error checking if conversation is new: {e}")
+        # Default to False (not new) if we can't determine
+        return False
+
+
 class ChatRequest(BaseModel):
     """Request body for the chat endpoint."""
     
@@ -172,6 +359,27 @@ async def chat(
         session_id=auth.session_id,
         activeURL=active_url_value,  # Use the fallback value
     )
+    
+    # Auto-title feature: Set conversation title from first message
+    try:
+        is_new = await is_new_conversation_without_title(request.conversation_id, context)
+        if is_new:
+            # Check if message is substantial (not just a greeting)
+            if is_substantial_message(request.message):
+                # Generate a meaningful title using LLM
+                title = await generate_conversation_title(request.message)
+                # Update conversation title
+                client = context.get_client()
+                success = await client.update_conversation_title(request.conversation_id, title)
+                if success:
+                    logger.info(f"✅ Set conversation title: \"{title}\"")
+                else:
+                    logger.warning(f"⚠️  Failed to set conversation title: \"{title}\"")
+            else:
+                logger.info("💬 Message is a greeting, keeping default 'New Chat' title")
+    except Exception as e:
+        # Don't fail the request if title setting fails
+        logger.error(f"Error setting conversation title: {e}")
     
     return EventSourceResponse(
         event_generator(context, request.message, request.conversation_id, request.activeURL),
