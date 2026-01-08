@@ -128,6 +128,47 @@ class GraphQLClient:
             logger.error(f"Failed to get current user ID: {e}")
             return None
 
+    async def get_current_user_profile(self) -> dict | None:
+        """Get the current user's profile from the backend.
+        
+        Returns user info including first name, last name, and email
+        for personalization purposes.
+        
+        Returns:
+            Dict with user profile or None if not found
+            {
+                "id": str,
+                "firstName": str,
+                "lastName": str | None,
+                "email": str
+            }
+        """
+        query = """
+        query GetCurrentUserProfile {
+            currentLoggedInUser {
+                id
+                firstName
+                lastName
+                email
+            }
+        }
+        """
+        
+        try:
+            result = await self.execute(query)
+            user = result.get("currentLoggedInUser")
+            if user:
+                return {
+                    "id": user.get("id"),
+                    "firstName": user.get("firstName"),
+                    "lastName": user.get("lastName"),
+                    "email": user.get("email"),
+                }
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get current user profile: {e}")
+            return None
+
     async def close(self):
         """Close the client connection."""
         if self._client is not None:

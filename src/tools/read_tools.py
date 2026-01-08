@@ -1617,12 +1617,173 @@ def get_read_tools(context: ToolContext) -> list:
         finally:
             await client.close()
 
+    @tool
+    async def get_current_page() -> str:
+        """Get information about the page the user is currently viewing.
+        
+        Use this tool when the user asks questions like:
+        - "Where am I?"
+        - "Which page am I on?"
+        - "What am I looking at?"
+        - "What page is this?"
+        - "Which page is open?"
+        
+        This tool analyzes the current URL and fetches relevant details about
+        the entity or page being viewed (company name, person name, group name, etc.).
+        
+        Returns:
+            A description of the current page and any entity details
+        """
+        active_url = context.active_url
+        
+        if not active_url:
+            return "I don't have information about which page you're currently viewing. The page context wasn't provided."
+        
+        client = context.get_client()
+        
+        try:
+            # Parse the URL to understand the page structure
+            # URL patterns in the app typically follow: /app/{workspaceId}/{pageType}/{entityId}/...
+            parts = [p for p in active_url.split('/') if p]  # Remove empty strings
+            
+            result_parts = []
+            result_parts.append(f"Current URL: {active_url}")
+            
+            # Try to identify and fetch details for different entity types in the URL
+            # Look for common patterns without hardcoding exact positions
+            
+            # Check for company in URL
+            if 'company' in parts:
+                try:
+                    company_idx = parts.index('company')
+                    if company_idx + 1 < len(parts):
+                        company_id = parts[company_idx + 1]
+                        # Fetch company details
+                        company_query = """
+                        query GetOneCompany($companyId: ID!) {
+                            getOneCompany(companyId: $companyId) {
+                                id
+                                name
+                                description
+                            }
+                        }
+                        """
+                        company_result = await client.query(company_query, {"companyId": company_id})
+                        company = company_result.get("getOneCompany")
+                        if company:
+                            result_parts.append(f"\nYou are viewing the **company profile** for **{company.get('name', 'Unknown')}**.")
+                            if company.get('description'):
+                                result_parts.append(f"Description: {company['description'][:100]}...")
+                except (ValueError, IndexError):
+                    pass
+            
+            # Check for person in URL
+            if 'person' in parts or 'people' in parts:
+                person_keyword = 'person' if 'person' in parts else 'people'
+                try:
+                    person_idx = parts.index(person_keyword)
+                    if person_idx + 1 < len(parts):
+                        person_id = parts[person_idx + 1]
+                        # Only fetch if it looks like an ID (not another keyword)
+                        if person_id not in ['list', 'new', 'edit', 'settings']:
+                            person_query = """
+                            query GetPerson($peopleId: ID!) {
+                                getPerson(peopleId: $peopleId) {
+                                    id
+                                    firstName
+                                    lastName
+                                    jobTitle
+                                }
+                            }
+                            """
+                            person_result = await client.query(person_query, {"peopleId": person_id})
+                            person = person_result.get("getPerson")
+                            if person:
+                                full_name = f"{person.get('firstName', '')} {person.get('lastName', '')}".strip()
+                                result_parts.append(f"\nYou are viewing the **person profile** for **{full_name}**.")
+                                if person.get('jobTitle'):
+                                    result_parts.append(f"Job Title: {person['jobTitle']}")
+                except (ValueError, IndexError):
+                    pass
+            
+            # Check for group in URL
+            if 'groups' in parts or 'group' in parts:
+                group_keyword = 'groups' if 'groups' in parts else 'group'
+                try:
+                    group_idx = parts.index(group_keyword)
+                    if group_idx + 1 < len(parts):
+                        group_id = parts[group_idx + 1]
+                        if group_id not in ['new', 'settings']:
+                            # Fetch group details
+                            group_query = """
+                            query GetGroups($workspaceId: String!) {
+                                getGroups(workspaceId: $workspaceId) {
+                                    id
+                                    name
+                                    emoji
+                                    type
+                                    description
+                                    views { id name type }
+                                }
+                            }
+                            """
+                            group_result = await client.query(group_query, {"workspaceId": context.workspace_id})
+                            groups = group_result.get("getGroups", [])
+                            group = next((g for g in groups if g.get("id") == group_id), None)
+                            if group:
+                                emoji = group.get('emoji', '')
+                                group_name = f"{emoji} {group.get('name', 'Unknown')}".strip()
+                                result_parts.append(f"\nYou are viewing the **group** **{group_name}**.")
+                                result_parts.append(f"Group type: {group.get('type', 'Unknown')}")
+                                
+                                # Check if viewing a specific view
+                                if 'views' in parts:
+                                    try:
+                                        view_idx = parts.index('views')
+                                        if view_idx + 1 < len(parts):
+                                            view_id = parts[view_idx + 1]
+                                            views = group.get('views', [])
+                                            view = next((v for v in views if v.get("id") == view_id), None)
+                                            if view:
+                                                result_parts.append(f"View: **{view.get('name', 'Unknown')}** ({view.get('type', 'Unknown')})")
+                                    except (ValueError, IndexError):
+                                        pass
+                except (ValueError, IndexError):
+                    pass
+            
+            # Check for dashboard/home
+            if len(parts) <= 2 and 'app' in parts:
+                result_parts.append("\nYou are on the **dashboard/home page**.")
+            
+            # If we couldn't identify specific entities, provide a generic response
+            if len(result_parts) == 1:  # Only URL was added
+                # Try to infer from URL keywords
+                url_lower = active_url.lower()
+                if 'settings' in url_lower:
+                    result_parts.append("\nYou appear to be on a **settings** page.")
+                elif 'import' in url_lower:
+                    result_parts.append("\nYou appear to be on an **import** page.")
+                elif 'export' in url_lower:
+                    result_parts.append("\nYou appear to be on an **export** page.")
+                else:
+                    result_parts.append("\nI can see the URL but couldn't identify the specific page type. You may be on a custom or new page.")
+            
+            return "\n".join(result_parts)
+            
+        except Exception as e:
+            logger.error(f"Error getting current page info: {e}")
+            return f"I can see you're at {active_url}, but I encountered an error fetching page details: {str(e)}"
+        finally:
+            await client.close()
+
     return [
         # Smart resolvers - use these FIRST to resolve names to IDs
         resolve_company_name,
         resolve_person_name,
         resolve_group_name,
         resolve_column_by_name,
+        # Page awareness
+        get_current_page,
         # List tools
         list_companies_in_workspace,
         list_people_in_workspace,
