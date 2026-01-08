@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from langchain_anthropic import ChatAnthropic
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.memory import MemorySaver
@@ -26,16 +27,23 @@ _memory_saver: MemorySaver | None = None
 
 def get_llm():
     """Get the configured LLM instance.
-    
+
     Returns:
-        ChatOpenAI or ChatAnthropic instance based on configuration
+        ChatOpenAI, ChatAnthropic, or ChatGoogleGenerativeAI instance based on configuration
     """
     settings = get_settings()
-    
+
     if settings.is_openai:
         return ChatOpenAI(
             model=settings.llm_model,
             api_key=settings.openai_api_key,
+            temperature=0.7,
+            streaming=True,
+        )
+    elif settings.is_gemini:
+        return ChatGoogleGenerativeAI(
+            model=settings.llm_model,
+            google_api_key=settings.google_api_key,
             temperature=0.7,
             streaming=True,
         )

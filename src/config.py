@@ -17,9 +17,10 @@ class Settings(BaseSettings):
     )
 
     # LLM Configuration
-    llm_provider: Literal["openai", "anthropic"] = "openai"
+    llm_provider: Literal["openai", "anthropic", "gemini"] = "openai"
     openai_api_key: str = ""
     anthropic_api_key: str = ""
+    google_api_key: str = ""
     llm_model: str = "gpt-4o"
 
     # Backend GraphQL
@@ -49,10 +50,17 @@ class Settings(BaseSettings):
         return self.llm_provider == "anthropic"
 
     @property
+    def is_gemini(self) -> bool:
+        """Check if using Google Gemini provider."""
+        return self.llm_provider == "gemini"
+
+    @property
     def api_key(self) -> str:
         """Get the API key for the configured provider."""
         if self.is_openai:
             return self.openai_api_key
+        if self.is_gemini:
+            return self.google_api_key
         return self.anthropic_api_key
 
 
