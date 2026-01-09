@@ -13,7 +13,7 @@ from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command, interrupt
 
 from src.config import get_settings
-from src.agent.prompts import SYSTEM_PROMPT
+from src.agent.prompts import get_system_prompt
 from src.tools import get_all_tools
 from src.tools.base import ToolContext, parse_data_change
 
@@ -54,6 +54,103 @@ def get_llm():
             temperature=0.7,
             streaming=True,
         )
+
+
+async def is_first_message(conversation_id: str) -> bool:
+    """Check if this is the first message in a conversation.
+    
+    Uses the checkpointer to see if there are any existing messages
+    for this conversation thread.
+    
+    Args:
+        conversation_id: The conversation thread ID
+        
+    Returns:
+        True if this is the first message, False otherwise
+    """
+    try:
+        checkpointer = await get_checkpointer()
+        config = {"configurable": {"thread_id": conversation_id}}
+        
+        # Try to get existing state
+        state = await checkpointer.aget(config)
+        
+        if state is None:
+            return True
+        
+        # Check if there are any messages
+        messages = state.values.get("messages", [])
+        return len(messages) == 0
+        
+    except Exception as e:
+        logger.warning(f"Error checking if first message: {e}")
+        # If we can't determine, assume it's not the first to be safe
+        return False
+
+
+async def generate_conversation_title(user_query: str, assistant_response: str) -> str | None:
+    """Generate a title for a conversation based on the first exchange.
+    
+    Uses ChatGPT-style approach: analyzes both the user's query AND
+    the assistant's response to generate a meaningful title.
+    The LLM decides if the conversation warrants a custom title or
+    should use a default.
+    
+    Args:
+        user_query: The user's first message
+        assistant_response: The assistant's first response
+        
+    Returns:
+        A generated title string, or None if generation fails
+    """
+    try:
+        llm = get_llm()
+        
+        # Truncate long messages to avoid token waste
+        query_truncated = user_query[:500] if len(user_query) > 500 else user_query
+        response_truncated = assistant_response[:500] if len(assistant_response) > 500 else assistant_response
+        
+        title_prompt = f"""Generate a short, descriptive title (2-6 words) for this conversation.
+The title should capture the main topic or intent.
+
+If the conversation is just a greeting or too vague to summarize meaningfully, 
+return exactly: New Conversation
+
+User: {query_truncated}
+Assistant: {response_truncated}
+
+Rules:
+- 2-6 words maximum
+- Be specific and descriptive
+- Don't use quotes in the title
+- Don't start with "Title:" or similar prefixes
+- Just output the title, nothing else
+
+Title:"""
+        
+        # Use invoke for a single quick response (non-streaming for speed)
+        response = await llm.ainvoke(title_prompt)
+        
+        # Extract and clean up the title
+        title = response.content.strip()
+        
+        # Remove any leading "Title:" or quotes
+        title = re.sub(r'^(title:?\s*)', '', title, flags=re.IGNORECASE)
+        title = title.strip('"\'')
+        
+        # Limit to reasonable length (database field is VARCHAR 255)
+        if len(title) > 100:
+            title = title[:97] + "..."
+        
+        # If we got an empty title, use default
+        if not title:
+            return "New Conversation"
+        
+        return title
+        
+    except Exception as e:
+        logger.error(f"Error generating conversation title: {e}")
+        return "New Conversation"
 
 
 async def get_checkpointer():
@@ -116,12 +213,17 @@ async def cleanup_checkpointer():
             _checkpointer = None
 
 
-def create_agent_for_context(context: ToolContext, checkpointer=None):
+def create_agent_for_context(
+    context: ToolContext,
+    checkpointer=None,
+    is_new_conversation: bool = True,
+):
     """Create a ReAct agent with tools configured for the given context.
     
     Args:
         context: Tool context with auth and workspace info
         checkpointer: Optional checkpointer for conversation memory
+        is_new_conversation: Whether this is the first message (for greeting behavior)
         
     Returns:
         Compiled LangGraph agent
@@ -129,31 +231,43 @@ def create_agent_for_context(context: ToolContext, checkpointer=None):
     llm = get_llm()
     tools = get_all_tools(context)
     
+    # Build dynamic system prompt with user context
+    system_prompt = get_system_prompt(
+        user_first_name=context.user_first_name,
+        is_new_conversation=is_new_conversation,
+    )
+    
+    # Log personalization info
+    user_name = context.user_first_name or "Unknown"
+    conv_type = "new" if is_new_conversation else "continuing"
+    logger.info(f"🤖 Creating agent for {user_name} ({conv_type} conversation)")
+    
     # Create the agent using the prebuilt ReAct pattern
     agent = create_react_agent(
         model=llm,
         tools=tools,
-        prompt=SYSTEM_PROMPT,
+        prompt=system_prompt,
         checkpointer=checkpointer,
     )
     
     return agent
 
 
-async def create_agent(context: ToolContext):
+async def create_agent(context: ToolContext, is_new_conversation: bool = True):
     """Create a compiled agent with checkpointer.
     
     Args:
         context: Tool context with auth and workspace info
+        is_new_conversation: Whether this is the first message (for greeting behavior)
         
     Returns:
         Compiled LangGraph agent with checkpointer
     """
     checkpointer = await get_checkpointer()
-    return create_agent_for_context(context, checkpointer)
+    return create_agent_for_context(context, checkpointer, is_new_conversation)
 
 
-async def get_agent(context: ToolContext):
+async def get_agent(context: ToolContext, is_new_conversation: bool = True):
     """Create an agent for the given context.
 
     Note: We don't cache agents because tools are bound to specific
@@ -162,11 +276,12 @@ async def get_agent(context: ToolContext):
 
     Args:
         context: Tool context with auth and workspace info
+        is_new_conversation: Whether this is the first message (for greeting behavior)
 
     Returns:
         Compiled LangGraph agent
     """
-    return await create_agent(context)
+    return await create_agent(context, is_new_conversation)
 
 
 async def invoke_agent(
@@ -266,7 +381,11 @@ async def stream_agent(
     Yields:
         Event dictionaries with type and data
     """
-    agent = await get_agent(context)
+    # Check if this is a new conversation (for greeting behavior)
+    is_new = await is_first_message(conversation_id)
+    
+    # Create agent with appropriate greeting behavior
+    agent = await get_agent(context, is_new_conversation=is_new)
 
     config = {
         "configurable": {
@@ -389,7 +508,8 @@ async def resume_agent(
     Yields:
         Event dictionaries with type and data (same as stream_agent)
     """
-    agent = await get_agent(context)
+    # Resume is always a continuing conversation (not new)
+    agent = await get_agent(context, is_new_conversation=False)
 
     config = {
         "configurable": {

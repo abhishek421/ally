@@ -2,6 +2,7 @@
 
 import json
 import logging
+from dataclasses import dataclass
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,7 +10,7 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from src.api.middleware import AuthContext, get_current_user
-from src.agent.graph import stream_agent, resume_agent
+from src.agent.graph import stream_agent, resume_agent, is_first_message, generate_conversation_title
 from src.graphql.client import GraphQLClient
 from src.tools.base import ToolContext
 
@@ -18,29 +19,42 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def resolve_database_user_id(auth: AuthContext) -> str:
-    """Resolve the Cognito sub to the actual database user ID.
+@dataclass
+class UserProfile:
+    """User profile information for personalization."""
+    user_id: str
+    first_name: str | None = None
+    email: str | None = None
+
+
+async def resolve_user_profile(auth: AuthContext) -> UserProfile:
+    """Resolve the user's profile including database ID and name.
 
     The JWT token contains a Cognito sub, but the backend database uses
-    its own user IDs. This function calls the backend to get the real ID.
+    its own user IDs. This function calls the backend to get the real ID
+    and user profile information for personalization.
 
     Args:
         auth: Auth context from the request
 
     Returns:
-        The database user ID
+        UserProfile with database user ID and profile info
     """
     client = GraphQLClient(auth.auth_token, auth.workspace_id, auth.session_id)
     try:
-        db_user_id = await client.get_current_user_id()
-        if db_user_id:
-            return db_user_id
+        profile = await client.get_current_user_profile()
+        if profile:
+            return UserProfile(
+                user_id=profile.get("id") or auth.user_id,
+                first_name=profile.get("firstName"),
+                email=profile.get("email"),
+            )
         else:
-            logger.warning(f"Could not resolve database user ID, using JWT sub")
-            return auth.user_id
+            logger.warning(f"Could not resolve user profile, using JWT sub")
+            return UserProfile(user_id=auth.user_id)
     except Exception as e:
-        logger.error(f"Error resolving database user ID: {e}")
-        return auth.user_id
+        logger.error(f"Error resolving user profile: {e}")
+        return UserProfile(user_id=auth.user_id)
     finally:
         await client.close()
 
@@ -74,10 +88,41 @@ async def event_generator(
     Yields:
         SSE event dictionaries
     """
+    # Check if this is the first message (for title generation)
+    first_message = False
+    try:
+        first_message = await is_first_message(conversation_id)
+    except Exception as e:
+        logger.warning(f"Could not check if first message: {e}")
+    
+    # Accumulate the assistant response for title generation
+    accumulated_response = ""
+    
     try:
         async for event in stream_agent(context, message, conversation_id):
             event_type = event.get("type", "unknown")
             event_data = event.get("data", {})
+            
+            # Accumulate response content for title generation
+            if event_type == "response" and first_message:
+                accumulated_response += event_data.get("content", "")
+            
+            # For "done" event, generate title first (if first message)
+            if event_type == "done" and first_message and accumulated_response:
+                try:
+                    title = await generate_conversation_title(message, accumulated_response)
+                    if title:
+                        logger.info(f"📝 Generated title: \"{title}\"")
+                        yield {
+                            "event": "conversation_title",
+                            "data": json.dumps({
+                                "title": title,
+                                "conversation_id": conversation_id,
+                            }),
+                        }
+                except Exception as e:
+                    logger.warning(f"Failed to generate conversation title: {e}")
+                    # Continue without title - not critical
             
             yield {
                 "event": event_type,
@@ -124,19 +169,22 @@ async def chat(
     - `error` - Error message if something went wrong
     - `done` - Stream completion signal
     """
-    # Resolve the database user ID upfront (JWT contains Cognito sub, not DB ID)
-    db_user_id = await resolve_database_user_id(auth)
+    # Resolve the user profile (database ID + name for personalization)
+    user_profile = await resolve_user_profile(auth)
 
     # Log the incoming query in a clean format
     query_preview = request.message[:80] + "..." if len(request.message) > 80 else request.message
-    logger.info(f"📩 QUERY: \"{query_preview}\"")
+    user_name = user_profile.first_name or "User"
+    logger.info(f"📩 QUERY from {user_name}: \"{query_preview}\"")
     
-    # Create tool context with the resolved database user ID
+    # Create tool context with user profile for personalization
     context = ToolContext(
         auth_token=auth.auth_token,
         workspace_id=auth.workspace_id,
-        user_id=db_user_id,
+        user_id=user_profile.user_id,
         session_id=auth.session_id,
+        user_first_name=user_profile.first_name,
+        user_email=user_profile.email,
     )
     
     return EventSourceResponse(
@@ -217,15 +265,17 @@ async def confirm_action(
     **Response (SSE):**
     Same event types as /chat endpoint.
     """
-    # Resolve the database user ID upfront
-    db_user_id = await resolve_database_user_id(auth)
+    # Resolve the user profile (database ID + name for personalization)
+    user_profile = await resolve_user_profile(auth)
     
-    # Create tool context
+    # Create tool context with user profile
     context = ToolContext(
         auth_token=auth.auth_token,
         workspace_id=auth.workspace_id,
-        user_id=db_user_id,
+        user_id=user_profile.user_id,
         session_id=auth.session_id,
+        user_first_name=user_profile.first_name,
+        user_email=user_profile.email,
     )
     
     # Build confirmation response dict
