@@ -79,7 +79,16 @@ async def is_first_message(conversation_id: str) -> bool:
             return True
         
         # Check if there are any messages
-        messages = state.values.get("messages", [])
+        # Handle both dict-like and object-like state access
+        if hasattr(state, 'values'):
+            values = state.values() if callable(state.values) else state.values
+            if isinstance(values, dict):
+                messages = values.get("messages", [])
+            else:
+                messages = []
+        else:
+            messages = []
+        
         return len(messages) == 0
         
     except Exception as e:
@@ -521,10 +530,36 @@ async def resume_agent(
     logger.info(f"▶️  RESUME: confirmed={confirmed}")
 
     try:
+        # Get interrupt IDs from the agent's state snapshot
+        # This is needed when multiple tools called interrupt() in parallel
+        state_snapshot = await agent.aget_state(config)
+        
+        # Extract interrupt IDs from the state
+        pending_interrupts = []
+        if state_snapshot and hasattr(state_snapshot, 'tasks'):
+            for task in state_snapshot.tasks:
+                if hasattr(task, 'interrupts') and task.interrupts:
+                    for intr in task.interrupts:
+                        if hasattr(intr, 'id') and intr.id:
+                            pending_interrupts.append(intr.id)
+        
+        # Build the resume command
+        if len(pending_interrupts) > 1:
+            # Multiple interrupts - map the SAME response to ALL of them
+            resume_value = {intr_id: confirmation_response for intr_id in pending_interrupts}
+            logger.info(f"Resuming {len(pending_interrupts)} pending interrupt(s)")
+        elif len(pending_interrupts) == 1:
+            # Single interrupt - can use dict format for safety
+            resume_value = {pending_interrupts[0]: confirmation_response}
+            logger.info(f"Resuming 1 pending interrupt")
+        else:
+            # No interrupt IDs found - use simple format (fallback)
+            resume_value = confirmation_response
+            logger.info(f"Resuming with simple format (no interrupt IDs found)")
+        
         # Resume the agent by invoking with a Command that provides the interrupt response
-        # The response will be passed to the tool that called interrupt()
         async for chunk in agent.astream(
-            Command(resume=confirmation_response),
+            Command(resume=resume_value),
             config=config,
             stream_mode="updates",
         ):

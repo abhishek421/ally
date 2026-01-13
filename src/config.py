@@ -23,6 +23,9 @@ openai_api_key="REDACTED"
     google_api_key: str = ""
     llm_model: str = "gpt-4o"
 
+    # Research / Web Search
+PERPLEXITY_API_KEY=REDACTED
+
     # Backend GraphQL
     backend_graphql_url: str = "http://localhost:3000/graphql"
 
