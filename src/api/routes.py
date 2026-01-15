@@ -64,6 +64,7 @@ class ChatRequest(BaseModel):
     
     conversation_id: str = Field(..., description="ID of the conversation thread")
     message: str = Field(..., min_length=1, description="User message to send")
+    activeURL: str | None = Field(None, description="Current page URL the user is viewing")
 
 
 class ChatResponse(BaseModel):
@@ -185,6 +186,7 @@ async def chat(
         session_id=auth.session_id,
         user_first_name=user_profile.first_name,
         user_email=user_profile.email,
+        active_url=request.activeURL,
     )
     
     return EventSourceResponse(

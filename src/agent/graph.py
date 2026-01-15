@@ -23,16 +23,12 @@ logger = logging.getLogger(__name__)
 _checkpointer_context = None
 _checkpointer: AsyncPostgresSaver | MemorySaver | None = None
 _memory_saver: MemorySaver | None = None
-
-
 def get_llm():
     """Get the configured LLM instance.
-
     Returns:
         ChatOpenAI, ChatAnthropic, or ChatGoogleGenerativeAI instance based on configuration
     """
     settings = get_settings()
-
     if settings.is_openai:
         return ChatOpenAI(
             model=settings.llm_model,
@@ -54,39 +50,40 @@ def get_llm():
             temperature=0.7,
             streaming=True,
         )
-
-
 async def is_first_message(conversation_id: str) -> bool:
     """Check if this is the first message in a conversation.
     
-    Uses the checkpointer to see if there are any existing messages
-    for this conversation thread.
+    Simple check: if any checkpoint exists for this conversation,
+    it means we've already had at least one message exchange,
+    so this is NOT the first message and we should NOT regenerate the title.
     
     Args:
         conversation_id: The conversation thread ID
         
     Returns:
-        True if this is the first message, False otherwise
+        True if this is the first message (no checkpoint exists), False otherwise
     """
     try:
         checkpointer = await get_checkpointer()
         config = {"configurable": {"thread_id": conversation_id}}
         
-        # Try to get existing state
-        state = await checkpointer.aget(config)
+        # Try to get existing checkpoint
+        checkpoint_tuple = await checkpointer.aget(config)
         
-        if state is None:
-            return True
+        # Simple logic: if checkpoint exists, conversation already started
+        # Title was already generated after the first message, so skip
+        if checkpoint_tuple is not None:
+            logger.info(f"📋 Conversation {conversation_id[:8]}...: Checkpoint exists → EXISTING conversation (skip title)")
+            return False
         
-        # Check if there are any messages
-        messages = state.values.get("messages", [])
-        return len(messages) == 0
+        # No checkpoint = brand new conversation, generate title after this first exchange
+        logger.info(f"📋 Conversation {conversation_id[:8]}...: No checkpoint → NEW conversation (will generate title)")
+        return True
         
     except Exception as e:
         logger.warning(f"Error checking if first message: {e}")
-        # If we can't determine, assume it's not the first to be safe
+        # If we can't determine, assume it's NOT the first (safer - prevents duplicate titles)
         return False
-
 
 async def generate_conversation_title(user_query: str, assistant_response: str) -> str | None:
     """Generate a title for a conversation based on the first exchange.
@@ -111,19 +108,27 @@ async def generate_conversation_title(user_query: str, assistant_response: str) 
         response_truncated = assistant_response[:500] if len(assistant_response) > 500 else assistant_response
         
         title_prompt = f"""Generate a short, descriptive title (2-6 words) for this conversation.
+
 The title should capture the main topic or intent.
 
-If the conversation is just a greeting or too vague to summarize meaningfully, 
+If the conversation is just a greeting or too vague to summarize meaningfully,
+
 return exactly: New Conversation
 
 User: {query_truncated}
+
 Assistant: {response_truncated}
 
 Rules:
+
 - 2-6 words maximum
+
 - Be specific and descriptive
+
 - Don't use quotes in the title
+
 - Don't start with "Title:" or similar prefixes
+
 - Just output the title, nothing else
 
 Title:"""
@@ -188,7 +193,6 @@ async def get_checkpointer():
             _checkpointer_context = None
     else:
         logger.warning("DATABASE_URL_ALLY not configured - using in-memory storage")
-
     # Fallback to in-memory checkpointer
     if _memory_saver is None:
         _memory_saver = MemorySaver()
@@ -269,15 +273,12 @@ async def create_agent(context: ToolContext, is_new_conversation: bool = True):
 
 async def get_agent(context: ToolContext, is_new_conversation: bool = True):
     """Create an agent for the given context.
-
     Note: We don't cache agents because tools are bound to specific
     auth contexts. Each request creates a fresh agent with the correct
     auth token for GraphQL calls.
-
     Args:
         context: Tool context with auth and workspace info
         is_new_conversation: Whether this is the first message (for greeting behavior)
-
     Returns:
         Compiled LangGraph agent
     """
@@ -319,42 +320,33 @@ async def invoke_agent(
 
 def _get_result_summary(result: str) -> str:
     """Extract a human-readable summary from tool result.
-
     Args:
         result: The tool result string
-
     Returns:
         A short summary like "0 results", "1 match", "success", etc.
     """
     if not result:
         return "empty"
-
     result_lower = result.lower()
-
     # Check for "not found" patterns
     if "could not find" in result_lower or "no matches" in result_lower:
         return "0 results"
-
     # Check for count patterns like "Found 5 companies" or "3 results"
     count_match = re.search(r'found\s+(\d+)', result_lower)
     if count_match:
         count = int(count_match.group(1))
         return f"{count} result{'s' if count != 1 else ''}"
-
     # Check for "Showing X of Y" pattern
     showing_match = re.search(r'showing\s+(\d+)\s+of\s+(\d+)', result_lower)
     if showing_match:
         showing, total = showing_match.groups()
         return f"{showing}/{total} results"
-
     # Check for success patterns
     if any(word in result_lower for word in ["success", "created", "added", "updated", "removed"]):
         return "success"
-
     # Check for error patterns
     if "error" in result_lower or "failed" in result_lower:
         return "error"
-
     # Default: return truncated result
     return result[:30] + "..." if len(result) > 30 else result
 
@@ -365,19 +357,15 @@ async def stream_agent(
     conversation_id: str,
 ):
     """Stream agent response for a message.
-
     This generator yields events as the agent processes the request,
     including thinking steps, tool calls, and the final response.
-
     When a tool requests user confirmation via interrupt(), this function
     yields a confirmation_required event and stops. The caller should then
     use resume_agent() to continue execution after user responds.
-
     Args:
         context: Tool context with auth and workspace info
         message: User message
         conversation_id: Conversation thread ID
-
     Yields:
         Event dictionaries with type and data
     """
@@ -386,16 +374,13 @@ async def stream_agent(
     
     # Create agent with appropriate greeting behavior
     agent = await get_agent(context, is_new_conversation=is_new)
-
     config = {
         "configurable": {
             "thread_id": conversation_id,
         }
     }
-
     # Track tool calls for summary logging
     tool_calls_summary = []
-
     try:
         # Stream using updates mode to get step-by-step progress
         async for chunk in agent.astream(
@@ -417,12 +402,10 @@ async def stream_agent(
                         "data": interrupt_data,
                     }
                     return  # Stop streaming, wait for user response
-
             # Process each update chunk
             for node_name, node_output in chunk.items():
                 if node_name == "__interrupt__":
                     continue  # Already handled above
-
                 if node_name == "agent":
                     # This is the LLM response
                     messages = node_output.get("messages", [])
@@ -455,12 +438,10 @@ async def stream_agent(
                             # Parse result to extract any data change metadata
                             cleaned_result, change_data = parse_data_change(msg.content)
                             tool_name = getattr(msg, "name", "unknown")
-
                             # Calculate result count/size for logging
                             result_info = _get_result_summary(cleaned_result)
                             tool_calls_summary.append(f"{tool_name} → {result_info}")
                             logger.info(f"   ✅ TOOL RESULT: {tool_name} → {result_info}")
-
                             # Yield the tool result (with cleaned content)
                             yield {
                                 "type": "tool_result",
@@ -469,14 +450,12 @@ async def stream_agent(
                                     "result": cleaned_result,
                                 },
                             }
-
                             # If there was a data change, emit a separate event for frontend cache invalidation
                             if change_data:
                                 yield {
                                     "type": "data_changed",
                                     "data": change_data,
                                 }
-
         # Signal completion
         yield {"type": "done", "data": {}}
         
@@ -492,10 +471,8 @@ async def resume_agent(
     confirmation_response: dict,
 ):
     """Resume agent execution after user confirmation.
-
     This function continues the agent from where it was interrupted,
     passing the user's confirmation response to the tool that requested it.
-
     Args:
         context: Tool context with auth and workspace info
         conversation_id: Conversation thread ID
@@ -504,27 +481,49 @@ async def resume_agent(
             - selected_id: str | None - selected option for SELECT_ONE
             - selected_ids: list[str] | None - selected options for SELECT_MANY
             - feedback: str | None - optional feedback from user
-
     Yields:
         Event dictionaries with type and data (same as stream_agent)
     """
     # Resume is always a continuing conversation (not new)
     agent = await get_agent(context, is_new_conversation=False)
-
     config = {
         "configurable": {
             "thread_id": conversation_id,
         }
     }
-
     confirmed = confirmation_response.get("confirmed", False)
     logger.info(f"▶️  RESUME: confirmed={confirmed}")
-
     try:
+        # Get interrupt IDs from the agent's state snapshot
+        # This is needed when multiple tools called interrupt() in parallel
+        state_snapshot = await agent.aget_state(config)
+        
+        # Extract interrupt IDs from the state
+        pending_interrupts = []
+        if state_snapshot and hasattr(state_snapshot, 'tasks'):
+            for task in state_snapshot.tasks:
+                if hasattr(task, 'interrupts') and task.interrupts:
+                    for intr in task.interrupts:
+                        if hasattr(intr, 'id') and intr.id:
+                            pending_interrupts.append(intr.id)
+        
+        # Build the resume command
+        if len(pending_interrupts) > 1:
+            # Multiple interrupts - map the SAME response to ALL of them
+            resume_value = {intr_id: confirmation_response for intr_id in pending_interrupts}
+            logger.info(f"Resuming {len(pending_interrupts)} pending interrupt(s)")
+        elif len(pending_interrupts) == 1:
+            # Single interrupt - can use dict format for safety
+            resume_value = {pending_interrupts[0]: confirmation_response}
+            logger.info(f"Resuming 1 pending interrupt")
+        else:
+            # No interrupt IDs found - use simple format (fallback)
+            resume_value = confirmation_response
+            logger.info(f"Resuming with simple format (no interrupt IDs found)")
+        
         # Resume the agent by invoking with a Command that provides the interrupt response
-        # The response will be passed to the tool that called interrupt()
         async for chunk in agent.astream(
-            Command(resume=confirmation_response),
+            Command(resume=resume_value),
             config=config,
             stream_mode="updates",
         ):
@@ -539,12 +538,10 @@ async def resume_agent(
                         "data": interrupt_data,
                     }
                     return  # Stop streaming, wait for user response
-
             # Process each update chunk (same logic as stream_agent)
             for node_name, node_output in chunk.items():
                 if node_name == "__interrupt__":
                     continue  # Already handled above
-
                 if node_name == "agent":
                     messages = node_output.get("messages", [])
                     for msg in messages:
@@ -574,7 +571,6 @@ async def resume_agent(
                             tool_name = getattr(msg, "name", "unknown")
                             result_info = _get_result_summary(cleaned_result)
                             logger.info(f"   ✅ TOOL RESULT: {tool_name} → {result_info}")
-
                             yield {
                                 "type": "tool_result",
                                 "data": {
@@ -582,13 +578,11 @@ async def resume_agent(
                                     "result": cleaned_result,
                                 },
                             }
-
                             if change_data:
                                 yield {
                                     "type": "data_changed",
                                     "data": change_data,
                                 }
-
         # Signal completion
         yield {"type": "done", "data": {}}
         
@@ -596,4 +590,3 @@ async def resume_agent(
         logger.error(f"Error resuming agent: {e}")
         yield {"type": "error", "data": {"message": str(e)}}
         yield {"type": "done", "data": {}}
-
