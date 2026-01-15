@@ -70,15 +70,14 @@ async def is_first_message(conversation_id: str) -> bool:
         # Try to get existing checkpoint
         checkpoint_tuple = await checkpointer.aget(config)
         
-        # Simple logic: if checkpoint exists, conversation already started
-        # Title was already generated after the first message, so skip
-        if checkpoint_tuple is not None:
-            logger.info(f"📋 Conversation {conversation_id[:8]}...: Checkpoint exists → EXISTING conversation (skip title)")
-            return False
-        
-        # No checkpoint = brand new conversation, generate title after this first exchange
-        logger.info(f"📋 Conversation {conversation_id[:8]}...: No checkpoint → NEW conversation (will generate title)")
-        return True
+        if state is None:
+            return True
+
+        # Check if there are any messages
+        # Handle both dict and method for state.values (LangGraph API compatibility)
+        values = state.values() if callable(state.values) else state.values
+        messages = values.get("messages", []) if isinstance(values, dict) else []
+        return len(messages) == 0
         
     except Exception as e:
         logger.warning(f"Error checking if first message: {e}")
@@ -223,29 +222,33 @@ def create_agent_for_context(
     is_new_conversation: bool = True,
 ):
     """Create a ReAct agent with tools configured for the given context.
-    
+
     Args:
         context: Tool context with auth and workspace info
         checkpointer: Optional checkpointer for conversation memory
         is_new_conversation: Whether this is the first message (for greeting behavior)
-        
+
     Returns:
         Compiled LangGraph agent
     """
     llm = get_llm()
     tools = get_all_tools(context)
-    
-    # Build dynamic system prompt with user context
+
+    # Build dynamic system prompt with user context and workspace instructions
     system_prompt = get_system_prompt(
         user_first_name=context.user_first_name,
         is_new_conversation=is_new_conversation,
+        workspace_instructions=context.workspace_instructions,
     )
-    
+
     # Log personalization info
     user_name = context.user_first_name or "Unknown"
     conv_type = "new" if is_new_conversation else "continuing"
-    logger.info(f"🤖 Creating agent for {user_name} ({conv_type} conversation)")
-    
+    if context.workspace_instructions:
+        logger.info(f"🤖 Creating agent for {user_name} ({conv_type} conversation) WITH custom instructions ({len(context.workspace_instructions)} chars)")
+    else:
+        logger.info(f"🤖 Creating agent for {user_name} ({conv_type} conversation) WITHOUT custom instructions")
+
     # Create the agent using the prebuilt ReAct pattern
     agent = create_react_agent(
         model=llm,
@@ -253,7 +256,7 @@ def create_agent_for_context(
         prompt=system_prompt,
         checkpointer=checkpointer,
     )
-    
+
     return agent
 
 

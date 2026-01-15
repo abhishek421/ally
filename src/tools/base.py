@@ -230,12 +230,12 @@ def format_fuzzy_suggestions(
 @dataclass
 class ToolContext:
     """Context passed to tools containing auth and workspace info.
-    
+
     Note: user_id should be the database user ID, not the Cognito sub.
     The API layer resolves the Cognito sub to the database ID before
     creating this context.
     """
-    
+
     auth_token: str
     workspace_id: str
     user_id: str  # Database user ID (resolved from Cognito sub at API layer)
@@ -243,7 +243,8 @@ class ToolContext:
     active_url: Optional[str] = None  # Current page URL the user is viewing
     user_first_name: Optional[str] = None  # User's first name for personalization
     user_email: Optional[str] = None  # User's email for context
-    
+    workspace_instructions: Optional[str] = None  # Custom instructions for the workspace
+
     def get_client(self) -> GraphQLClient:
         """Get a GraphQL client with the current context."""
         return GraphQLClient(self.auth_token, self.workspace_id, self.session_id)

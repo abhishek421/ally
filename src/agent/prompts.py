@@ -243,23 +243,45 @@ EXISTING_CONVERSATION_GREETING = """- This is a CONTINUING conversation with {us
 - No need to greet again - just continue helping naturally
 - Jump straight into addressing their request"""
 
+# Workspace custom instructions template
+WORKSPACE_INSTRUCTIONS_TEMPLATE = """
+## Workspace Context & Custom Instructions
+The workspace administrator has provided the following context and instructions for you to follow.
+These instructions provide important business context about this workspace - use this information
+to give more relevant and personalized assistance.
+
+<workspace_instructions>
+{instructions}
+</workspace_instructions>
+
+Remember to incorporate this context naturally into your responses when relevant.
+"""
+
 
 def get_system_prompt(
     user_first_name: Optional[str] = None,
     is_new_conversation: bool = True,
+    workspace_instructions: Optional[str] = None,
 ) -> str:
     """Build the system prompt with user context.
-    
+
     Args:
         user_first_name: User's first name for personalization (None if unknown)
         is_new_conversation: Whether this is the first message in the conversation
-        
+        workspace_instructions: Custom instructions set by workspace admin (None if not set)
+
     Returns:
-        Complete system prompt with user context
+        Complete system prompt with user context and workspace instructions
     """
     # Start with base prompt
     prompt = BASE_SYSTEM_PROMPT
-    
+
+    # Add workspace custom instructions if available (before user context)
+    if workspace_instructions:
+        prompt += WORKSPACE_INSTRUCTIONS_TEMPLATE.format(
+            instructions=workspace_instructions
+        )
+
     # Add user context if we know the user's name
     if user_first_name:
         # Choose greeting instruction based on conversation state
@@ -268,7 +290,7 @@ def get_system_prompt(
             if is_new_conversation
             else EXISTING_CONVERSATION_GREETING.format(user_name=user_first_name)
         )
-        
+
         # Add user context section
         user_context = USER_CONTEXT_TEMPLATE.format(
             user_name=user_first_name,
@@ -289,7 +311,7 @@ def get_system_prompt(
 - Offer follow-up suggestions
 - Keep responses concise but warm
 """
-    
+
     return prompt
 
 
