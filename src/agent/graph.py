@@ -19,6 +19,41 @@ from src.tools.base import ToolContext, parse_data_change
 
 logger = logging.getLogger(__name__)
 
+
+def _extract_text_content(content: Any) -> str:
+    """Extract text from LLM response content.
+    
+    Handles different content formats from various providers:
+    - OpenAI/Anthropic: Plain string
+    - Gemini: List of content blocks like [{'type': 'text', 'text': '...', 'extras': {...}}]
+    
+    Args:
+        content: The content from an LLM message
+        
+    Returns:
+        Extracted text as a string
+    """
+    if isinstance(content, str):
+        return content
+    
+    if isinstance(content, list):
+        # Gemini returns list of content blocks
+        text_parts = []
+        for block in content:
+            if isinstance(block, dict):
+                # Extract text from content block
+                if block.get("type") == "text" and "text" in block:
+                    text_parts.append(block["text"])
+                elif "text" in block:
+                    text_parts.append(block["text"])
+            elif isinstance(block, str):
+                text_parts.append(block)
+        return "".join(text_parts)
+    
+    # Fallback: convert to string
+    return str(content)
+
+
 # Global checkpointer and connection manager
 _checkpointer_context = None
 _checkpointer: AsyncPostgresSaver | MemorySaver | None = None
@@ -37,9 +72,10 @@ def get_llm():
             streaming=True,
         )
     elif settings.is_gemini:
+        logger.info(f"Initializing Gemini with model={settings.llm_model}, api_key={settings.google_api_key}")
         return ChatGoogleGenerativeAI(
             model=settings.llm_model,
-            google_api_key=settings.google_api_key,
+            api_key=settings.google_api_key,
             temperature=0.7,
             streaming=True,
         )
@@ -135,8 +171,8 @@ Title:"""
         # Use invoke for a single quick response (non-streaming for speed)
         response = await llm.ainvoke(title_prompt)
         
-        # Extract and clean up the title
-        title = response.content.strip()
+        # Extract and clean up the title (handles Gemini's content block format)
+        title = _extract_text_content(response.content).strip()
         
         # Remove any leading "Title:" or quotes
         title = re.sub(r'^(title:?\s*)', '', title, flags=re.IGNORECASE)
@@ -426,20 +462,22 @@ async def stream_agent(
                                     },
                                 }
                         elif hasattr(msg, "content") and msg.content:
-                            # Agent response - truncate for logging
-                            content_preview = msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
+                            # Extract text from content (handles Gemini's content block format)
+                            text_content = _extract_text_content(msg.content)
+                            content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
                             logger.info(f"   💬 RESPONSE: {content_preview}")
                             yield {
                                 "type": "response",
-                                "data": {"content": msg.content},
+                                "data": {"content": text_content},
                             }
                 elif node_name == "tools":
                     # Tool execution results
                     messages = node_output.get("messages", [])
                     for msg in messages:
                         if hasattr(msg, "content"):
-                            # Parse result to extract any data change metadata
-                            cleaned_result, change_data = parse_data_change(msg.content)
+                            # Extract text and parse result to extract any data change metadata
+                            tool_content = _extract_text_content(msg.content)
+                            cleaned_result, change_data = parse_data_change(tool_content)
                             tool_name = getattr(msg, "name", "unknown")
                             # Calculate result count/size for logging
                             result_info = _get_result_summary(cleaned_result)
@@ -560,17 +598,20 @@ async def resume_agent(
                                     },
                                 }
                         elif hasattr(msg, "content") and msg.content:
-                            content_preview = msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
+                            # Extract text from content (handles Gemini's content block format)
+                            text_content = _extract_text_content(msg.content)
+                            content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
                             logger.info(f"   💬 RESPONSE: {content_preview}")
                             yield {
                                 "type": "response",
-                                "data": {"content": msg.content},
+                                "data": {"content": text_content},
                             }
                 elif node_name == "tools":
                     messages = node_output.get("messages", [])
                     for msg in messages:
                         if hasattr(msg, "content"):
-                            cleaned_result, change_data = parse_data_change(msg.content)
+                            tool_content = _extract_text_content(msg.content)
+                            cleaned_result, change_data = parse_data_change(tool_content)
                             tool_name = getattr(msg, "name", "unknown")
                             result_info = _get_result_summary(cleaned_result)
                             logger.info(f"   ✅ TOOL RESULT: {tool_name} → {result_info}")
