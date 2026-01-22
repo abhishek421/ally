@@ -1209,7 +1209,7 @@ def get_read_tools(context: ToolContext) -> list:
             await client.close()
 
     @tool
-    async def get_person_emails(
+    async def list_Emails_From_Person(
         person_id: str,
         limit: int = 10,
     ) -> str:
@@ -1289,7 +1289,7 @@ def get_read_tools(context: ToolContext) -> list:
             await client.close()
 
     @tool
-    async def get_company_emails(
+    async def list_Emails_From_Company(
         company_id: str,
         limit: int = 10,
     ) -> str:
@@ -1365,6 +1365,136 @@ def get_read_tools(context: ToolContext) -> list:
         except Exception as e:
             logger.error(f"Error getting company emails: {e}")
             return f"Error getting company emails: {str(e)}"
+        finally:
+            await client.close()
+
+    @tool
+    async def get_email_thread(
+        thread_id: str,
+        person_id: Optional[str] = None,
+        company_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> str:
+        """Get the full conversation history for a specific email thread.
+        
+        Use this tool when you need to see the context of a conversation.
+        You must provide either a person_id OR a company_id to scope the search,
+        along with the thread_id found in a previous email listing.
+        
+        Args:
+            thread_id: The unique ID of the thread to retrieve
+            person_id: (Optional) The ID of the person associated with this thread
+            company_id: (Optional) The ID of the company associated with this thread
+            limit: How many recent emails to fetch for searching (default: 50)
+            
+        Returns:
+            Formatted chronological list of all emails in the thread
+        """
+        if not person_id and not company_id:
+            return "Error: You must provide either a person_id OR a company_id to fetch a thread."
+
+        client = context.get_client()
+        
+        try:
+            full_email_list = []
+            
+            # 1. Fetch recent emails from the appropriate context
+            # We fetch a larger batch (limit) to find related messages
+            if person_id:
+                query = """
+                query GetPersonEmails($personId: ID!, $workspaceId: String!, $limit: Int) {
+                    getPersonEmails(personId: $personId, workspaceId: $workspaceId, limit: $limit) {
+                        emails {
+                            messageId
+                            threadId
+                            subject
+                            from
+                            to
+                            direction
+                            body
+                            date
+                            interactionType
+                        }
+                    }
+                }
+                """
+                variables = {
+                    "personId": person_id,
+                    "workspaceId": context.workspace_id,
+                    "limit": limit
+                }
+                result = await client.query(query, variables)
+                full_email_list = result.get("getPersonEmails", {}).get("emails", [])
+                
+            elif company_id:
+                query = """
+                query GetCompanyEmails($companyId: ID!, $workspaceId: String!, $limit: Int) {
+                    getCompanyEmails(companyId: $companyId, workspaceId: $workspaceId, limit: $limit) {
+                        emails {
+                            messageId
+                            threadId
+                            subject
+                            from
+                            to
+                            direction
+                            body
+                            date
+                            interactionType
+                        }
+                    }
+                }
+                """
+                variables = {
+                    "companyId": company_id,
+                    "workspaceId": context.workspace_id,
+                    "limit": limit
+                }
+                result = await client.query(query, variables)
+                full_email_list = result.get("getCompanyEmails", {}).get("emails", [])
+
+            if not full_email_list:
+                return "No emails found in the specified context."
+
+            # 2. Filter by thread_id
+            thread_emails = [
+                email for email in full_email_list 
+                if email.get('threadId') == thread_id
+            ]
+
+            if not thread_emails:
+                return f"No emails found with Thread ID: {thread_id}. The thread might be older than the last {limit} messages."
+
+            # 3. Sort chronologically (oldest to newest)
+            # Python's sort is stable; date strings ISO8601 sort correctly lexicographically
+            thread_emails.sort(key=lambda x: x.get('date', ''))
+
+            # 4. Format the conversation
+            lines = [f"Found {len(thread_emails)} messages in thread {thread_id}:\n"]
+            
+            for i, email in enumerate(thread_emails, 1):
+                direction = "📤 Sent" if email.get('direction') == 'sent' else "📥 Received"
+                date_str = email.get('date', '')[:16].replace('T', ' ')
+                
+                lines.append(f"--- Message {i} ({date_str}) ---")
+                lines.append(f"{direction} | Subject: {email.get('subject', '(No Subject)')}")
+                lines.append(f"From: {email.get('from', 'Unknown')}")
+                
+                to_list = email.get('to', [])
+                if to_list:
+                    lines.append(f"To: {', '.join(to_list)}")
+                
+                body = email.get('body', '').strip()
+                if body:
+                    lines.append(f"\n{body}")
+                else:
+                    lines.append("\n(No body content)")
+                lines.append("") # Empty line between messages
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.error(f"Error getting email thread: {e}")
+            return f"Error getting email thread: {str(e)}"
         finally:
             await client.close()
 
@@ -1784,8 +1914,9 @@ def get_read_tools(context: ToolContext) -> list:
         search_person_by_name,
         search_group_by_name,
         # Email/interaction tools
-        get_person_emails,
-        get_company_emails,
+        list_Emails_From_Person,
+        list_Emails_From_Company,
+        get_email_thread,
         # Group column tools
         get_group_columns,
         get_column_options,

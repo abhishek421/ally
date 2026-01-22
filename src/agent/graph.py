@@ -11,6 +11,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command, interrupt
+import time
 
 from src.config import get_settings
 from src.agent.prompts import get_system_prompt
@@ -106,13 +107,13 @@ async def is_first_message(conversation_id: str) -> bool:
         # Try to get existing checkpoint
         checkpoint_tuple = await checkpointer.aget(config)
         
-        if state is None:
+        if checkpoint_tuple is None:
             return True
 
         # Check if there are any messages
-        # Handle both dict and method for state.values (LangGraph API compatibility)
-        values = state.values() if callable(state.values) else state.values
-        messages = values.get("messages", []) if isinstance(values, dict) else []
+        # CheckpointTuple has a checkpoint attribute which is a dict containing 'channel_values'
+        checkpoint = checkpoint_tuple.checkpoint
+        messages = checkpoint.get("channel_values", {}).get("messages", [])
         return len(messages) == 0
         
     except Exception as e:
@@ -420,6 +421,12 @@ async def stream_agent(
     }
     # Track tool calls for summary logging
     tool_calls_summary = []
+    
+    # Heartbeat configuration
+    last_heartbeat_time = time.time()
+    heartbeat_interval = 1.5  # seconds
+    has_seen_tool_result = False
+    
     try:
         # Stream using updates mode to get step-by-step progress
         async for chunk in agent.astream(
@@ -429,9 +436,19 @@ async def stream_agent(
             config=config,
             stream_mode="updates",
         ):
+            # Check for heartbeat
+            current_time = time.time()
+            if current_time - last_heartbeat_time > heartbeat_interval:
+                status = "Analyzing results..." if has_seen_tool_result else "Thinking..."
+                yield {
+                    "type": "thinking",
+                    "data": {"status": status},
+                }
+                last_heartbeat_time = current_time
             
-            # Check for interrupt FIRST (confirmation request from tools)
+            # Check for interrupt FIRST
             if "__interrupt__" in chunk:
+                # ... interrupt handling ...
                 interrupt_info = chunk["__interrupt__"]
                 if interrupt_info and len(interrupt_info) > 0:
                     interrupt_data = interrupt_info[0].value if hasattr(interrupt_info[0], 'value') else interrupt_info[0]
@@ -440,17 +457,18 @@ async def stream_agent(
                         "type": "confirmation_required",
                         "data": interrupt_data,
                     }
-                    return  # Stop streaming, wait for user response
+                    return
+            
             # Process each update chunk
             for node_name, node_output in chunk.items():
                 if node_name == "__interrupt__":
-                    continue  # Already handled above
+                    continue
                 if node_name == "agent":
-                    # This is the LLM response
                     messages = node_output.get("messages", [])
                     for msg in messages:
                         if hasattr(msg, "tool_calls") and msg.tool_calls:
-                            # Agent decided to call tools
+                            # Reset status flag when new tool calls are made
+                            has_seen_tool_result = False
                             for tool_call in msg.tool_calls:
                                 tool_name = tool_call.get("name")
                                 logger.info(f"   🔧 TOOL CALL: {tool_name}")
@@ -462,7 +480,8 @@ async def stream_agent(
                                     },
                                 }
                         elif hasattr(msg, "content") and msg.content:
-                            # Extract text from content (handles Gemini's content block format)
+                            # Reset status flag when content arrives
+                            has_seen_tool_result = False
                             text_content = _extract_text_content(msg.content)
                             content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
                             logger.info(f"   💬 RESPONSE: {content_preview}")
@@ -471,19 +490,17 @@ async def stream_agent(
                                 "data": {"content": text_content},
                             }
                 elif node_name == "tools":
-                    # Tool execution results
+                    # Mark that we have seen tool results
+                    has_seen_tool_result = True
                     messages = node_output.get("messages", [])
                     for msg in messages:
                         if hasattr(msg, "content"):
-                            # Extract text and parse result to extract any data change metadata
                             tool_content = _extract_text_content(msg.content)
                             cleaned_result, change_data = parse_data_change(tool_content)
                             tool_name = getattr(msg, "name", "unknown")
-                            # Calculate result count/size for logging
                             result_info = _get_result_summary(cleaned_result)
                             tool_calls_summary.append(f"{tool_name} → {result_info}")
                             logger.info(f"   ✅ TOOL RESULT: {tool_name} → {result_info}")
-                            # Yield the tool result (with cleaned content)
                             yield {
                                 "type": "tool_result",
                                 "data": {
@@ -491,7 +508,6 @@ async def stream_agent(
                                     "result": cleaned_result,
                                 },
                             }
-                            # If there was a data change, emit a separate event for frontend cache invalidation
                             if change_data:
                                 yield {
                                     "type": "data_changed",
@@ -533,13 +549,16 @@ async def resume_agent(
         }
     }
     confirmed = confirmation_response.get("confirmed", False)
-    logger.info(f"▶️  RESUME: confirmed={confirmed}")
+    # Heartbeat configuration
+    last_heartbeat_time = time.time()
+    heartbeat_interval = 1.5  # seconds
+    has_seen_tool_result = False
+
     try:
         # Get interrupt IDs from the agent's state snapshot
-        # This is needed when multiple tools called interrupt() in parallel
         state_snapshot = await agent.aget_state(config)
         
-        # Extract interrupt IDs from the state
+        # ... (interrupt logic) ...
         pending_interrupts = []
         if state_snapshot and hasattr(state_snapshot, 'tasks'):
             for task in state_snapshot.tasks:
@@ -550,25 +569,29 @@ async def resume_agent(
         
         # Build the resume command
         if len(pending_interrupts) > 1:
-            # Multiple interrupts - map the SAME response to ALL of them
             resume_value = {intr_id: confirmation_response for intr_id in pending_interrupts}
-            logger.info(f"Resuming {len(pending_interrupts)} pending interrupt(s)")
         elif len(pending_interrupts) == 1:
-            # Single interrupt - can use dict format for safety
             resume_value = {pending_interrupts[0]: confirmation_response}
-            logger.info(f"Resuming 1 pending interrupt")
         else:
-            # No interrupt IDs found - use simple format (fallback)
             resume_value = confirmation_response
-            logger.info(f"Resuming with simple format (no interrupt IDs found)")
         
-        # Resume the agent by invoking with a Command that provides the interrupt response
+        # Resume the agent
         async for chunk in agent.astream(
             Command(resume=resume_value),
             config=config,
             stream_mode="updates",
         ):
-            # Check for another interrupt FIRST (nested confirmation)
+            # Check for heartbeat
+            current_time = time.time()
+            if current_time - last_heartbeat_time > heartbeat_interval:
+                status = "Analyzing results..." if has_seen_tool_result else "Thinking..."
+                yield {
+                    "type": "thinking",
+                    "data": {"status": status},
+                }
+                last_heartbeat_time = current_time
+
+            # Check for another interrupt FIRST
             if "__interrupt__" in chunk:
                 interrupt_info = chunk["__interrupt__"]
                 if interrupt_info and len(interrupt_info) > 0:
@@ -578,18 +601,19 @@ async def resume_agent(
                         "type": "confirmation_required",
                         "data": interrupt_data,
                     }
-                    return  # Stop streaming, wait for user response
-            # Process each update chunk (same logic as stream_agent)
+                    return
+            
+            # Process chunks
             for node_name, node_output in chunk.items():
                 if node_name == "__interrupt__":
-                    continue  # Already handled above
+                    continue
                 if node_name == "agent":
                     messages = node_output.get("messages", [])
                     for msg in messages:
                         if hasattr(msg, "tool_calls") and msg.tool_calls:
+                            has_seen_tool_result = False
                             for tool_call in msg.tool_calls:
                                 tool_name = tool_call.get("name")
-                                logger.info(f"   🔧 TOOL CALL: {tool_name}")
                                 yield {
                                     "type": "tool_call",
                                     "data": {
@@ -598,23 +622,20 @@ async def resume_agent(
                                     },
                                 }
                         elif hasattr(msg, "content") and msg.content:
-                            # Extract text from content (handles Gemini's content block format)
+                            has_seen_tool_result = False
                             text_content = _extract_text_content(msg.content)
-                            content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
-                            logger.info(f"   💬 RESPONSE: {content_preview}")
                             yield {
                                 "type": "response",
                                 "data": {"content": text_content},
                             }
                 elif node_name == "tools":
+                    has_seen_tool_result = True
                     messages = node_output.get("messages", [])
                     for msg in messages:
                         if hasattr(msg, "content"):
                             tool_content = _extract_text_content(msg.content)
-                            cleaned_result, change_data = parse_data_change(tool_content)
+                            cleaned_result, _ = parse_data_change(tool_content)
                             tool_name = getattr(msg, "name", "unknown")
-                            result_info = _get_result_summary(cleaned_result)
-                            logger.info(f"   ✅ TOOL RESULT: {tool_name} → {result_info}")
                             yield {
                                 "type": "tool_result",
                                 "data": {
@@ -622,11 +643,6 @@ async def resume_agent(
                                     "result": cleaned_result,
                                 },
                             }
-                            if change_data:
-                                yield {
-                                    "type": "data_changed",
-                                    "data": change_data,
-                                }
         # Signal completion
         yield {"type": "done", "data": {}}
         
