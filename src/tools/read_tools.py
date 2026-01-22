@@ -53,14 +53,12 @@ def get_read_tools(context: ToolContext) -> list:
         query = """
         query GetWorkspaceCompany(
             $workspaceId: ID!
-            $userId: ID!
             $page: Int
             $limit: Int
             $search: String
         ) {
             getWorkspaceCompany(
                 workspaceId: $workspaceId
-                userId: $userId
                 page: $page
                 limit: $limit
                 search: $search
@@ -76,11 +74,10 @@ def get_read_tools(context: ToolContext) -> list:
             }
         }
         """
-        
+
         try:
             result = await client.query(query, {
                 "workspaceId": context.workspace_id,
-                "userId": context.user_id,
                 "page": page,
                 "limit": min(limit, 50),
                 "search": search,
@@ -130,14 +127,12 @@ def get_read_tools(context: ToolContext) -> list:
         query = """
         query GetWorkspacePeople(
             $workspaceId: ID!
-            $userId: ID!
             $page: Int
             $limit: Int
             $search: String
         ) {
             getWorkspacePeople(
                 workspaceId: $workspaceId
-                userId: $userId
                 page: $page
                 limit: $limit
                 search: $search
@@ -158,11 +153,10 @@ def get_read_tools(context: ToolContext) -> list:
             }
         }
         """
-        
+
         try:
             result = await client.query(query, {
                 "workspaceId": context.workspace_id,
-                "userId": context.user_id,
                 "page": page,
                 "limit": min(limit, 50),
                 "search": search,
@@ -629,13 +623,11 @@ def get_read_tools(context: ToolContext) -> list:
             list_query = """
             query GetWorkspaceCompany(
                 $workspaceId: ID!
-                $userId: ID!
                 $limit: Int
                 $search: String
             ) {
                 getWorkspaceCompany(
                     workspaceId: $workspaceId
-                    userId: $userId
                     limit: $limit
                     search: $search
                 ) {
@@ -646,10 +638,9 @@ def get_read_tools(context: ToolContext) -> list:
                 }
             }
             """
-            
+
             result = await client.query(list_query, {
                 "workspaceId": context.workspace_id,
-                "userId": context.user_id,
                 "limit": limit,
                 "search": query,
             })
@@ -730,13 +721,11 @@ def get_read_tools(context: ToolContext) -> list:
             list_query = """
             query GetWorkspacePeople(
                 $workspaceId: ID!
-                $userId: ID!
                 $limit: Int
                 $search: String
             ) {
                 getWorkspacePeople(
                     workspaceId: $workspaceId
-                    userId: $userId
                     limit: $limit
                     search: $search
                 ) {
@@ -748,10 +737,9 @@ def get_read_tools(context: ToolContext) -> list:
                 }
             }
             """
-            
+
             result = await client.query(list_query, {
                 "workspaceId": context.workspace_id,
-                "userId": context.user_id,
                 "limit": limit,
                 "search": query,
             })
@@ -913,24 +901,21 @@ def get_read_tools(context: ToolContext) -> list:
         """
         client = context.get_client()
 
-        # Use the search API (Elasticsearch-backed)
+        # Use getWorkspaceCompany with search parameter (same as frontend)
         search_query = """
-        query Search(
-            $workspaceId: String!
-            $query: String
-            $type: String
-            $size: Int
+        query GetWorkspaceCompany(
+            $workspaceId: ID!
+            $limit: Int
+            $search: String
         ) {
-            search(
+            getWorkspaceCompany(
                 workspaceId: $workspaceId
-                query: $query
-                type: $type
-                size: $size
+                limit: $limit
+                search: $search
             ) {
-                hits {
+                data {
                     id
                     name
-                    score
                 }
             }
         }
@@ -940,12 +925,11 @@ def get_read_tools(context: ToolContext) -> list:
             # First, try searching with the full name
             result = await client.query(search_query, {
                 "workspaceId": context.workspace_id,
-                "query": name,
-                "type": "company",
-                "size": 20,
+                "limit": 20,
+                "search": name,
             })
 
-            companies = result.get("search", {}).get("hits", [])
+            companies = result.get("getWorkspaceCompany", {}).get("data", [])
 
             # If full name search yields no results, try searching each name part separately
             if not companies:
@@ -959,11 +943,10 @@ def get_read_tools(context: ToolContext) -> list:
                             continue
                         part_result = await client.query(search_query, {
                             "workspaceId": context.workspace_id,
-                            "query": part,
-                            "type": "company",
-                            "size": 20,
+                            "limit": 20,
+                            "search": part,
                         })
-                        part_hits = part_result.get("search", {}).get("hits", [])
+                        part_hits = part_result.get("getWorkspaceCompany", {}).get("data", [])
                         for hit in part_hits:
                             if hit.get("id") and hit["id"] not in combined_results:
                                 combined_results[hit["id"]] = hit
@@ -1033,40 +1016,43 @@ def get_read_tools(context: ToolContext) -> list:
         """
         client = context.get_client()
 
-        # Use the search API (Elasticsearch-backed)
+        # Use getWorkspacePeople with search parameter (same as frontend)
         search_query = """
-        query Search(
-            $workspaceId: String!
-            $query: String
-            $type: String
-            $size: Int
+        query GetWorkspacePeople(
+            $workspaceId: ID!
+            $limit: Int
+            $search: String
         ) {
-            search(
+            getWorkspacePeople(
                 workspaceId: $workspaceId
-                query: $query
-                type: $type
-                size: $size
+                limit: $limit
+                search: $search
             ) {
-                hits {
+                data {
                     id
-                    name
+                    firstName
+                    lastName
                     jobTitle
-                    score
                 }
             }
         }
         """
 
+        def normalize_person(p):
+            """Add 'name' field for fuzzy matching compatibility."""
+            full_name = f"{p.get('firstName', '')} {p.get('lastName', '')}".strip()
+            return {**p, "name": full_name}
+
         try:
             # First, try searching with the full name
             result = await client.query(search_query, {
                 "workspaceId": context.workspace_id,
-                "query": name,
-                "type": "person",
-                "size": 20,
+                "limit": 20,
+                "search": name,
             })
 
-            people = result.get("search", {}).get("hits", [])
+            raw_people = result.get("getWorkspacePeople", {}).get("data", [])
+            people = [normalize_person(p) for p in raw_people]
 
             # If full name search yields no results, try searching each name part separately
             if not people:
@@ -1080,14 +1066,13 @@ def get_read_tools(context: ToolContext) -> list:
                             continue
                         part_result = await client.query(search_query, {
                             "workspaceId": context.workspace_id,
-                            "query": part,
-                            "type": "person",
-                            "size": 20,
+                            "limit": 20,
+                            "search": part,
                         })
-                        part_hits = part_result.get("search", {}).get("hits", [])
+                        part_hits = part_result.get("getWorkspacePeople", {}).get("data", [])
                         for hit in part_hits:
                             if hit.get("id") and hit["id"] not in combined_results:
-                                combined_results[hit["id"]] = hit
+                                combined_results[hit["id"]] = normalize_person(hit)
 
                     people = list(combined_results.values())
                     if people:

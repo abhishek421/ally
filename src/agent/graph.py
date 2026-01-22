@@ -19,6 +19,41 @@ from src.tools.base import ToolContext, parse_data_change
 
 logger = logging.getLogger(__name__)
 
+
+def _extract_text_content(content: Any) -> str:
+    """Extract text from LLM response content.
+    
+    Handles different content formats from various providers:
+    - OpenAI/Anthropic: Plain string
+    - Gemini: List of content blocks like [{'type': 'text', 'text': '...', 'extras': {...}}]
+    
+    Args:
+        content: The content from an LLM message
+        
+    Returns:
+        Extracted text as a string
+    """
+    if isinstance(content, str):
+        return content
+    
+    if isinstance(content, list):
+        # Gemini returns list of content blocks
+        text_parts = []
+        for block in content:
+            if isinstance(block, dict):
+                # Extract text from content block
+                if block.get("type") == "text" and "text" in block:
+                    text_parts.append(block["text"])
+                elif "text" in block:
+                    text_parts.append(block["text"])
+            elif isinstance(block, str):
+                text_parts.append(block)
+        return "".join(text_parts)
+    
+    # Fallback: convert to string
+    return str(content)
+
+
 # Global checkpointer and connection manager
 _checkpointer_context = None
 _checkpointer: AsyncPostgresSaver | MemorySaver | None = None
@@ -37,9 +72,10 @@ def get_llm():
             streaming=True,
         )
     elif settings.is_gemini:
+        logger.info(f"Initializing Gemini with model={settings.llm_model}, api_key={settings.google_api_key}")
         return ChatGoogleGenerativeAI(
             model=settings.llm_model,
-            google_api_key=settings.google_api_key,
+            api_key=settings.google_api_key,
             temperature=0.7,
             streaming=True,
         )
@@ -70,15 +106,14 @@ async def is_first_message(conversation_id: str) -> bool:
         # Try to get existing checkpoint
         checkpoint_tuple = await checkpointer.aget(config)
         
-        # Simple logic: if checkpoint exists, conversation already started
-        # Title was already generated after the first message, so skip
-        if checkpoint_tuple is not None:
-            logger.info(f"📋 Conversation {conversation_id[:8]}...: Checkpoint exists → EXISTING conversation (skip title)")
-            return False
-        
-        # No checkpoint = brand new conversation, generate title after this first exchange
-        logger.info(f"📋 Conversation {conversation_id[:8]}...: No checkpoint → NEW conversation (will generate title)")
-        return True
+        if state is None:
+            return True
+
+        # Check if there are any messages
+        # Handle both dict and method for state.values (LangGraph API compatibility)
+        values = state.values() if callable(state.values) else state.values
+        messages = values.get("messages", []) if isinstance(values, dict) else []
+        return len(messages) == 0
         
     except Exception as e:
         logger.warning(f"Error checking if first message: {e}")
@@ -136,8 +171,8 @@ Title:"""
         # Use invoke for a single quick response (non-streaming for speed)
         response = await llm.ainvoke(title_prompt)
         
-        # Extract and clean up the title
-        title = response.content.strip()
+        # Extract and clean up the title (handles Gemini's content block format)
+        title = _extract_text_content(response.content).strip()
         
         # Remove any leading "Title:" or quotes
         title = re.sub(r'^(title:?\s*)', '', title, flags=re.IGNORECASE)
@@ -223,29 +258,33 @@ def create_agent_for_context(
     is_new_conversation: bool = True,
 ):
     """Create a ReAct agent with tools configured for the given context.
-    
+
     Args:
         context: Tool context with auth and workspace info
         checkpointer: Optional checkpointer for conversation memory
         is_new_conversation: Whether this is the first message (for greeting behavior)
-        
+
     Returns:
         Compiled LangGraph agent
     """
     llm = get_llm()
     tools = get_all_tools(context)
-    
-    # Build dynamic system prompt with user context
+
+    # Build dynamic system prompt with user context and workspace instructions
     system_prompt = get_system_prompt(
         user_first_name=context.user_first_name,
         is_new_conversation=is_new_conversation,
+        workspace_instructions=context.workspace_instructions,
     )
-    
+
     # Log personalization info
     user_name = context.user_first_name or "Unknown"
     conv_type = "new" if is_new_conversation else "continuing"
-    logger.info(f"🤖 Creating agent for {user_name} ({conv_type} conversation)")
-    
+    if context.workspace_instructions:
+        logger.info(f"🤖 Creating agent for {user_name} ({conv_type} conversation) WITH custom instructions ({len(context.workspace_instructions)} chars)")
+    else:
+        logger.info(f"🤖 Creating agent for {user_name} ({conv_type} conversation) WITHOUT custom instructions")
+
     # Create the agent using the prebuilt ReAct pattern
     agent = create_react_agent(
         model=llm,
@@ -253,7 +292,7 @@ def create_agent_for_context(
         prompt=system_prompt,
         checkpointer=checkpointer,
     )
-    
+
     return agent
 
 
@@ -423,20 +462,22 @@ async def stream_agent(
                                     },
                                 }
                         elif hasattr(msg, "content") and msg.content:
-                            # Agent response - truncate for logging
-                            content_preview = msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
+                            # Extract text from content (handles Gemini's content block format)
+                            text_content = _extract_text_content(msg.content)
+                            content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
                             logger.info(f"   💬 RESPONSE: {content_preview}")
                             yield {
                                 "type": "response",
-                                "data": {"content": msg.content},
+                                "data": {"content": text_content},
                             }
                 elif node_name == "tools":
                     # Tool execution results
                     messages = node_output.get("messages", [])
                     for msg in messages:
                         if hasattr(msg, "content"):
-                            # Parse result to extract any data change metadata
-                            cleaned_result, change_data = parse_data_change(msg.content)
+                            # Extract text and parse result to extract any data change metadata
+                            tool_content = _extract_text_content(msg.content)
+                            cleaned_result, change_data = parse_data_change(tool_content)
                             tool_name = getattr(msg, "name", "unknown")
                             # Calculate result count/size for logging
                             result_info = _get_result_summary(cleaned_result)
@@ -557,17 +598,20 @@ async def resume_agent(
                                     },
                                 }
                         elif hasattr(msg, "content") and msg.content:
-                            content_preview = msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
+                            # Extract text from content (handles Gemini's content block format)
+                            text_content = _extract_text_content(msg.content)
+                            content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
                             logger.info(f"   💬 RESPONSE: {content_preview}")
                             yield {
                                 "type": "response",
-                                "data": {"content": msg.content},
+                                "data": {"content": text_content},
                             }
                 elif node_name == "tools":
                     messages = node_output.get("messages", [])
                     for msg in messages:
                         if hasattr(msg, "content"):
-                            cleaned_result, change_data = parse_data_change(msg.content)
+                            tool_content = _extract_text_content(msg.content)
+                            cleaned_result, change_data = parse_data_change(tool_content)
                             tool_name = getattr(msg, "name", "unknown")
                             result_info = _get_result_summary(cleaned_result)
                             logger.info(f"   ✅ TOOL RESULT: {tool_name} → {result_info}")

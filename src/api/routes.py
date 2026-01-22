@@ -1,5 +1,6 @@
 """API routes for the Ally AI service."""
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -55,6 +56,35 @@ async def resolve_user_profile(auth: AuthContext) -> UserProfile:
     except Exception as e:
         logger.error(f"Error resolving user profile: {e}")
         return UserProfile(user_id=auth.user_id)
+    finally:
+        await client.close()
+
+
+async def resolve_workspace_instructions(auth: AuthContext) -> str | None:
+    """Fetch custom instructions for the workspace.
+
+    These instructions are set by workspace admins to provide business
+    context to the AI agent.
+
+    Args:
+        auth: Auth context from the request
+
+    Returns:
+        Custom instructions string or None if not set
+    """
+    logger.info(f"🔍 Fetching custom instructions for workspace: {auth.workspace_id}")
+    client = GraphQLClient(auth.auth_token, auth.workspace_id, auth.session_id)
+    try:
+        instructions = await client.get_workspace_custom_instructions()
+        if instructions:
+            logger.info(f"✅ Loaded workspace custom instructions ({len(instructions)} chars)")
+            logger.info(f"📋 Instructions preview: {instructions[:100]}...")
+        else:
+            logger.info(f"ℹ️  No custom instructions set for workspace {auth.workspace_id}")
+        return instructions
+    except Exception as e:
+        logger.warning(f"❌ Error fetching workspace instructions: {e}")
+        return None
     finally:
         await client.close()
 
@@ -148,18 +178,18 @@ async def chat(
     auth: AuthContext = Depends(get_current_user),
 ):
     """Stream a chat response from Ally.
-    
+
     This endpoint uses Server-Sent Events (SSE) to stream the response
     as the agent processes the request.
-    
+
     **Headers:**
     - `Authorization: Bearer <token>` - JWT token
     - `X-Workspace-ID: <workspace_id>` - Current workspace ID
-    
+
     **Request Body:**
     - `conversation_id` - ID of the conversation thread
     - `message` - User message to send
-    
+
     **Response (SSE):**
     Events are sent as SSE with the following types:
     - `thinking` - Agent's reasoning process
@@ -170,15 +200,18 @@ async def chat(
     - `error` - Error message if something went wrong
     - `done` - Stream completion signal
     """
-    # Resolve the user profile (database ID + name for personalization)
-    user_profile = await resolve_user_profile(auth)
+    # Fetch user profile and workspace instructions in parallel for performance
+    user_profile, workspace_instructions = await asyncio.gather(
+        resolve_user_profile(auth),
+        resolve_workspace_instructions(auth),
+    )
 
     # Log the incoming query in a clean format
     query_preview = request.message[:80] + "..." if len(request.message) > 80 else request.message
     user_name = user_profile.first_name or "User"
     logger.info(f"📩 QUERY from {user_name}: \"{query_preview}\"")
-    
-    # Create tool context with user profile for personalization
+
+    # Create tool context with user profile and workspace instructions
     context = ToolContext(
         auth_token=auth.auth_token,
         workspace_id=auth.workspace_id,
@@ -187,8 +220,9 @@ async def chat(
         user_first_name=user_profile.first_name,
         user_email=user_profile.email,
         active_url=request.activeURL,
+        workspace_instructions=workspace_instructions,
     )
-    
+
     return EventSourceResponse(
         event_generator(context, request.message, request.conversation_id),
         media_type="text/event-stream",
@@ -248,29 +282,33 @@ async def confirm_action(
     auth: AuthContext = Depends(get_current_user),
 ):
     """Resume agent execution after user confirmation.
-    
+
     This endpoint is called when the user responds to a confirmation request.
     It resumes the agent from where it was interrupted and continues streaming
     the response.
-    
+
     **Headers:**
     - `Authorization: Bearer <token>` - JWT token
     - `X-Workspace-ID: <workspace_id>` - Current workspace ID
-    
+
     **Request Body:**
     - `conversation_id` - ID of the conversation thread
     - `confirmed` - Whether the user confirmed the action
     - `selected_id` - Selected option ID for SELECT_ONE confirmations
     - `selected_ids` - Selected option IDs for SELECT_MANY confirmations
     - `feedback` - Optional feedback from user (e.g., on cancel)
-    
+
     **Response (SSE):**
     Same event types as /chat endpoint.
     """
-    # Resolve the user profile (database ID + name for personalization)
-    user_profile = await resolve_user_profile(auth)
-    
-    # Create tool context with user profile
+
+    # Fetch user profile and workspace instructions in parallel
+    user_profile, workspace_instructions = await asyncio.gather(
+        resolve_user_profile(auth),
+        resolve_workspace_instructions(auth),
+    )
+
+    # Create tool context with user profile and workspace instructions
     context = ToolContext(
         auth_token=auth.auth_token,
         workspace_id=auth.workspace_id,
@@ -278,8 +316,9 @@ async def confirm_action(
         session_id=auth.session_id,
         user_first_name=user_profile.first_name,
         user_email=user_profile.email,
+        workspace_instructions=workspace_instructions,
     )
-    
+
     # Build confirmation response dict
     confirmation_response = {
         "confirmed": request.confirmed,
@@ -287,7 +326,7 @@ async def confirm_action(
         "selected_ids": request.selected_ids,
         "feedback": request.feedback,
     }
-    
+
     return EventSourceResponse(
         confirmation_event_generator(context, request.conversation_id, confirmation_response),
         media_type="text/event-stream",

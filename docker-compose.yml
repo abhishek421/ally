@@ -34,6 +34,7 @@ services:
       LLM_MODEL: "${LLM_MODEL:-gpt-4o}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      GOOGLE_API_KEY: "${GOOGLE_API_KEY:-}"
       
       # Backend GraphQL (adjust to your backend service)
       BACKEND_GRAPHQL_URL: "${BACKEND_GRAPHQL_URL:-http://host.docker.internal:3000/graphql}"

@@ -169,6 +169,35 @@ class GraphQLClient:
             logger.error(f"Failed to get current user profile: {e}")
             return None
 
+    async def get_workspace_custom_instructions(self) -> str | None:
+        """Get the workspace's custom instructions for the AI agent.
+
+        Returns:
+            The custom instructions text or None if not set
+        """
+        query = """
+        query GetWorkspaceCustomInstructions($workspaceId: ID!) {
+            getWorkspaceCustomInstructions(workspaceId: $workspaceId) {
+                instructions
+            }
+        }
+        """
+
+        logger.info(f"📡 GraphQL: Fetching custom instructions for workspace {self.workspace_id}")
+        try:
+            result = await self.execute(query, {"workspaceId": self.workspace_id})
+            logger.info(f"📡 GraphQL result: {result}")
+            instructions_data = result.get("getWorkspaceCustomInstructions")
+            if instructions_data:
+                instructions = instructions_data.get("instructions")
+                logger.info(f"📡 Found instructions: {len(instructions) if instructions else 0} chars")
+                return instructions
+            logger.info("📡 No instructions data in response")
+            return None
+        except Exception as e:
+            logger.warning(f"📡 Failed to get workspace custom instructions: {e}")
+            return None
+
     async def close(self):
         """Close the client connection."""
         if self._client is not None:
