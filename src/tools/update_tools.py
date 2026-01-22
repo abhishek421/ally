@@ -1059,23 +1059,24 @@ def get_update_tools(context: ToolContext) -> list:
 
         # Step 1-5: Lookup and resolve all entities (in try block)
         try:
-            # Step 1: Find the person using search API
+            # Step 1: Find the person using getWorkspacePeople with search
             search_query = """
-            query Search($workspaceId: String!, $query: String, $type: String, $size: Int) {
-                search(workspaceId: $workspaceId, query: $query, type: $type, size: $size) {
-                    hits { id name score }
+            query GetWorkspacePeople($workspaceId: ID!, $limit: Int, $search: String) {
+                getWorkspacePeople(workspaceId: $workspaceId, limit: $limit, search: $search) {
+                    data { id firstName lastName }
                 }
             }
             """
 
             person_result = await client.query(search_query, {
                 "workspaceId": context.workspace_id,
-                "query": person_name,
-                "type": "person",
-                "size": 10,
+                "limit": 10,
+                "search": person_name,
             })
 
-            people = person_result.get("search", {}).get("hits", [])
+            raw_people = person_result.get("getWorkspacePeople", {}).get("data", [])
+            # Normalize people to have 'name' field
+            people = [{**p, "name": f"{p.get('firstName', '')} {p.get('lastName', '')}".strip()} for p in raw_people]
             if not people:
                 await client.close()
                 return f"Could not find any person matching '{person_name}'."
@@ -1278,23 +1279,22 @@ def get_update_tools(context: ToolContext) -> list:
 
         # Step 1-5: Lookup and resolve all entities (in try block)
         try:
-            # Step 1: Find the company using search API
+            # Step 1: Find the company using getWorkspaceCompany with search
             search_query = """
-            query Search($workspaceId: String!, $query: String, $type: String, $size: Int) {
-                search(workspaceId: $workspaceId, query: $query, type: $type, size: $size) {
-                    hits { id name score }
+            query GetWorkspaceCompany($workspaceId: ID!, $limit: Int, $search: String) {
+                getWorkspaceCompany(workspaceId: $workspaceId, limit: $limit, search: $search) {
+                    data { id name }
                 }
             }
             """
 
             company_result = await client.query(search_query, {
                 "workspaceId": context.workspace_id,
-                "query": company_name,
-                "type": "company",
-                "size": 10,
+                "limit": 10,
+                "search": company_name,
             })
 
-            companies = company_result.get("search", {}).get("hits", [])
+            companies = company_result.get("getWorkspaceCompany", {}).get("data", [])
             if not companies:
                 await client.close()
                 return f"Could not find any company matching '{company_name}'."

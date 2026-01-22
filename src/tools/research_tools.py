@@ -1,6 +1,7 @@
-"""Research tools for web search using Perplexity API."""
+"""Research tools for web search using Perplexity Search API."""
 
 import logging
+from dataclasses import dataclass
 from typing import Optional
 
 import httpx
@@ -11,168 +12,189 @@ from src.tools.base import ToolContext
 
 logger = logging.getLogger(__name__)
 
-# Perplexity API configuration
-PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
-PERPLEXITY_MODEL = "sonar"  # Also available: "sonar-pro" for enhanced results
+PERPLEXITY_SEARCH_URL = "https://api.perplexity.ai/search"
 
 
-async def call_perplexity_api(query: str) -> dict:
-    """Call the Perplexity API for web search.
-    
+@dataclass
+class SearchResult:
+    """A single search result from Perplexity."""
+
+    title: str
+    url: str
+    snippet: str
+    date: str
+    last_updated: str
+
+
+@dataclass
+class SearchResponse:
+    """Response from Perplexity Search API."""
+
+    results: list[SearchResult]
+
+
+async def call_perplexity_search(
+    query: str,
+    max_results: int = 10,
+    search_recency_filter: Optional[str] = None,
+    country: Optional[str] = None,
+) -> SearchResponse:
+    """Call the Perplexity Search API.
+
     Args:
         query: The search query
-        
+        max_results: Maximum number of results to return (1-20)
+        search_recency_filter: Filter by recency ("day", "week", "month", "year")
+        country: Country code to filter results (e.g., "US", "GB")
+
     Returns:
-        API response dictionary
-        
+        SearchResponse with list of results
+
     Raises:
-        Exception: If API call fails
+        ValueError: If API key is not configured
+        httpx.HTTPStatusError: If API call fails
     """
     settings = get_settings()
-    
+
 perplexity_api_key="REDACTED"
     if not api_key:
 PERPLEXITY_API_KEY=REDACTED
-    
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    
-    payload = {
-        "model": PERPLEXITY_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a helpful research assistant. Provide accurate, "
-                    "well-structured information based on current web data. "
-                    "Include relevant details and cite sources when possible."
-                ),
-            },
-            {
-                "role": "user",
-                "content": query,
-            },
-        ],
-        "temperature": 0.2,
-        "top_p": 0.9,
-        "return_citations": True,
-        "return_images": False,
-        "search_recency_filter": "month",
+
+    payload: dict = {
+        "query": query,
+        "max_results": min(max(max_results, 1), 20),
     }
-    
+
+    if search_recency_filter and search_recency_filter in ("day", "week", "month", "year"):
+        payload["search_recency_filter"] = search_recency_filter
+
+    if country:
+        payload["country"] = country
+
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
-            PERPLEXITY_API_URL,
+            PERPLEXITY_SEARCH_URL,
             headers=headers,
             json=payload,
         )
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+
+    results = [
+        SearchResult(
+            title=r.get("title", ""),
+            url=r.get("url", ""),
+            snippet=r.get("snippet", ""),
+            date=r.get("date", ""),
+            last_updated=r.get("last_updated", ""),
+        )
+        for r in data.get("results", [])
+    ]
+
+    return SearchResponse(results=results)
 
 
-def format_perplexity_response(response: dict) -> str:
-    """Format Perplexity API response into readable text.
-    
+def format_search_results(response: SearchResponse) -> str:
+    """Format search results into readable text.
+
     Args:
-        response: The API response dictionary
-        
+        response: The SearchResponse object
+
     Returns:
-        Formatted string with content and citations
+        Formatted string with results
     """
-    try:
-        choices = response.get("choices", [])
-        if not choices:
-            return "No results found."
-        
-        message = choices[0].get("message", {})
-        content = message.get("content", "No content available.")
-        
-        # Extract citations if available
-        citations = response.get("citations", [])
-        
-        result = content
-        
-        if citations:
-            result += "\n\n**Sources:**\n"
-            for i, citation in enumerate(citations[:5], 1):  # Limit to 5 citations
-                result += f"{i}. {citation}\n"
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"Error formatting Perplexity response: {e}")
-        return str(response)
+    if not response.results:
+        return "No results found."
+
+    lines: list[str] = []
+    for i, result in enumerate(response.results, 1):
+        lines.append(f"**{i}. {result.title}**")
+        lines.append(f"   URL: {result.url}")
+        if result.snippet:
+            lines.append(f"   {result.snippet}")
+        if result.last_updated:
+            lines.append(f"   Last updated: {result.last_updated}")
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 def get_research_tools(context: ToolContext) -> list:
     """Get all research tools configured with the given context.
-    
+
     Args:
         context: Tool context with auth and workspace info
-        
+
     Returns:
         List of tool functions
     """
-    
+
     @tool
-    async def web_search(query: str) -> str:
-        """Search the internet for real-time, accurate information. ALWAYS use this tool 
-        when the user asks to find, research, or look up external information.
-        
-        IMPORTANT: You MUST use this tool (not your own knowledge) when:
-        - User asks to "find" companies, people, or organizations
-        - User asks about companies/topics NOT in the CRM workspace
-        - User needs current news, trends, market data, or statistics
-        - User wants research on industries, competitors, or technologies
-        - User asks "what are the top/best/biggest" anything
-        - User asks about real-world entities, facts, or current events
-        
-        Examples - ALWAYS use web_search for these:
-        - "Find 10 big AI companies in India" → USE web_search
-        - "Find 2 AI company of india" → USE web_search
-        - "What are the latest trends in SaaS?" → USE web_search
-        - "Research OpenAI's recent announcements" → USE web_search
-        - "Who are the top competitors of Salesforce?" → USE web_search
-        - "What is the current market size for CRM software?" → USE web_search
-        
-        Do NOT use this tool ONLY for:
-        - Looking up contacts/companies already in the user's CRM workspace
-        - Internal workspace data (use list_companies, list_people, etc.)
-        
+    async def web_search(
+        query: str,
+        max_results: int = 10,
+        recency: Optional[str] = None,
+    ) -> str:
+        """Search the web for real-time information about companies, people, industries, news, or market data.
+
+        USE THIS TOOL when user asks to find/research external information NOT in the CRM.
+        DO NOT USE for CRM data lookups (use list_companies, list_people instead).
+
+        QUERY FORMAT - Structure your query with these components:
+        1. WHAT: The specific entity/topic (company names, industry, technology)
+        2. WHERE: Geographic scope if relevant (country, region, city)
+        3. CRITERIA: Size, funding, revenue, employee count, or other qualifiers
+        4. CONTEXT: Industry vertical, use case, or domain focus
+
+        GOOD query examples:
+        - "Top 10 B2B SaaS companies in India with Series B+ funding in enterprise software"
+        - "AI startups in healthcare sector Germany founded after 2020 with 50+ employees"
+        - "Latest funding rounds and valuations for CRM software companies Q4 2024"
+        - "Competitors of Salesforce in small business CRM market with pricing under $50/user"
+
+        BAD query examples (too vague):
+        - "AI companies" → Missing location, size, industry focus
+        - "Find startups" → No criteria, geography, or domain specified
+
         Args:
-            query: The search query to research on the internet. Be specific and 
-                   detailed for better results.
-            
+            query: A detailed, structured search query. Include: entity type, geography,
+                   size/funding criteria, and industry context. More specific = better results.
+            max_results: Results to return (1-20). Use 5-10 for focused searches, 15-20 for broad research.
+            recency: Time filter - "day" (breaking news), "week" (recent), "month", "year".
+
         Returns:
-            Research results with relevant information and source citations
+            Ranked results with title, URL, snippet, and last updated date.
         """
-        logger.info(f"🔍 Web search: {query}")
-        
+        logger.info(f"🔍 Web search: {query} (max_results={max_results}, recency={recency})")
+
         try:
-            # Call Perplexity API
-            response = await call_perplexity_api(query)
-            
-            # Format the response
-            result = format_perplexity_response(response)
-            
-            logger.info(f"✅ Web search completed, response length: {len(result)}")
+            response = await call_perplexity_search(
+                query=query,
+                max_results=max_results,
+                search_recency_filter=recency,
+            )
+
+            result = format_search_results(response)
+
+            logger.info(f"✅ Web search completed, found {len(response.results)} results")
             return result
-            
+
         except httpx.HTTPStatusError as e:
             error_msg = f"Web search API error: {e.response.status_code}"
             logger.error(f"❌ {error_msg}: {e.response.text}")
             return f"Error performing web search: {error_msg}. Please try again."
-            
+
         except ValueError as e:
             logger.error(f"❌ Configuration error: {e}")
             return f"Web search is not configured: {str(e)}"
-            
+
         except Exception as e:
             logger.error(f"❌ Web search error: {e}")
             return f"Error performing web search: {str(e)}. Please try again."
-    
-    # Return all research tools
-    return [web_search]
 
+    return [web_search]
