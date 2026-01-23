@@ -105,6 +105,7 @@ async def is_first_message(conversation_id: str) -> bool:
         config = {"configurable": {"thread_id": conversation_id}}
         
         # Try to get existing checkpoint
+<<<<<<< HEAD
         checkpoint_tuple = await checkpointer.aget(config)
         
         if checkpoint_tuple is None:
@@ -114,6 +115,17 @@ async def is_first_message(conversation_id: str) -> bool:
         # CheckpointTuple has a checkpoint attribute which is a dict containing 'channel_values'
         checkpoint = checkpoint_tuple.checkpoint
         messages = checkpoint.get("channel_values", {}).get("messages", [])
+=======
+        checkpoint = await checkpointer.aget(config)
+
+        if checkpoint is None:
+            return True
+
+        # Check if there are any messages
+        # Handle both dict and method for checkpoint.values (LangGraph API compatibility)
+        values = checkpoint.values() if callable(checkpoint.values) else checkpoint.values
+        messages = values.get("messages", []) if isinstance(values, dict) else []
+>>>>>>> 907cb99 (fix: fixed bugs (#39))
         return len(messages) == 0
         
     except Exception as e:
@@ -421,12 +433,16 @@ async def stream_agent(
     }
     # Track tool calls for summary logging
     tool_calls_summary = []
+<<<<<<< HEAD
     
     # Heartbeat configuration
     last_heartbeat_time = time.time()
     heartbeat_interval = 1.5  # seconds
     has_seen_tool_result = False
     
+=======
+
+>>>>>>> 907cb99 (fix: fixed bugs (#39))
     try:
         # Stream using updates mode to get step-by-step progress
         async for chunk in agent.astream(
@@ -483,12 +499,13 @@ async def stream_agent(
                             # Reset status flag when content arrives
                             has_seen_tool_result = False
                             text_content = _extract_text_content(msg.content)
-                            content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
-                            logger.info(f"   💬 RESPONSE: {content_preview}")
-                            yield {
-                                "type": "response",
-                                "data": {"content": text_content},
-                            }
+                            if text_content:
+                                content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
+                                logger.info(f"   💬 RESPONSE: {content_preview}")
+                                yield {
+                                    "type": "response",
+                                    "data": {"content": text_content},
+                                }
                 elif node_name == "tools":
                     # Mark that we have seen tool results
                     has_seen_tool_result = True
@@ -624,10 +641,20 @@ async def resume_agent(
                         elif hasattr(msg, "content") and msg.content:
                             has_seen_tool_result = False
                             text_content = _extract_text_content(msg.content)
+<<<<<<< HEAD
                             yield {
                                 "type": "response",
                                 "data": {"content": text_content},
                             }
+=======
+                            if text_content:
+                                content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
+                                logger.info(f"   💬 RESPONSE: {content_preview}")
+                                yield {
+                                    "type": "response",
+                                    "data": {"content": text_content},
+                                }
+>>>>>>> 907cb99 (fix: fixed bugs (#39))
                 elif node_name == "tools":
                     has_seen_tool_result = True
                     messages = node_output.get("messages", [])
