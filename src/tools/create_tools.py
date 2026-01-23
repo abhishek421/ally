@@ -272,21 +272,31 @@ def get_create_tools(context: ToolContext) -> list:
         name: str,
         group_type: str = "PEOPLE",
         description: Optional[str] = None,
-        emoji: Optional[str] = None,
+        emoji: str = "📁",
         is_private: bool = True,
     ) -> str:
         """Create a new group in the workspace.
-        
+
         This tool will ask for user confirmation before creating the group,
         showing a preview of the data to be created.
-        
+
+        IMPORTANT: Always provide a relevant emoji that matches the group's purpose or name.
+        For example:
+        - "Sales Leads" -> 💰 or 🎯
+        - "Engineering Team" -> 👨‍💻 or ⚙️
+        - "Investors" -> 💵 or 📈
+        - "Partners" -> 🤝
+        - "Customers" -> 👥 or 🛒
+        - "Marketing" -> 📣 or 🎨
+        - "Support" -> 🎧 or 💬
+
         Args:
             name: Group name (required)
             group_type: Type of group - "PEOPLE" or "COMPANY" (default: PEOPLE)
             description: Group description (optional)
-            emoji: Emoji icon for the group (optional)
+            emoji: Emoji icon for the group - choose one that matches the group's purpose (default: 📁)
             is_private: Whether the group is private (default: True)
-            
+
         Returns:
             Confirmation message with the created group details
         """
@@ -300,11 +310,10 @@ def get_create_tools(context: ToolContext) -> list:
             "name": name,
             "type": group_type.upper(),
             "is_private": is_private,
+            "emoji": emoji,
         }
         if description:
             draft_data["description"] = description
-        if emoji:
-            draft_data["emoji"] = emoji
         
         # Request user confirmation before creating
         confirmation = request_create_confirmation(
@@ -344,13 +353,11 @@ def get_create_tools(context: ToolContext) -> list:
                 "type": group_type.upper(),
                 "isPrivate": is_private,
                 "createdBy": context.user_id,
+                "emoji": emoji,
             }
-            
+
             if description:
                 input_data["description"] = description
-            
-            if emoji:
-                input_data["emoji"] = emoji
             
             result = await client.mutate(mutation, {"input": input_data})
             
