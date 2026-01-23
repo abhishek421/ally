@@ -138,7 +138,13 @@ async def event_generator(
             if event_type == "response" and first_message:
                 accumulated_response += event_data.get("content", "")
             
-            # For "done" event, generate title first (if first message)
+            # Yield the event immediately so frontend can respond without delay
+            yield {
+                "event": event_type,
+                "data": json.dumps(event_data),
+            }
+
+            # For "done" event, generate title AFTER sending done (so input is available immediately)
             if event_type == "done" and first_message and accumulated_response:
                 try:
                     title = await generate_conversation_title(message, accumulated_response)
@@ -154,11 +160,6 @@ async def event_generator(
                 except Exception as e:
                     logger.warning(f"Failed to generate conversation title: {e}")
                     # Continue without title - not critical
-            
-            yield {
-                "event": event_type,
-                "data": json.dumps(event_data),
-            }
             
     except Exception as e:
         logger.error(f"Error in agent stream: {e}")
