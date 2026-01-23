@@ -11,6 +11,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command, interrupt
+import time
 
 from src.config import get_settings
 from src.agent.prompts import get_system_prompt
@@ -421,6 +422,11 @@ async def stream_agent(
     # Track tool calls for summary logging
     tool_calls_summary = []
 
+    # Heartbeat configuration
+    last_heartbeat_time = time.time()
+    heartbeat_interval = 1.5  # seconds
+    has_seen_tool_result = False
+
     try:
         # Stream using updates mode to get step-by-step progress
         async for chunk in agent.astream(
@@ -430,7 +436,16 @@ async def stream_agent(
             config=config,
             stream_mode="updates",
         ):
-            
+            # Check for heartbeat
+            current_time = time.time()
+            if current_time - last_heartbeat_time > heartbeat_interval:
+                status = "Analyzing results..." if has_seen_tool_result else "Thinking..."
+                yield {
+                    "type": "thinking",
+                    "data": {"status": status},
+                }
+                last_heartbeat_time = current_time
+
             # Check for interrupt FIRST (confirmation request from tools)
             if "__interrupt__" in chunk:
                 interrupt_info = chunk["__interrupt__"]
@@ -452,6 +467,8 @@ async def stream_agent(
                     for msg in messages:
                         if hasattr(msg, "tool_calls") and msg.tool_calls:
                             # Agent decided to call tools
+                            # Reset status flag when new tool calls are made
+                            has_seen_tool_result = False
                             for tool_call in msg.tool_calls:
                                 tool_name = tool_call.get("name")
                                 logger.info(f"   🔧 TOOL CALL: {tool_name}")
@@ -474,6 +491,8 @@ async def stream_agent(
                                 }
                 elif node_name == "tools":
                     # Tool execution results
+                    # Mark that we have seen tool results
+                    has_seen_tool_result = True
                     messages = node_output.get("messages", [])
                     for msg in messages:
                         if hasattr(msg, "content"):
@@ -536,6 +555,12 @@ async def resume_agent(
     }
     confirmed = confirmation_response.get("confirmed", False)
     logger.info(f"▶️  RESUME: confirmed={confirmed}")
+
+    # Heartbeat configuration
+    last_heartbeat_time = time.time()
+    heartbeat_interval = 1.5  # seconds
+    has_seen_tool_result = False
+
     try:
         # Get interrupt IDs from the agent's state snapshot
         # This is needed when multiple tools called interrupt() in parallel
@@ -570,6 +595,16 @@ async def resume_agent(
             config=config,
             stream_mode="updates",
         ):
+            # Check for heartbeat
+            current_time = time.time()
+            if current_time - last_heartbeat_time > heartbeat_interval:
+                status = "Analyzing results..." if has_seen_tool_result else "Thinking..."
+                yield {
+                    "type": "thinking",
+                    "data": {"status": status},
+                }
+                last_heartbeat_time = current_time
+
             # Check for another interrupt FIRST (nested confirmation)
             if "__interrupt__" in chunk:
                 interrupt_info = chunk["__interrupt__"]
@@ -589,6 +624,7 @@ async def resume_agent(
                     messages = node_output.get("messages", [])
                     for msg in messages:
                         if hasattr(msg, "tool_calls") and msg.tool_calls:
+                            has_seen_tool_result = False
                             for tool_call in msg.tool_calls:
                                 tool_name = tool_call.get("name")
                                 logger.info(f"   🔧 TOOL CALL: {tool_name}")
@@ -610,6 +646,7 @@ async def resume_agent(
                                     "data": {"content": text_content},
                                 }
                 elif node_name == "tools":
+                    has_seen_tool_result = True
                     messages = node_output.get("messages", [])
                     for msg in messages:
                         if hasattr(msg, "content"):
