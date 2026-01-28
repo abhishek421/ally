@@ -17,6 +17,10 @@ from src.tools.base import (
 )
 from src.tools.confirmation import (
     request_entity_selection,
+    ConfirmationType,
+    ConfirmationRequest,
+    ConfirmationResponse,
+    request_confirmation,
 )
 
 logger = logging.getLogger(__name__)
@@ -1499,6 +1503,326 @@ def get_read_tools(context: ToolContext) -> list:
             await client.close()
 
     @tool
+    async def list_email_templates(
+        page: int = 1,
+        limit: int = 20,
+    ) -> str:
+        """List available email templates in the current workspace.
+        
+        Args:
+            page: Page number (default: 1)
+            limit: Number of results per page (default: 20)
+            
+        Returns:
+            Formatted list of templates with IDs and descriptions
+        """
+        client = context.get_client()
+        query = """
+        query GetEmailTemplates($workspaceId: String!, $limit: Int, $nextToken: String) {
+            emailTemplates(workspaceId: $workspaceId, limit: $limit, nextToken: $nextToken) {
+                items {
+                    id
+                    name
+                    description
+                    subject
+                }
+                nextToken
+            }
+        }
+        """
+        try:
+            result = await client.query(query, {
+                "workspaceId": context.workspace_id,
+                "limit": limit
+            })
+            data = result.get("emailTemplates", {})
+            templates = data.get("items", [])
+            
+            if not templates:
+                return "No email templates found in this workspace."
+            
+            lines = [f"Found {len(templates)} templates:\n"]
+            for t in templates:
+                lines.append(f"- **{t['name']}** (ID: {t['id']})")
+                if t.get('description'):
+                    lines.append(f"  Description: {t['description']}")
+                lines.append(f"  Subject: {t.get('subject', '(No Subject)')}")
+                lines.append("")
+                
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Error listing templates: {e}")
+            return f"Error listing templates: {str(e)}"
+        finally:
+            await client.close()
+
+    @tool
+    async def search_email_templates(
+        keyword: str,
+        limit: int = 10,
+    ) -> str:
+        """Search for email templates by keyword in name or description.
+        
+        Args:
+            keyword: Search keyword
+            limit: Maximum results (default: 10)
+            
+        Returns:
+            Formatted list of matching templates
+        """
+        client = context.get_client()
+        query = """
+        query SearchEmailTemplates($workspaceId: String!, $searchKeyword: String, $limit: Int) {
+            emailTemplates(workspaceId: $workspaceId, searchKeyword: $searchKeyword, limit: $limit) {
+                items {
+                    id
+                    name
+                    description
+                    subject
+                }
+            }
+        }
+        """
+        try:
+            result = await client.query(query, {
+                "workspaceId": context.workspace_id,
+                "searchKeyword": keyword,
+                "limit": limit
+            })
+            templates = result.get("emailTemplates", {}).get("items", [])
+            
+            if not templates:
+                return f"No templates found matching '{keyword}'."
+            
+            lines = [f"Found {len(templates)} templates matching '{keyword}':\n"]
+            for t in templates:
+                lines.append(f"- **{t['name']}** (ID: {t['id']})")
+                if t.get('description'):
+                    lines.append(f"  Description: {t['description']}")
+                lines.append("")
+                
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Error searching templates: {e}")
+            return f"Error searching templates: {str(e)}"
+        finally:
+            await client.close()
+
+    @tool
+    async def draft_email(
+        to: list[str],
+        subject: str,
+        body: str,
+        thread_id: Optional[str] = None,
+        group_id: Optional[str] = None,
+        cc: Optional[list[str]] = None,
+        bcc: Optional[list[str]] = None,
+    ) -> str:
+        """Propose an email draft to the user for review and optional editing.
+        
+        Use this tool when you have summarized the context and are ready to 
+        propose a specific response. The user will be able to edit the subject 
+        and body before the draft is saved to the backend.
+        
+        Args:
+            to: List of recipient email addresses
+            subject: The proposed subject line
+            body: The proposed message body (plain text or HTML)
+            thread_id: (Optional) The ID of the thread to respond to
+            group_id: (Optional) ID of the group this draft belongs to
+            cc: (Optional) List of CC recipients
+            bcc: (Optional) List of BCC recipients
+            
+        Returns:
+            Status of the draft creation including the draft ID
+        """
+        # 1. Request confirmation with edit
+        req = ConfirmationRequest(
+            type=ConfirmationType.CONFIRM_WITH_EDIT,
+            title="Review Email Draft",
+            message=f"Drafting email to {', '.join(to)}:",
+            draft_data={
+                "subject": subject,
+                "body": body,
+            },
+            entity_type="email_draft",
+            action_label="Save Draft",
+        )
+        
+        response = request_confirmation(req)
+        
+        if not response.confirmed:
+            return "Drafting cancelled by user."
+            
+        # Use modified data if provided
+        final_data = response.modified_data or {"subject": subject, "body": body}
+        final_subject = final_data.get("subject", subject)
+        final_body = final_data.get("body", body)
+        
+        client = context.get_client()
+        try:
+            # 2. Resolve group_id if not provided
+            if not group_id:
+                g_query = """
+                query GetGroups($workspaceId: String!) {
+                    getGroups(workspaceId: $workspaceId) { id }
+                }
+                """
+                g_result = await client.query(g_query, {"workspaceId": context.workspace_id})
+                groups = g_result.get("getGroups", [])
+                if groups:
+                    group_id = groups[0]["id"]
+                else:
+                    return "Error: Could not find any group to associate this draft with. Please specify a group_id."
+
+            # 3. Create the draft in the backend
+            create_mutation = """
+            mutation CreateEmailDraft($input: CreateEmailDraftInput!, $workspaceId: String!) {
+                createEmailDraft(input: $input, workspaceId: $workspaceId) {
+                    id
+                    status
+                }
+            }
+            """
+            create_vars = {
+                "workspaceId": context.workspace_id,
+                "input": {
+                    "groupId": group_id,
+                    "to": to,
+                    "subject": final_subject,
+                    "textContent": final_body,
+                    "cc": cc or [],
+                    "bcc": bcc or [],
+                }
+            }
+            
+            create_result = await client.mutate(create_mutation, create_vars)
+            draft = create_result.get("createEmailDraft", {})
+            
+            if not draft.get("id"):
+                return "Error: Failed to create email draft in backend."
+                
+            return f"Draft successfully created with ID: {draft['id']} (Status: {draft.get('status', 'DRAFT')})"
+
+        except Exception as e:
+            logger.error(f"Error saving draft: {e}")
+            return f"Error saving draft: {str(e)}"
+        finally:
+            await client.close()
+
+    @tool
+    async def send_email(
+        to: list[str],
+        subject: str,
+        body: str,
+        group_id: Optional[str] = None,
+        cc: Optional[list[str]] = None,
+        bcc: Optional[list[str]] = None,
+    ) -> str:
+        """Directly send an email to one or more recipients.
+        
+        Ally will use this tool when the user says "Ally, send an email to...".
+        The user will be asked to confirm before the email is sent.
+        
+        Args:
+            to: List of recipient email addresses
+            subject: Email subject
+            body: Email body content
+            group_id: (Optional) ID of the group this email belongs to
+            cc: (Optional) List of CC recipients
+            bcc: (Optional) List of BCC recipients
+            
+        Returns:
+            Confirmation that the email was sent
+        """
+        # 1. Human-in-the-loop: Request confirmation before sending
+        req = ConfirmationRequest(
+            type=ConfirmationType.CONFIRM_WITH_EDIT,
+            title="Confirm Send Email",
+            message=f"I'm about to send this email to {', '.join(to)}. Please review and confirm:",
+            draft_data={
+                "subject": subject,
+                "body": body,
+            },
+            entity_type="email_send",
+            action_label="Send Now",
+        )
+        
+        response = request_confirmation(req)
+        
+        if not response.confirmed:
+            return "Email sending cancelled by user."
+            
+        final_data = response.modified_data or {"subject": subject, "body": body}
+        final_subject = final_data.get("subject", subject)
+        final_body = final_data.get("body", body)
+        
+        client = context.get_client()
+        try:
+            # 2. Resolve group_id
+            if not group_id:
+                g_query = """
+                query GetGroups($workspaceId: String!) {
+                    getGroups(workspaceId: $workspaceId) { id }
+                }
+                """
+                g_result = await client.query(g_query, {"workspaceId": context.workspace_id})
+                groups = g_result.get("getGroups", [])
+                if groups:
+                    group_id = groups[0]["id"]
+                else:
+                    return "Error: Could not find any group to associate this email with."
+
+            # 3. Create a temporary draft for sending
+            create_mutation = """
+            mutation CreateEmailDraft($input: CreateEmailDraftInput!, $workspaceId: String!) {
+                createEmailDraft(input: $input, workspaceId: $workspaceId) {
+                    id
+                }
+            }
+            """
+            create_vars = {
+                "workspaceId": context.workspace_id,
+                "input": {
+                    "groupId": group_id,
+                    "to": to,
+                    "subject": final_subject,
+                    "textContent": final_body,
+                    "cc": cc or [],
+                    "bcc": bcc or [],
+                }
+            }
+            
+            create_result = await client.mutate(create_mutation, create_vars)
+            draft_id = create_result.get("createEmailDraft", {}).get("id")
+            
+            if not draft_id:
+                return "Error: Failed to create temporary email draft for sending."
+                
+            # 4. Trigger send
+            send_mutation = """
+            mutation SendEmailDraft($id: String!, $workspaceId: String!) {
+                sendEmailDraft(id: $id, workspaceId: $workspaceId) {
+                    id
+                    status
+                }
+            }
+            """
+            send_result = await client.mutate(send_mutation, {
+                "id": draft_id,
+                "workspaceId": context.workspace_id
+            })
+            
+            status = send_result.get("sendEmailDraft", {}).get("status")
+            return f"Successfully sent email to {', '.join(to)} (ID: {draft_id}, Status: {status})"
+            
+        except Exception as e:
+            logger.error(f"Error in send_email flow: {e}")
+            return f"Error in send_email flow: {str(e)}"
+        finally:
+            await client.close()
+
+    @tool
     async def get_group_columns(
         group_id: str,
         entity_type: str = "company",
@@ -1917,6 +2241,11 @@ def get_read_tools(context: ToolContext) -> list:
         list_Emails_From_Person,
         list_Emails_From_Company,
         get_email_thread,
+        # Drafting and Template tools
+        list_email_templates,
+        search_email_templates,
+        draft_email,
+        send_email,
         # Group column tools
         get_group_columns,
         get_column_options,
