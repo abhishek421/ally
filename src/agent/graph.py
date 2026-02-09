@@ -105,15 +105,15 @@ async def is_first_message(conversation_id: str) -> bool:
         config = {"configurable": {"thread_id": conversation_id}}
         
         # Try to get existing checkpoint
-        checkpoint_tuple = await checkpointer.aget(config)
-        
-        if checkpoint_tuple is None:
+        checkpoint = await checkpointer.aget(config)
+
+        if checkpoint is None:
             return True
 
         # Check if there are any messages
-        # CheckpointTuple has a checkpoint attribute which is a dict containing 'channel_values'
-        checkpoint = checkpoint_tuple.checkpoint
-        messages = checkpoint.get("channel_values", {}).get("messages", [])
+        # Handle both dict and method for checkpoint.values (LangGraph API compatibility)
+        values = checkpoint.values() if callable(checkpoint.values) else checkpoint.values
+        messages = values.get("messages", []) if isinstance(values, dict) else []
         return len(messages) == 0
         
     except Exception as e:
@@ -421,12 +421,12 @@ async def stream_agent(
     }
     # Track tool calls for summary logging
     tool_calls_summary = []
-    
+
     # Heartbeat configuration
     last_heartbeat_time = time.time()
     heartbeat_interval = 1.5  # seconds
     has_seen_tool_result = False
-    
+
     try:
         # Stream using updates mode to get step-by-step progress
         async for chunk in agent.astream(
@@ -445,8 +445,8 @@ async def stream_agent(
                     "data": {"status": status},
                 }
                 last_heartbeat_time = current_time
-            
-            # Check for interrupt FIRST
+
+            # Check for interrupt FIRST (confirmation request from tools)
             if "__interrupt__" in chunk:
                 # ... interrupt handling ...
                 interrupt_info = chunk["__interrupt__"]
@@ -467,6 +467,7 @@ async def stream_agent(
                     messages = node_output.get("messages", [])
                     for msg in messages:
                         if hasattr(msg, "tool_calls") and msg.tool_calls:
+                            # Agent decided to call tools
                             # Reset status flag when new tool calls are made
                             has_seen_tool_result = False
                             for tool_call in msg.tool_calls:
@@ -491,6 +492,7 @@ async def stream_agent(
                                     "data": {"content": text_content},
                                 }
                 elif node_name == "tools":
+                    # Tool execution results
                     # Mark that we have seen tool results
                     has_seen_tool_result = True
                     messages = node_output.get("messages", [])
@@ -550,6 +552,8 @@ async def resume_agent(
         }
     }
     confirmed = confirmation_response.get("confirmed", False)
+    logger.info(f"▶️  RESUME: confirmed={confirmed}")
+
     # Heartbeat configuration
     last_heartbeat_time = time.time()
     heartbeat_interval = 1.5  # seconds
@@ -592,7 +596,7 @@ async def resume_agent(
                 }
                 last_heartbeat_time = current_time
 
-            # Check for another interrupt FIRST
+            # Check for another interrupt FIRST (nested confirmation)
             if "__interrupt__" in chunk:
                 interrupt_info = chunk["__interrupt__"]
                 if interrupt_info and len(interrupt_info) > 0:
@@ -625,10 +629,13 @@ async def resume_agent(
                         elif hasattr(msg, "content") and msg.content:
                             has_seen_tool_result = False
                             text_content = _extract_text_content(msg.content)
-                            yield {
-                                "type": "response",
-                                "data": {"content": text_content},
-                            }
+                            if text_content:
+                                content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
+                                logger.info(f"   💬 RESPONSE: {content_preview}")
+                                yield {
+                                    "type": "response",
+                                    "data": {"content": text_content},
+                                }
                 elif node_name == "tools":
                     has_seen_tool_result = True
                     messages = node_output.get("messages", [])
