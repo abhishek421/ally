@@ -1213,7 +1213,7 @@ def get_read_tools(context: ToolContext) -> list:
             await client.close()
 
     @tool
-    async def list_Emails_From_Person(
+    async def listEmailsFromPerson(
         person_id: str,
         limit: int = 10,
     ) -> str:
@@ -1293,7 +1293,7 @@ def get_read_tools(context: ToolContext) -> list:
             await client.close()
 
     @tool
-    async def list_Emails_From_Company(
+    async def listEmailsFromCompany(
         company_id: str,
         limit: int = 10,
     ) -> str:
@@ -2238,8 +2238,8 @@ def get_read_tools(context: ToolContext) -> list:
         search_person_by_name,
         search_group_by_name,
         # Email/interaction tools
-        list_Emails_From_Person,
-        list_Emails_From_Company,
+        listEmailsFromPerson,
+        listEmailsFromCompany,
         get_email_thread,
         # Drafting and Template tools
         list_email_templates,
