@@ -367,6 +367,15 @@ def format_email(email: dict) -> str:
             lines.append(f"  Date: {date[:10] if len(date) >= 10 else date}")
         else:
             lines.append(f"  Date: {date}")
+            
+    # IDs (for tool use)
+    msg_id = email.get('messageId')
+    if msg_id:
+        lines.append(f"  Message ID: {msg_id}")
+        
+    thread_id = email.get('threadId')
+    if thread_id:
+        lines.append(f"  Thread ID: {thread_id}")
     
     # From/To
     from_addr = email.get('from', '')
