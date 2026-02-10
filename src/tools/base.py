@@ -244,6 +244,7 @@ class ToolContext:
     user_first_name: Optional[str] = None  # User's first name for personalization
     user_email: Optional[str] = None  # User's email for context
     workspace_instructions: Optional[str] = None  # Custom instructions for the workspace
+    group_instructions: Optional[str] = None  # Custom instructions for the active group
 
     def get_client(self) -> GraphQLClient:
         """Get a GraphQL client with the current context."""

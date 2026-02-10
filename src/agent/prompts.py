@@ -257,11 +257,23 @@ to give more relevant and personalized assistance.
 Remember to incorporate this context naturally into your responses when relevant.
 """
 
+# Group custom instructions template
+GROUP_INSTRUCTIONS_TEMPLATE = """
+## Group-Specific Context & Instructions
+The following instructions are specific to the group the user is currently viewing.
+These provide additional context about this particular group's purpose and how to assist with it.
+
+<group_instructions>
+{instructions}
+</group_instructions>
+"""
+
 
 def get_system_prompt(
     user_first_name: Optional[str] = None,
     is_new_conversation: bool = True,
     workspace_instructions: Optional[str] = None,
+    group_instructions: Optional[str] = None,
 ) -> str:
     """Build the system prompt with user context.
 
@@ -269,9 +281,10 @@ def get_system_prompt(
         user_first_name: User's first name for personalization (None if unknown)
         is_new_conversation: Whether this is the first message in the conversation
         workspace_instructions: Custom instructions set by workspace admin (None if not set)
+        group_instructions: Custom instructions for the active group (None if not set)
 
     Returns:
-        Complete system prompt with user context and workspace instructions
+        Complete system prompt with user context, workspace and group instructions
     """
     # Start with base prompt
     prompt = BASE_SYSTEM_PROMPT
@@ -280,6 +293,12 @@ def get_system_prompt(
     if workspace_instructions:
         prompt += WORKSPACE_INSTRUCTIONS_TEMPLATE.format(
             instructions=workspace_instructions
+        )
+
+    # Add group custom instructions if available (after workspace, before user context)
+    if group_instructions:
+        prompt += GROUP_INSTRUCTIONS_TEMPLATE.format(
+            instructions=group_instructions
         )
 
     # Add user context if we know the user's name
