@@ -1956,6 +1956,362 @@ def get_read_tools(context: ToolContext) -> list:
         finally:
             await client.close()
 
+    async def _get_status_column_and_options(
+        client,
+        workspace_id: str,
+        group_id: str,
+        entity_type: str = "people",
+    ) -> tuple[dict | None, list]:
+        """Helper to find Status column and its options for a group.
+        
+        Returns:
+            Tuple of (status_column_dict, list_of_options)
+        """
+        # Get group columns
+        if entity_type.lower() == "people":
+            columns_query = """
+            query GetGroupWithPeopleColumns($workspaceId: String!) {
+                getGroups(workspaceId: $workspaceId) {
+                    id
+                    name
+                    type
+                    peopleColumns {
+                        id
+                        name
+                        dataType
+                    }
+                }
+            }
+            """
+            columns_key = "peopleColumns"
+        else:
+            columns_query = """
+            query GetGroupWithCompanyColumns($workspaceId: String!) {
+                getGroups(workspaceId: $workspaceId) {
+                    id
+                    name
+                    type
+                    companyColumns {
+                        id
+                        name
+                        dataType
+                    }
+                }
+            }
+            """
+            columns_key = "companyColumns"
+        
+        groups_result = await client.query(columns_query, {"workspaceId": workspace_id})
+        groups = groups_result.get("getGroups", [])
+        group = next((g for g in groups if g.get("id") == group_id), None)
+        
+        if not group:
+            return None, []
+        
+        columns = group.get(columns_key, [])
+        
+        # Find Status column (case-insensitive search)
+        status_column = None
+        for col in columns:
+            if col.get("name", "").lower() == "status":
+                status_column = col
+                break
+        
+        if not status_column:
+            return None, []
+        
+        # Get options for the status column
+        options_query = """
+        query GetSelectOptions($columnId: String!) {
+            getSelectOptionsByColumnId(columnId: $columnId) {
+                id
+                value
+                color
+                order
+            }
+        }
+        """
+        options_result = await client.query(options_query, {"columnId": status_column["id"]})
+        options = options_result.get("getSelectOptionsByColumnId", [])
+        
+        return status_column, options
+
+    @tool
+    async def get_pipeline_status_options(
+        group_name: Optional[str] = None,
+        entity_type: str = "people",
+    ) -> str:
+        """Get available status options for a pipeline/group.
+        
+        Use this when user asks:
+        - "What are the status options here?"
+        - "What statuses can I set?"
+        - "Show me the pipeline stages"
+        - "What are the statuses in [group name]?"
+        
+        If group_name is not provided, attempts to detect from the current page URL.
+        
+        Args:
+            group_name: Name of the group/pipeline (optional - will use current page if not provided)
+            entity_type: "people" or "company" (default: "people")
+            
+        Returns:
+            List of available status options with their values and colors
+        """
+        client = context.get_client()
+        
+        try:
+            group_id = None
+            resolved_group_name = None
+            
+            # First, try to get group from provided name
+            if group_name:
+                # Resolve group name to ID
+                groups_query = """
+                query GetGroups($workspaceId: String!) {
+                    getGroups(workspaceId: $workspaceId) {
+                        id
+                        name
+                        type
+                        emoji
+                    }
+                }
+                """
+                groups_result = await client.query(groups_query, {"workspaceId": context.workspace_id})
+                groups = groups_result.get("getGroups", [])
+                
+                # Fuzzy match group name
+                matches = fuzzy_match_entities(group_name, groups, name_key="name", threshold=50.0, limit=1)
+                if matches:
+                    group = matches[0][0]
+                    group_id = group.get("id")
+                    resolved_group_name = group.get("name")
+            
+            # If no group specified, try to get from active URL
+            if not group_id and context.active_url:
+                parts = [p for p in context.active_url.split('/') if p]
+                if 'groups' in parts:
+                    try:
+                        group_idx = parts.index('groups')
+                        if group_idx + 1 < len(parts):
+                            group_id = parts[group_idx + 1]
+                            # Fetch group name
+                            groups_query = """
+                            query GetGroups($workspaceId: String!) {
+                                getGroups(workspaceId: $workspaceId) { id name }
+                            }
+                            """
+                            groups_result = await client.query(groups_query, {"workspaceId": context.workspace_id})
+                            groups = groups_result.get("getGroups", [])
+                            group = next((g for g in groups if g.get("id") == group_id), None)
+                            if group:
+                                resolved_group_name = group.get("name")
+                    except (ValueError, IndexError):
+                        pass
+            
+            if not group_id:
+                return "Could not determine which group/pipeline to get status options for. Please provide a group name or navigate to a group page."
+            
+            # Get status column and options
+            status_column, options = await _get_status_column_and_options(
+                client, context.workspace_id, group_id, entity_type
+            )
+            
+            if not status_column:
+                return f"No Status column found for group '{resolved_group_name or group_id}'. The group may not have a status column defined."
+            
+            if not options:
+                return f"No status options found for the Status column in group '{resolved_group_name or group_id}'."
+            
+            lines = [f"📊 Status options for **{resolved_group_name or 'this group'}**:\n"]
+            for opt in sorted(options, key=lambda x: x.get("order", 0)):
+                value = opt.get("value", "Unknown")
+                lines.append(f"- **{value}** (ID: {opt.get('id', 'N/A')})")
+            
+            return "\n".join(lines)
+            
+        except Exception as e:
+            logger.error(f"Error getting pipeline status options: {e}")
+            return f"Error getting pipeline status options: {str(e)}"
+        finally:
+            await client.close()
+
+    @tool
+    async def get_entities_by_status(
+        group_name: str,
+        status_value: str,
+        entity_type: str = "people",
+        limit: int = 20,
+    ) -> str:
+        """Get all entities (people or companies) with a specific status in a group.
+        
+        Use this when user asks:
+        - "Get all leads from Leads group"
+        - "Show me qualified prospects"
+        - "Who is in follow-up status in Sales Pipeline?"
+        - "Send me the lead values from Leads group"
+        
+        Args:
+            group_name: Name of the group/pipeline (handles typos)
+            status_value: The status to filter by (e.g., "Lead", "Qualified", "Follow-up")
+            entity_type: "people" or "company" (default: "people")
+            limit: Maximum number of results (default: 20, max: 50)
+            
+        Returns:
+            List of entities matching the status
+        """
+        client = context.get_client()
+        
+        try:
+            # Step 1: Resolve group name to ID
+            groups_query = """
+            query GetGroups($workspaceId: String!) {
+                getGroups(workspaceId: $workspaceId) {
+                    id
+                    name
+                    type
+                    emoji
+                }
+            }
+            """
+            groups_result = await client.query(groups_query, {"workspaceId": context.workspace_id})
+            groups = groups_result.get("getGroups", [])
+            
+            matches = fuzzy_match_entities(group_name, groups, name_key="name", threshold=50.0, limit=1)
+            if not matches:
+                return f"Could not find a group matching '{group_name}'."
+            
+            group = matches[0][0]
+            group_id = group.get("id")
+            resolved_group_name = group.get("name")
+            group_emoji = group.get("emoji", "")
+            
+            # Step 2: Get status column and options
+            status_column, options = await _get_status_column_and_options(
+                client, context.workspace_id, group_id, entity_type
+            )
+            
+            if not status_column:
+                return f"No Status column found in group '{resolved_group_name}'."
+            
+            # Step 3: Find the target status option (fuzzy match)
+            target_option = None
+            status_matches = fuzzy_match_entities(
+                status_value, 
+                options, 
+                name_key="value", 
+                threshold=50.0, 
+                limit=1
+            )
+            if status_matches:
+                target_option = status_matches[0][0]
+            
+            if not target_option:
+                available = ", ".join([o.get("value", "") for o in options])
+                return f"Could not find status '{status_value}' in group '{resolved_group_name}'. Available statuses: {available}"
+            
+            target_option_id = target_option.get("id")
+            target_option_value = target_option.get("value")
+            
+            # Step 4: Query entities and filter by status
+            if entity_type.lower() == "people":
+                entities_query = """
+                query GetPeopleByGroup($groupId: ID!, $limit: Int) {
+                    getPeopleByGroup(groupId: $groupId, limit: $limit) {
+                        data {
+                            id
+                            firstName
+                            lastName
+                            jobTitle
+                            emails { value type isPrimary }
+                            phoneNumbers { value type isPrimary }
+                            columnValueSelectOption {
+                                columnId
+                                selectOptionId
+                                selectOption { id value color }
+                            }
+                        }
+                    }
+                }
+                """
+                entities_result = await client.query(entities_query, {
+                    "groupId": group_id,
+                    "limit": min(limit * 3, 100),  # Fetch more to account for filtering
+                })
+                entities = entities_result.get("getPeopleByGroup", {}).get("data", [])
+            else:
+                entities_query = """
+                query GetCompaniesByGroup($groupId: ID!, $limit: Int) {
+                    getCompaniesByGroup(groupId: $groupId, limit: $limit) {
+                        data {
+                            id
+                            name
+                            description
+                            emails { value type isPrimary }
+                            phoneNumbers { value type isPrimary }
+                            columnValueSelectOption {
+                                columnId
+                                selectOptionId
+                                selectOption { id value color }
+                            }
+                        }
+                    }
+                }
+                """
+                entities_result = await client.query(entities_query, {
+                    "groupId": group_id,
+                    "limit": min(limit * 3, 100),
+                })
+                entities = entities_result.get("getCompaniesByGroup", {}).get("data", [])
+            
+            # Step 5: Filter entities by status
+            filtered_entities = []
+            for entity in entities:
+                column_values = entity.get("columnValueSelectOption", [])
+                for cv in column_values:
+                    if cv.get("columnId") == status_column["id"] and cv.get("selectOptionId") == target_option_id:
+                        filtered_entities.append(entity)
+                        break
+                
+                if len(filtered_entities) >= limit:
+                    break
+            
+            if not filtered_entities:
+                return f"No {entity_type} found with status '{target_option_value}' in group '{group_emoji} {resolved_group_name}'."
+            
+            # Format output
+            lines = [f"Found {len(filtered_entities)} {entity_type} with status **\"{target_option_value}\"** in **{group_emoji} {resolved_group_name}**:\n"]
+            
+            for i, entity in enumerate(filtered_entities, 1):
+                if entity_type.lower() == "people":
+                    name = f"{entity.get('firstName', '')} {entity.get('lastName', '')}".strip() or "Unknown"
+                    lines.append(f"{i}. **{name}** (ID: {entity.get('id', 'N/A')})")
+                    if entity.get('jobTitle'):
+                        lines.append(f"   Job Title: {entity['jobTitle']}")
+                else:
+                    name = entity.get('name', 'Unknown')
+                    lines.append(f"{i}. **{name}** (ID: {entity.get('id', 'N/A')})")
+                    if entity.get('description'):
+                        lines.append(f"   Description: {entity['description'][:100]}...")
+                
+                # Add primary email
+                emails = entity.get('emails', [])
+                primary_email = next((e.get('value') for e in emails if e.get('isPrimary')), None)
+                if not primary_email and emails:
+                    primary_email = emails[0].get('value')
+                if primary_email:
+                    lines.append(f"   Email: {primary_email}")
+                
+                lines.append("")  # Empty line between entries
+            
+            return "\n".join(lines)
+            
+        except Exception as e:
+            logger.error(f"Error getting entities by status: {e}")
+            return f"Error getting entities by status: {str(e)}"
+        finally:
+            await client.close()
+
     @tool
     async def resolve_column_by_name(
         group_id: str,
@@ -2223,6 +2579,9 @@ def get_read_tools(context: ToolContext) -> list:
         resolve_column_by_name,
         # Page awareness
         get_current_page,
+        # Pipeline status tools
+        get_pipeline_status_options,
+        get_entities_by_status,
         # List tools
         list_companies_in_workspace,
         list_people_in_workspace,
