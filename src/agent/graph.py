@@ -271,18 +271,24 @@ def create_agent_for_context(
     llm = get_llm()
     tools = get_all_tools(context)
 
-    # Build dynamic system prompt with user context and workspace instructions
+    # Build dynamic system prompt with user context, workspace and group instructions
     system_prompt = get_system_prompt(
         user_first_name=context.user_first_name,
         is_new_conversation=is_new_conversation,
         workspace_instructions=context.workspace_instructions,
+        group_instructions=context.group_instructions,
     )
 
     # Log personalization info
     user_name = context.user_first_name or "Unknown"
     conv_type = "new" if is_new_conversation else "continuing"
+    instructions_info = []
     if context.workspace_instructions:
-        logger.info(f"🤖 Creating agent for {user_name} ({conv_type} conversation) WITH custom instructions ({len(context.workspace_instructions)} chars)")
+        instructions_info.append(f"workspace ({len(context.workspace_instructions)} chars)")
+    if context.group_instructions:
+        instructions_info.append(f"group ({len(context.group_instructions)} chars)")
+    if instructions_info:
+        logger.info(f"🤖 Creating agent for {user_name} ({conv_type} conversation) WITH {', '.join(instructions_info)} instructions")
     else:
         logger.info(f"🤖 Creating agent for {user_name} ({conv_type} conversation) WITHOUT custom instructions")
 
