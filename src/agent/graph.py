@@ -454,6 +454,7 @@ async def stream_agent(
 
             # Check for interrupt FIRST (confirmation request from tools)
             if "__interrupt__" in chunk:
+                # ... interrupt handling ...
                 interrupt_info = chunk["__interrupt__"]
                 if interrupt_info and len(interrupt_info) > 0:
                     interrupt_data = interrupt_info[0].value if hasattr(interrupt_info[0], 'value') else interrupt_info[0]
@@ -462,13 +463,13 @@ async def stream_agent(
                         "type": "confirmation_required",
                         "data": interrupt_data,
                     }
-                    return  # Stop streaming, wait for user response
+                    return
+            
             # Process each update chunk
             for node_name, node_output in chunk.items():
                 if node_name == "__interrupt__":
-                    continue  # Already handled above
+                    continue
                 if node_name == "agent":
-                    # This is the LLM response
                     messages = node_output.get("messages", [])
                     for msg in messages:
                         if hasattr(msg, "tool_calls") and msg.tool_calls:
@@ -486,7 +487,8 @@ async def stream_agent(
                                     },
                                 }
                         elif hasattr(msg, "content") and msg.content:
-                            # Extract text from content (handles Gemini's content block format)
+                            # Reset status flag when content arrives
+                            has_seen_tool_result = False
                             text_content = _extract_text_content(msg.content)
                             if text_content:
                                 content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
@@ -502,15 +504,12 @@ async def stream_agent(
                     messages = node_output.get("messages", [])
                     for msg in messages:
                         if hasattr(msg, "content"):
-                            # Extract text and parse result to extract any data change metadata
                             tool_content = _extract_text_content(msg.content)
                             cleaned_result, change_data = parse_data_change(tool_content)
                             tool_name = getattr(msg, "name", "unknown")
-                            # Calculate result count/size for logging
                             result_info = _get_result_summary(cleaned_result)
                             tool_calls_summary.append(f"{tool_name} → {result_info}")
                             logger.info(f"   ✅ TOOL RESULT: {tool_name} → {result_info}")
-                            # Yield the tool result (with cleaned content)
                             yield {
                                 "type": "tool_result",
                                 "data": {
@@ -518,7 +517,6 @@ async def stream_agent(
                                     "result": cleaned_result,
                                 },
                             }
-                            # If there was a data change, emit a separate event for frontend cache invalidation
                             if change_data:
                                 yield {
                                     "type": "data_changed",
@@ -569,10 +567,9 @@ async def resume_agent(
 
     try:
         # Get interrupt IDs from the agent's state snapshot
-        # This is needed when multiple tools called interrupt() in parallel
         state_snapshot = await agent.aget_state(config)
         
-        # Extract interrupt IDs from the state
+        # ... (interrupt logic) ...
         pending_interrupts = []
         if state_snapshot and hasattr(state_snapshot, 'tasks'):
             for task in state_snapshot.tasks:
@@ -583,19 +580,13 @@ async def resume_agent(
         
         # Build the resume command
         if len(pending_interrupts) > 1:
-            # Multiple interrupts - map the SAME response to ALL of them
             resume_value = {intr_id: confirmation_response for intr_id in pending_interrupts}
-            logger.info(f"Resuming {len(pending_interrupts)} pending interrupt(s)")
         elif len(pending_interrupts) == 1:
-            # Single interrupt - can use dict format for safety
             resume_value = {pending_interrupts[0]: confirmation_response}
-            logger.info(f"Resuming 1 pending interrupt")
         else:
-            # No interrupt IDs found - use simple format (fallback)
             resume_value = confirmation_response
-            logger.info(f"Resuming with simple format (no interrupt IDs found)")
         
-        # Resume the agent by invoking with a Command that provides the interrupt response
+        # Resume the agent
         async for chunk in agent.astream(
             Command(resume=resume_value),
             config=config,
@@ -621,11 +612,12 @@ async def resume_agent(
                         "type": "confirmation_required",
                         "data": interrupt_data,
                     }
-                    return  # Stop streaming, wait for user response
-            # Process each update chunk (same logic as stream_agent)
+                    return
+            
+            # Process chunks
             for node_name, node_output in chunk.items():
                 if node_name == "__interrupt__":
-                    continue  # Already handled above
+                    continue
                 if node_name == "agent":
                     messages = node_output.get("messages", [])
                     for msg in messages:
@@ -633,7 +625,6 @@ async def resume_agent(
                             has_seen_tool_result = False
                             for tool_call in msg.tool_calls:
                                 tool_name = tool_call.get("name")
-                                logger.info(f"   🔧 TOOL CALL: {tool_name}")
                                 yield {
                                     "type": "tool_call",
                                     "data": {
@@ -642,7 +633,7 @@ async def resume_agent(
                                     },
                                 }
                         elif hasattr(msg, "content") and msg.content:
-                            # Extract text from content (handles Gemini's content block format)
+                            has_seen_tool_result = False
                             text_content = _extract_text_content(msg.content)
                             if text_content:
                                 content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
@@ -657,10 +648,8 @@ async def resume_agent(
                     for msg in messages:
                         if hasattr(msg, "content"):
                             tool_content = _extract_text_content(msg.content)
-                            cleaned_result, change_data = parse_data_change(tool_content)
+                            cleaned_result, _ = parse_data_change(tool_content)
                             tool_name = getattr(msg, "name", "unknown")
-                            result_info = _get_result_summary(cleaned_result)
-                            logger.info(f"   ✅ TOOL RESULT: {tool_name} → {result_info}")
                             yield {
                                 "type": "tool_result",
                                 "data": {
@@ -668,11 +657,6 @@ async def resume_agent(
                                     "result": cleaned_result,
                                 },
                             }
-                            if change_data:
-                                yield {
-                                    "type": "data_changed",
-                                    "data": change_data,
-                                }
         # Signal completion
         yield {"type": "done", "data": {}}
         

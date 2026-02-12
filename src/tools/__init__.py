@@ -6,6 +6,8 @@ from src.tools.create_tools import get_create_tools
 from src.tools.update_tools import get_update_tools
 from src.tools.research_tools import get_research_tools
 from src.tools.context_tools import get_context_tools
+from src.tools.reminder_tools import get_reminder_tools
+from src.tools.note_tools import get_note_tools
 from src.tools.confirmation import (
     ConfirmationType,
     ConfirmationRequest,
@@ -21,10 +23,10 @@ from src.tools.confirmation import (
 
 def get_all_tools(context: ToolContext) -> list:
     """Get all available tools for the agent.
-    
+
     Args:
         context: Tool context with auth and workspace info
-        
+
     Returns:
         List of all tool functions
     """
@@ -34,6 +36,8 @@ def get_all_tools(context: ToolContext) -> list:
     tools.extend(get_update_tools(context))
     tools.extend(get_research_tools(context))
     tools.extend(get_context_tools(context))
+    tools.extend(get_reminder_tools(context))
+    tools.extend(get_note_tools(context))
     return tools
 
 
@@ -46,6 +50,8 @@ __all__ = [
     "get_update_tools",
     "get_research_tools",
     "get_context_tools",
+    "get_reminder_tools",
+    "get_note_tools",
     # Confirmation utilities
     "ConfirmationType",
     "ConfirmationRequest",
@@ -57,4 +63,3 @@ __all__ = [
     "request_update_confirmation",
     "request_delete_confirmation",
 ]
-
