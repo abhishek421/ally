@@ -5,6 +5,7 @@ from src.tools.read_tools import get_read_tools
 from src.tools.create_tools import get_create_tools
 from src.tools.update_tools import get_update_tools
 from src.tools.research_tools import get_research_tools
+from src.tools.context_tools import get_context_tools
 from src.tools.confirmation import (
     ConfirmationType,
     ConfirmationRequest,
@@ -32,6 +33,7 @@ def get_all_tools(context: ToolContext) -> list:
     tools.extend(get_create_tools(context))
     tools.extend(get_update_tools(context))
     tools.extend(get_research_tools(context))
+    tools.extend(get_context_tools(context))
     return tools
 
 
@@ -43,6 +45,7 @@ __all__ = [
     "get_create_tools",
     "get_update_tools",
     "get_research_tools",
+    "get_context_tools",
     # Confirmation utilities
     "ConfirmationType",
     "ConfirmationRequest",
