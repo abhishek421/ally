@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import AsyncGenerator
 
@@ -89,9 +90,63 @@ async def resolve_workspace_instructions(auth: AuthContext) -> str | None:
         await client.close()
 
 
+def extract_group_id_from_url(active_url: str | None) -> str | None:
+    """Extract group ID from the active URL.
+
+    Matches patterns like /apps/groups/{uuid}/...
+
+    Args:
+        active_url: The current page URL the user is viewing
+
+    Returns:
+        Group UUID or None if not on a group page
+    """
+    if not active_url:
+        return None
+    match = re.search(
+        r'/apps/groups/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})',
+        active_url,
+        re.IGNORECASE,
+    )
+    return match.group(1) if match else None
+
+
+async def resolve_group_instructions(auth: AuthContext, active_url: str | None) -> str | None:
+    """Fetch custom instructions for the active group.
+
+    These instructions are set by group creators or workspace admins to provide
+    group-specific context to the AI agent.
+
+    Args:
+        auth: Auth context from the request
+        active_url: The current page URL the user is viewing
+
+    Returns:
+        Custom instructions string or None if not set or not on a group page
+    """
+    group_id = extract_group_id_from_url(active_url)
+    if not group_id:
+        return None
+
+    logger.info(f"🔍 Fetching custom instructions for group: {group_id}")
+    client = GraphQLClient(auth.auth_token, auth.workspace_id, auth.session_id)
+    try:
+        instructions = await client.get_group_custom_instructions(group_id)
+        if instructions:
+            logger.info(f"✅ Loaded group custom instructions ({len(instructions)} chars)")
+        else:
+            logger.info(f"ℹ️  No custom instructions set for group {group_id}")
+        return instructions
+    except Exception as e:
+        logger.warning(f"❌ Error fetching group instructions: {e}")
+        return None
+    finally:
+        await client.close()
+
+
 class ChatRequest(BaseModel):
     """Request body for the chat endpoint."""
-    
+
     conversation_id: str = Field(..., description="ID of the conversation thread")
     message: str = Field(..., min_length=1, description="User message to send")
     activeURL: str | None = Field(None, description="Current page URL the user is viewing")
@@ -201,10 +256,11 @@ async def chat(
     - `error` - Error message if something went wrong
     - `done` - Stream completion signal
     """
-    # Fetch user profile and workspace instructions in parallel for performance
-    user_profile, workspace_instructions = await asyncio.gather(
+    # Fetch user profile, workspace instructions, and group instructions in parallel
+    user_profile, workspace_instructions, group_instructions = await asyncio.gather(
         resolve_user_profile(auth),
         resolve_workspace_instructions(auth),
+        resolve_group_instructions(auth, request.activeURL),
     )
 
     # Log the incoming query in a clean format
@@ -212,7 +268,7 @@ async def chat(
     user_name = user_profile.first_name or "User"
     logger.info(f"📩 QUERY from {user_name}: \"{query_preview}\"")
 
-    # Create tool context with user profile and workspace instructions
+    # Create tool context with user profile, workspace instructions, and group instructions
     context = ToolContext(
         auth_token=auth.auth_token,
         workspace_id=auth.workspace_id,
@@ -222,6 +278,7 @@ async def chat(
         user_email=user_profile.email,
         active_url=request.activeURL,
         workspace_instructions=workspace_instructions,
+        group_instructions=group_instructions,
     )
 
     return EventSourceResponse(
@@ -232,12 +289,13 @@ async def chat(
 
 class ConfirmationRequest(BaseModel):
     """Request body for the confirmation endpoint."""
-    
+
     conversation_id: str = Field(..., description="ID of the conversation thread")
     confirmed: bool = Field(False, description="Whether the user confirmed the action")
     selected_id: str | None = Field(None, description="Selected option ID for SELECT_ONE")
     selected_ids: list[str] | None = Field(None, description="Selected option IDs for SELECT_MANY")
     feedback: str | None = Field(None, description="Optional feedback from user")
+    activeURL: str | None = Field(None, description="Current page URL for group context")
 
 
 async def confirmation_event_generator(
@@ -303,13 +361,14 @@ async def confirm_action(
     Same event types as /chat endpoint.
     """
 
-    # Fetch user profile and workspace instructions in parallel
-    user_profile, workspace_instructions = await asyncio.gather(
+    # Fetch user profile, workspace instructions, and group instructions in parallel
+    user_profile, workspace_instructions, group_instructions = await asyncio.gather(
         resolve_user_profile(auth),
         resolve_workspace_instructions(auth),
+        resolve_group_instructions(auth, request.activeURL),
     )
 
-    # Create tool context with user profile and workspace instructions
+    # Create tool context with user profile, workspace instructions, and group instructions
     context = ToolContext(
         auth_token=auth.auth_token,
         workspace_id=auth.workspace_id,
@@ -318,6 +377,7 @@ async def confirm_action(
         user_first_name=user_profile.first_name,
         user_email=user_profile.email,
         workspace_instructions=workspace_instructions,
+        group_instructions=group_instructions,
     )
 
     # Build confirmation response dict
