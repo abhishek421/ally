@@ -462,18 +462,7 @@ def get_reminder_tools(context: ToolContext) -> list:
             if not update_input:
                 return "No changes specified. Please provide at least one field to update."
             
-            # Request user confirmation before updating
-            confirmation = request_update_confirmation(
-                entity_type="reminder",
-                entity_name=current.get("title", "Unknown"),
-                changes=changes,
-            )
-            
-            if not confirmation.confirmed:
-                feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
-                return f"Reminder update cancelled.{feedback}"
-            
-            # Proceed with update
+            # Proceed with update directly without HITL
             mutation = """
             mutation UpdateReminder(
                 $id: String!
@@ -553,18 +542,7 @@ def get_reminder_tools(context: ToolContext) -> list:
             if not reminder:
                 return f"Reminder with ID '{reminder_id}' not found."
             
-            # Request confirmation
-            confirmation = request_delete_confirmation(
-                entity_type="reminder",
-                entity_name=reminder.get("title", "Unknown"),
-                context=f"This will permanently delete the reminder '{reminder.get('title')}' (ID: {reminder_id}).",
-            )
-            
-            if not confirmation.confirmed:
-                feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
-                return f"Reminder deletion cancelled.{feedback}"
-            
-            # Proceed with deletion
+            # Proceed with deletion directly without HITL
             mutation = """
             mutation DeleteReminder($id: String!, $workspaceId: String!) {
                 deleteReminder(id: $id, workspaceId: $workspaceId)
