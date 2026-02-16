@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 # Note entity type enum matching backend
-NOTE_ENTITY_TYPES = ["PEOPLE", "COMPANY"]
+NOTE_ENTITY_TYPES = ["PEOPLE", "COMPANY", "PERSON"]
 
 
 def format_note(note: dict) -> str:
@@ -100,10 +100,13 @@ def get_note_tools(context: ToolContext) -> list:
         Returns:
             Confirmation message with the created note details
         """
-        # Validate entity type
+        # Validate and normalize entity type
         entity_type_upper = entity_type.upper()
+        if entity_type_upper == "PERSON":
+            entity_type_upper = "PEOPLE"
+            
         if entity_type_upper not in NOTE_ENTITY_TYPES:
-            return f"Invalid entity type '{entity_type}'. Must be 'PEOPLE' for a person or 'COMPANY' for a company."
+            return f"Invalid entity type '{entity_type}'. Must be 'PEOPLE' (or 'PERSON') for a person or 'COMPANY' for a company."
         
         client = context.get_client()
         
@@ -253,9 +256,13 @@ def get_note_tools(context: ToolContext) -> list:
         Returns:
             Formatted list of notes
         """
+        # Validate and normalize entity type
         entity_type_upper = entity_type.upper()
+        if entity_type_upper == "PERSON":
+            entity_type_upper = "PEOPLE"
+
         if entity_type_upper not in NOTE_ENTITY_TYPES:
-            return f"Invalid entity type '{entity_type}'. Must be 'PEOPLE' or 'COMPANY'."
+            return f"Invalid entity type '{entity_type}'. Must be 'PEOPLE' (or 'PERSON') or 'COMPANY'."
         
         client = context.get_client()
         
@@ -315,7 +322,7 @@ def get_note_tools(context: ToolContext) -> list:
             notes_query = """
             query GetNotes(
                 $workspaceId: String!
-                $entityType: EntityType!
+                $entityType: NoteEntityType!
                 $entityId: String!
                 $limit: Int
             ) {
