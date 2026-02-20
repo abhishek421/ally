@@ -15,6 +15,7 @@ This document provides a comprehensive overview of the Ally Chat feature archite
 - [SSE Event Types](#sse-event-types)
 - [Confirmation System](#confirmation-system)
 - [Tool System](#tool-system)
+- [Custom Instructions System](#custom-instructions-system)
 - [Key Files Reference](#key-files-reference)
 
 ---
@@ -25,9 +26,12 @@ The Ally Chat feature is a **3-tier AI-powered CRM assistant** with:
 
 - **Streaming responses** via Server-Sent Events (SSE)
 - **Human-in-the-loop confirmations** for sensitive operations
-- **Intelligent tool execution** for CRM operations
+- **Intelligent tool execution** for CRM operations (CRUD, notes, reminders, research)
 - **Multi-LLM support** (OpenAI, Anthropic, Gemini)
 - **Conversation persistence** with PostgreSQL
+- **Custom instructions** at workspace, group, and entity levels
+- **Personalized interactions** using user profile data
+- **Auto-generated conversation titles**
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
@@ -45,7 +49,7 @@ The Ally Chat feature is a **3-tier AI-powered CRM assistant** with:
 |------|------------|---------|
 | `ally` | Python, FastAPI, LangGraph | AI Agent service with tool execution |
 | `frontend` | Next.js, React, TypeScript | Chat UI components and state management |
-| `backend` | NestJS, GraphQL, Prisma | Conversation persistence and CRM data |
+| `backend` | NestJS, GraphQL, Prisma | Conversation persistence, custom instructions, and CRM data |
 
 ---
 
@@ -59,7 +63,7 @@ The core AI service that processes user messages and executes CRM operations.
 - **AI/Orchestration**: LangGraph (ReAct pattern agent) + LangChain
 - **LLM Support**: OpenAI (GPT-4), Anthropic (Claude), Google Gemini
 - **Backend Communication**: GraphQL API client
-- **Database**: PostgreSQL (for LangGraph conversation persistence)
+- **Database**: PostgreSQL (for LangGraph conversation persistence via checkpointer)
 - **Streaming**: Server-Sent Events (SSE)
 - **Authentication**: JWT (AWS Cognito compatible)
 
@@ -84,6 +88,9 @@ ally/
 │   │   ├── update_tools.py       # Update/Modify tools
 │   │   ├── research_tools.py     # Web search tool
 │   │   ├── confirmation.py       # Confirmation UI framework
+│   │   ├── context_tools.py      # Entity-specific instructions retrieval
+│   │   ├── note_tools.py         # Note CRUD tools
+│   │   ├── reminder_tools.py     # Reminder CRUD tools
 │   │   └── __init__.py           # Tool aggregation
 │   └── graphql/
 │       ├── client.py             # GraphQL client
@@ -104,6 +111,9 @@ ally/
 | `/api/v1/chat` | POST | Main chat endpoint, returns SSE stream |
 | `/api/v1/chat/confirm` | POST | Resume agent after user confirmation |
 | `/api/v1/conversations/{id}/history` | GET | Retrieve conversation history |
+| `/health` | GET | Health check |
+
+The `/chat` endpoint now performs parallel resolution of user profile, workspace instructions, and group instructions before creating the agent. It also extracts the group ID from the active URL (`/apps/groups/{uuid}`) for group-specific context.
 
 #### Agent Graph (`src/agent/graph.py`)
 
@@ -111,7 +121,12 @@ ally/
 - **`resume_agent()`** - Continues execution after user confirmation
 - Handles tool calls, results, and responses
 - Can pause for user confirmation via `interrupt()`
-- Automatically generates conversation titles on first message
+- **`generate_conversation_title()`** - Uses LLM to create 2-6 word titles for new conversations
+- **`is_first_message()`** - Checks if conversation is new to trigger title generation
+- **`get_checkpointer()`** - Returns PostgreSQL checkpointer if `DATABASE_URL_ALLY` is configured, otherwise falls back to MemorySaver
+- **Heartbeat system** - Sends "Thinking..." or "Analyzing results..." events every 1.5 seconds during long operations
+- **`_extract_text_content()`** - Normalizes different LLM response formats (handles Gemini's content block format)
+- **`_get_result_summary()`** - Extracts human-readable summaries from tool results
 
 #### Agent State (`src/agent/state.py`)
 
@@ -123,14 +138,62 @@ class AgentState:
     auth_token: str                           # For GraphQL calls
 ```
 
+#### Tool Context (`src/tools/base.py`)
+
+The `ToolContext` passed to all tools has been expanded:
+
+```python
+class ToolContext:
+    workspace_id: str
+    user_id: str
+    auth_token: str
+    active_url: Optional[str]                  # Current page URL
+    user_first_name: Optional[str]             # For personalization
+    user_email: Optional[str]                  # User context
+    workspace_instructions: Optional[str]      # Workspace-level custom instructions
+    group_instructions: Optional[str]          # Group-level custom instructions
+```
+
 #### System Prompts (`src/agent/prompts.py`)
 
 The agent uses a comprehensive system prompt that includes:
 - **Base Instructions**: CRM operations, data management, reasoning patterns
 - **Workspace Context**: Custom instructions set by workspace admins
-- **User Personalization**: User's first name, greeting behavior
+- **Group Context**: Group-specific instructions injected when in a group view
+- **Entity Context**: Entity-type-specific instructions (via `get_entity_instructions` tool)
+- **User Personalization**: User's first name, greeting behavior (different for new vs continuing conversations)
 - **Tool Guidance**: Smart name resolution, human-in-the-loop workflows
+- **Creating Entities**: Encourages sensible defaults (PEOPLE type, private groups)
+- **Web Search**: Explicitly instructs agent to use `web_search` for external data
 - **Privacy & Ethics**: Data protection, user permissions
+
+#### GraphQL Client (`src/graphql/client.py`)
+
+New methods added:
+- **`get_current_user_profile()`** - Fetch database user ID, first name, and email
+- **`get_workspace_custom_instructions()`** - Fetch workspace-level instructions
+- **`get_group_custom_instructions(group_id)`** - Fetch group-specific instructions
+
+#### Data Change Tracking (`src/tools/base.py`)
+
+Tools use a marker system to track entity changes:
+- `DATA_CHANGE_MARKER` appended to tool results with change metadata
+- `parse_data_change()` extracts change data from results
+- Enables frontend cache invalidation when data is modified
+
+```python
+class EntityType(str, Enum):
+    PERSON = "person"
+    COMPANY = "company"
+    GROUP = "group"
+    VIEW = "view"
+    REMINDER = "reminder"
+
+class ChangeAction(str, Enum):
+    CREATED = "created"
+    UPDATED = "updated"
+    DELETED = "deleted"
+```
 
 ### Environment Variables
 
@@ -155,59 +218,88 @@ React components and state management for the chat interface.
 ```
 frontend/
 ├── components/ally/
-│   ├── AllyChat.tsx              # Main chat container
+│   ├── AllyChat.tsx              # Main chat container with history management
 │   ├── AllyChatInput.tsx         # Message input field
-│   ├── AllyChatMessages.tsx      # Message rendering with tool calls
-│   ├── AllyChatButton.tsx        # Floating action button
-│   ├── AllyConfirmation.tsx      # Confirmation dialog
+│   ├── AllyChatMessages.tsx      # Message rendering with tool call grouping
+│   ├── AllyChatButton.tsx        # Floating action button (currently disabled)
+│   ├── AllyConfirmation.tsx      # Confirmation dialog with edit/feedback support
 │   └── index.ts                  # Component exports
+├── components/layout/
+│   └── ally-aware-main.tsx       # Layout wrapper aware of Ally panel
 ├── contexts/
-│   └── ally-context.tsx          # Chat state management
+│   └── ally-context.tsx          # Chat state management + SSE streaming
 ├── hooks/ally/
-│   ├── use-ally-chat.ts          # Core chat logic hook
-│   ├── use-conversations.ts      # Conversation list fetching
-│   ├── use-conversation.ts       # Single conversation fetching
-│   └── use-ally-data-invalidator.ts  # Cache invalidation
+│   ├── use-ally-chat.ts          # Core chat logic hook (thin wrapper)
+│   ├── use-conversations.ts      # Conversation list fetching (React Query)
+│   ├── use-conversation.ts       # Single conversation fetching (React Query)
+│   └── use-ally-data-invalidator.ts  # Per-entity-type cache invalidation
 ├── lib/
-│   ├── actions/ally.actions.ts   # Server actions (mutations)
+│   ├── actions/ally.actions.ts   # Server actions with Zod validation
+│   ├── types/ally.ts             # Extended type definitions
 │   └── data/ally/
 │       ├── get-conversations.ts  # List conversations
 │       └── get-conversation.ts   # Get single conversation
+├── lib/graphql/ally/             # GraphQL query/mutation files
+│   ├── create-conversation.graphql
+│   ├── delete-conversation.graphql
+│   ├── get-conversation.graphql
+│   ├── get-conversations.graphql
+│   ├── get-messages.graphql
+│   ├── save-message.graphql
+│   └── update-conversation.graphql
 ├── app/api/v1/
 │   └── chat/
 │       ├── route.ts              # Chat proxy endpoint
 │       └── confirm/route.ts      # Confirmation proxy endpoint
 └── types/
-    └── ally-confirmation.ts      # TypeScript types
+    └── ally-confirmation.ts      # TypeScript types + entity/confidence configs
 ```
 
 ### Key Components
 
 #### AllyChat.tsx - Main Chat Container
 - Orchestrates the entire chat interface
-- Displays conversation history and current messages
-- Manages conversation switching via history sidebar
-- Shows empty state with quick action suggestions
+- **Conversation history sidebar** with search functionality (via `nuqs` URL state)
+- **Rename conversations** inline editing
+- **Delete conversations** with confirmation dialog
+- Conversation selection and switching
+- **Quick action suggestions** in empty state
+- Support for expanded/minimized view
+- Responsive design for mobile and desktop
 
 #### AllyChatInput.tsx - Message Input
 - Auto-resizing textarea (max 100px height)
 - Send on Enter (Shift+Enter for newline)
 - Cancel button during streaming
+- Focus management on mount
+- Keyboard shortcut hints
 
 #### AllyChatMessages.tsx - Message Rendering
 - User messages (right-aligned, primary color)
 - Assistant messages (left-aligned, with Ally avatar)
-- Markdown rendering with GitHub-flavored markdown
-- Tool call visualization with collapsible groups
+- **Full markdown rendering** (lists, code blocks, blockquotes, tables, links)
+- **Advanced tool call grouping**:
+  - `INTERNAL_TOOLS` set (~18 lookup/query tools hidden by default)
+  - `ACTION_TOOLS` set (~16 user-facing tools displayed prominently)
+  - Tool grouping by name with progress indicators
+- Tool call chip display with status badges
+- **Tool result formatting** with ID stripping
 - Status indicators (completed, in-progress, failed)
-- Emoji status icons (➕ add, ✏️ update, 🔍 search, ➖ remove)
+
+#### AllyChatButton.tsx - Floating Action Button
+- **Currently disabled** - Ally now opens from sidebar only
+- Logic structure preserved but renders empty fragment
 
 #### AllyConfirmation.tsx - Confirmation Dialog
 - `select_one` - Radio buttons for disambiguation
 - `confirm_action` - Simple yes/no confirmation
 - `confirm_with_edit` - Review and edit data before confirming
-- Entity type icons and styling
-- Confidence badges (High/Medium/Low)
+- **Status change visualization** - Shows old value → new value with colors
+- **Edit mode** - Users can modify draft data fields before confirming
+- **Feedback collection** - Optional feedback textarea on cancellation
+- **Confidence badges** - "High match", "Possible match", "Low match" indicators
+- **Entity type icons** - Person, Company, Group, View with styled chips
+- **Custom action labels** on confirm buttons
 
 ### State Management
 
@@ -215,7 +307,7 @@ frontend/
 
 **Important**: All chat state is managed in `AllyContext` (at the root layout level), not in the `useAllyChat` hook. This ensures:
 
-- **Chat survives popup close/open**: State persists when user closes and reopens the chat popup
+- **Chat survives popup close/open**: State persists when user closes and reopens the chat panel
 - **SSE streams continue in background**: The streaming connection runs in the context, not tied to component lifecycle
 - **Messages preserved across remounts**: No loss of messages when React re-renders
 
@@ -235,6 +327,12 @@ interface AllyContextType {
   conversationId: string | null
   pendingConfirmation: ConfirmationRequest | null
   workspaceId: string | null
+  isAllyOpen: boolean                          // Tracks if Ally panel is open
+  setIsAllyOpen: (isOpen: boolean) => void     // Toggle Ally panel
+
+  // Callback refs (for cross-component communication)
+  onConversationCreated: MutableRefObject<((id: string) => void) | null>
+  onConversationsInvalidate: MutableRefObject<(() => void) | null>
 
   // Actions
   sendMessage(content: string): Promise<void>
@@ -244,6 +342,12 @@ interface AllyContextType {
   loadMessages(messages: ChatMessage[]): void
 }
 ```
+
+The context also:
+- Syncs workspace ID from auth context (`activeWorkspaceId`)
+- Passes active URL (current pathname) to the API for page-aware context
+- Passes session ID for request tracing
+- Handles the `conversation_title` SSE event to auto-update conversation names
 
 #### useAllyChat Hook (`hooks/ally/use-ally-chat.ts`)
 
@@ -273,7 +377,24 @@ export function useAllyChat({
 }
 ```
 
-### TypeScript Types (`types/ally-confirmation.ts`)
+#### useAllyDataInvalidator Hook (`hooks/ally/use-ally-data-invalidator.ts`)
+
+Sophisticated per-entity-type cache invalidation:
+- **Person changes**: Invalidates `people-infinite`, `pipeline-data`, `person-profile` queries
+- **Company changes**: Invalidates `companies-infinite`, `pipeline-data`, `company-profile` queries
+- **Group changes**: Invalidates `user-groups` queries, triggers server-side revalidation
+- **View changes**: Invalidates `user-views`, `user-groups` queries
+- Workspace-aware, batch invalidation with deduplication
+
+#### useConversations / useConversation Hooks
+
+Built with React Query:
+- `useConversations`: 2-minute stale time, 5-minute GC, 1 retry
+- `useConversation`: 1-minute stale time, 5-minute GC
+
+### TypeScript Types
+
+#### `types/ally-confirmation.ts`
 
 ```typescript
 interface ChatMessage {
@@ -294,6 +415,7 @@ interface ConfirmationRequest {
   message: string
   options?: ConfirmationOption[]
   draft_data?: Record<string, unknown>
+  action_label?: string              // Custom confirm button text
   allow_cancel_feedback: boolean
   entity_type?: "person" | "company" | "group" | "view"
 }
@@ -304,13 +426,73 @@ interface ConfirmationResponsePayload {
   selected_ids?: string[]
   feedback?: string
 }
+
+// Entity type display config (icons + labels)
+const ENTITY_TYPE_CONFIG = { person, company, group, view }
+
+// Confidence level display config (colors + labels)
+const CONFIDENCE_CONFIG = { high, medium, low }
+
+// Helper functions
+getEntityTypeConfig(entityType): { icon, label }
+getStatusChangeData(draftData): { field, oldValue, newValue }
 ```
+
+#### `lib/types/ally.ts` (Extended types)
+
+```typescript
+interface CreatedEntity {
+  type: string
+  id: string
+  name: string
+  url: string
+  details: Record<string, unknown>
+}
+
+interface ToolCall {
+  tool: string
+  params: Record<string, unknown>
+  result: string
+  parsedResult: unknown
+  createdEntity?: CreatedEntity
+  status: "pending" | "completed" | "failed"
+}
+
+interface Message {
+  role: "user" | "assistant"
+  content: string
+  reasoning: string[]
+  toolCalls: ToolCall[]
+  isStreaming: boolean
+  status: "pending" | "streaming" | "completed" | "failed"
+}
+
+interface ConversationSummary { ... }
+interface ConversationMessage { ... }
+```
+
+### API Routes (Proxy)
+
+Both `/api/v1/chat/route.ts` and `/api/v1/chat/confirm/route.ts` are proxy endpoints that:
+- Forward requests to upstream Ally service (`ALLY_API_URL`)
+- Preserve authentication headers (`Authorization`, `X-Workspace-ID`, `x-session-id`)
+- Pass active URL context for page-aware agent behavior
+- Stream SSE responses back to the client
+- Handle errors with dev/prod differentiation
+
+### Server Actions (`lib/actions/ally.actions.ts`)
+
+All mutations use Next.js server actions with **Zod schema validation**:
+- `createAllyConversation` - Creates new conversation
+- `updateAllyConversation` - Updates title/archive status
+- `deleteAllyConversation` - Deletes conversation
+- `saveAllyMessage` - Persists messages with toolCalls
 
 ---
 
 ## 3. Backend Repo - NestJS GraphQL API
 
-Conversation persistence layer using GraphQL and Prisma.
+Conversation persistence and custom instructions layer using GraphQL and Prisma.
 
 ### Directory Structure
 
@@ -324,22 +506,55 @@ backend/
 │   │   └── conversation.model.ts # GraphQL models
 │   └── dto/
 │       └── conversation.input.ts # Input validation DTOs
+├── apps/api/src/workspace/
+│   ├── workspace.resolver.ts     # Workspace + entity custom instructions endpoints
+│   └── models/
+│       ├── custom-instructions.model.ts        # Workspace instructions model
+│       └── entity-custom-instructions.model.ts # Entity instructions model
+├── apps/api/src/group/group/
+│   ├── Group.ts                  # Group custom instructions endpoints
+│   └── models/
+│       └── group-custom-instructions.model.ts  # Group instructions model
 └── libs/prisma-schema/prisma/
     └── schema.prisma             # Database models
 ```
 
-### GraphQL Endpoints (`ally.resolver.ts`)
+### GraphQL Endpoints
 
-#### Queries
-- `getAllyConversations` - Paginated list of user's conversations
-- `getAllyConversation` - Single conversation with all messages
-- `getAllyMessages` - Messages for a conversation with pagination
+#### Ally Conversation Endpoints (`ally.resolver.ts`)
 
-#### Mutations
-- `createAllyConversation` - Create new conversation
-- `updateAllyConversation` - Update title or archive status
-- `deleteAllyConversation` - Delete conversation and messages
-- `saveAllyMessage` - Save message to conversation
+**Queries:**
+- `getAllyConversations(workspaceId, page, limit, includeArchived)` - Paginated list of user's conversations
+- `getAllyConversation(conversationId)` - Single conversation with all messages
+- `getAllyMessages(conversationId, limit, beforeId)` - Messages with cursor-based pagination
+
+**Mutations:**
+- `createAllyConversation(input)` - Create new conversation
+- `updateAllyConversation(input)` - Update title or archive status
+- `deleteAllyConversation(conversationId)` - Delete conversation and messages
+- `saveAllyMessage(input)` - Save message to conversation
+
+#### Workspace Custom Instructions Endpoints (`workspace.resolver.ts`)
+
+**Queries:**
+- `getWorkspaceCustomInstructions(workspaceId)` - Get workspace-level instructions
+- `getEntityCustomInstructions(workspaceId, entityType, objectDefinitionId?)` - Get entity-type instructions
+- `getAllEntityCustomInstructions(workspaceId)` - Get all entity-type instructions
+
+**Mutations:**
+- `updateWorkspaceCustomInstructions(input)` - Upsert workspace instructions (max 8000 chars)
+- `deleteWorkspaceCustomInstructions(workspaceId)` - Delete workspace instructions
+- `upsertEntityCustomInstructions(workspaceId, input)` - Upsert entity-type instructions
+- `deleteEntityCustomInstructions(workspaceId, entityType, objectDefinitionId?)` - Delete entity instructions
+
+#### Group Custom Instructions Endpoints (`Group.ts`)
+
+**Queries:**
+- `getGroupCustomInstructions(groupId)` - Get group-specific instructions
+
+**Mutations:**
+- `updateGroupCustomInstructions(input)` - Upsert group instructions (max 8000 chars)
+- `deleteGroupCustomInstructions(groupId)` - Delete group instructions
 
 ### Database Schema (Prisma)
 
@@ -359,6 +574,7 @@ model allyConversation {
 
   @@index([workspaceId, userId])
   @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
 }
 
 model allyMessage {
@@ -381,7 +597,7 @@ enum AllyMessageRole {
 }
 ```
 
-### Workspace Custom Instructions
+### Custom Instructions Schema
 
 ```prisma
 model workspaceCustomInstructions {
@@ -391,6 +607,38 @@ model workspaceCustomInstructions {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   updatedBy    String   @db.Uuid
+
+  workspace    workspace @relation(...)
+  updatedUser  user      @relation("customInstructionsUpdatedBy")
+}
+
+model groupCustomInstructions {
+  id           String   @id @default(uuid()) @db.Uuid
+  groupId      String   @unique @db.Uuid
+  instructions String   @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  updatedBy    String   @db.Uuid
+
+  group        group @relation(...)
+  updatedUser  user  @relation("groupCustomInstructionsUpdatedBy")
+}
+
+model entityCustomInstructions {
+  id                 String     @id @default(uuid()) @db.Uuid
+  workspaceId        String     @db.Uuid
+  entityType         EntityType  # PERSON | COMPANY | OBJECT
+  objectDefinitionId String?    @db.Uuid   # Only for OBJECT type
+  instructions       String     @db.Text
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+  updatedBy          String     @db.Uuid
+
+  workspace          workspace  @relation(...)
+  objectDefinition   objectDefinition? @relation(...)
+  updatedUser        user       @relation("entityCustomInstructionsUpdatedBy")
+
+  @@unique([workspaceId, entityType, objectDefinitionId])
 }
 ```
 
@@ -402,39 +650,57 @@ model workspaceCustomInstructions {
 
 ```
 1. User types message in AllyChatInput
-2. useAllyChat hook calls sendMessage()
+2. AllyContext calls sendMessage()
 3. Message saved to backend via saveAllyMessage() server action
 4. POST request to /api/v1/chat (proxied to Ally Python service)
-5. Ally returns SSE stream with events:
+5. Ally resolves in parallel: user profile, workspace instructions, group instructions
+6. Agent created with personalized system prompt
+7. Ally returns SSE stream with events:
+   - thinking: Heartbeat events every 1.5s ("Thinking...", "Analyzing results...")
    - response: Text content streamed in real-time
    - tool_call: Tool execution announced
    - tool_result: Tool result returned
    - data_changed: Cache invalidation triggered
    - confirmation_required: Pauses stream, waits for user
+   - conversation_title: Auto-generated title (first message only)
    - done: Stream complete, message saved
-6. AllyChatMessages renders final message with formatting
+8. AllyChatMessages renders final message with markdown formatting
 ```
 
 ### Confirmation Flow
 
 ```
 1. Ally SSE emits confirmation_required event
-2. useAllyChat extracts ConfirmationRequest
+2. AllyContext extracts ConfirmationRequest
 3. AllyConfirmation component renders based on type
-4. User selects option or edits data
-5. useAllyChat.sendConfirmation() sends to /api/v1/chat/confirm
+4. User selects option, edits data, or provides feedback
+5. AllyContext.sendConfirmation() sends to /api/v1/chat/confirm
 6. Ally resumes execution with SSE stream
-7. Process repeats until completion
+7. Process can repeat (nested confirmations supported)
 ```
 
 ### Data Invalidation Flow
 
 ```
 1. Ally creates/updates/deletes entity, emits data_changed event
-2. useAllyChat collects changes in dataChangesRef
+2. AllyContext collects changes in dataChangesRef
 3. On done event, invalidateByChanges() is called
-4. Hook deduplicates changes and invalidates React Query caches
+4. useAllyDataInvalidator deduplicates changes per entity type:
+   - Person: invalidates people-infinite, pipeline-data, person-profile
+   - Company: invalidates companies-infinite, pipeline-data, company-profile
+   - Group: invalidates user-groups, triggers server-side revalidation
+   - View: invalidates user-views, user-groups
 5. Affected UI components refetch and re-render
+```
+
+### Conversation Title Flow
+
+```
+1. User sends first message in a new conversation
+2. After agent completes response, is_first_message() returns true
+3. generate_conversation_title() uses LLM to create 2-6 word summary
+4. SSE emits conversation_title event with { title, conversation_id }
+5. Frontend updates conversation name in sidebar
 ```
 
 ---
@@ -443,12 +709,13 @@ model workspaceCustomInstructions {
 
 | Event | Description | Data |
 |-------|-------------|------|
-| `thinking` | Agent reasoning | `{ content: string }` |
+| `thinking` | Agent reasoning / heartbeat | `{ content: string }` |
 | `tool_call` | Tool execution initiated | `{ name: string, args: object }` |
 | `tool_result` | Tool result received | `{ name: string, result: string }` |
 | `response` | Streaming text content | `{ content: string }` |
 | `confirmation_required` | Pauses for user | `ConfirmationRequest` |
 | `data_changed` | Cache invalidation | `{ entityType, action, entityId }` |
+| `conversation_title` | Auto-generated title | `{ title: string, conversation_id: string }` |
 | `error` | Error occurred | `{ message: string }` |
 | `done` | Stream complete | `{}` |
 
@@ -461,9 +728,29 @@ model workspaceCustomInstructions {
 | Type | Use Case | UI |
 |------|----------|-----|
 | `confirm_action` | Simple yes/no | Confirm/Cancel buttons |
-| `select_one` | Disambiguation | Radio buttons |
+| `select_one` | Disambiguation | Radio buttons with confidence badges |
 | `select_many` | Multiple selection | Checkboxes |
-| `confirm_with_edit` | Review before create | Editable form fields |
+| `confirm_with_edit` | Review before create/update | Editable form fields with status change preview |
+
+### Enhanced Features
+
+- **Status change visualization**: Shows current → new value with color-coded styling
+- **Edit mode**: Users can modify draft data fields inline before confirming
+- **Feedback collection**: Optional textarea when user cancels an operation
+- **Confidence badges**: High/Medium/Low match indicators for disambiguation
+- **Entity type icons**: Visual chips for Person, Company, Group, View
+- **Custom action labels**: Confirm button text customizable per operation
+
+### Confirmation Helper Functions (`src/tools/confirmation.py`)
+
+```python
+# Specialized helpers for common patterns
+request_create_confirmation(title, message, entity_type, draft_data)
+request_update_confirmation(title, message, entity_type, draft_data)
+request_delete_confirmation(title, message, entity_type)
+request_column_update_confirmation(title, message, entity_type, old_value, new_value)
+request_entity_selection(title, message, options)
+```
 
 ### Workflow
 
@@ -482,7 +769,7 @@ result = request_confirmation(
 if result.confirmed:
     # Proceed with creation
 else:
-    # Handle cancellation
+    # Handle cancellation (result.feedback may contain user's reason)
 ```
 
 ---
@@ -497,6 +784,15 @@ else:
 | **Create** | `create_tools.py` | `create_company`, `create_person`, `create_group`, `create_view` |
 | **Update** | `update_tools.py` | `update_company`, `update_person`, `update_column_value`, `add_to_group`, `remove_from_group` |
 | **Research** | `research_tools.py` | `web_search` (Perplexity API) |
+| **Context** | `context_tools.py` | `get_entity_instructions` |
+| **Notes** | `note_tools.py` | `create_note`, `list_notes`, `get_note`, `update_note`, `delete_note` |
+| **Reminders** | `reminder_tools.py` | `create_reminder`, `list_reminders`, `get_reminder`, `update_reminder`, `delete_reminder` |
+
+### Tool Grouping (Frontend)
+
+The frontend categorizes tools for display:
+- **INTERNAL_TOOLS** (~18 tools): Lookup/query tools hidden by default (e.g., `resolve_company_name`, `list_people`)
+- **ACTION_TOOLS** (~16 tools): User-facing tools shown prominently (e.g., `create_company`, `update_person`)
 
 ### Fuzzy Matching (`base.py`)
 
@@ -508,40 +804,77 @@ The tools use advanced fuzzy matching for name resolution:
 
 ---
 
+## Custom Instructions System
+
+A 3-level hierarchy for customizing the AI agent's behavior:
+
+### Levels
+
+| Level | Scope | Max Length | Description |
+|-------|-------|-----------|-------------|
+| **Workspace** | All conversations in workspace | 8000 chars | Global AI guidance set by admins |
+| **Group** | Conversations within a specific group | 8000 chars | Group-specific AI behavior |
+| **Entity** | Per entity type (Person, Company, Custom Object) | 8000 chars | Entity-type-specific handling |
+
+### How It Works
+
+1. **Workspace instructions** are fetched when any chat starts and injected into the system prompt
+2. **Group instructions** are fetched when the user is viewing a group page (detected from active URL)
+3. **Entity instructions** are fetched on-demand via the `get_entity_instructions` tool when the agent operates on specific entity types
+4. All instructions have audit trails (`updatedBy` tracks who last modified them)
+
+---
+
 ## Key Files Reference
 
 ### Ally Repo (Python)
 
-| File | Lines | Purpose |
-|------|-------|---------|
-| `src/agent/graph.py` | ~300 | LangGraph agent with streaming |
-| `src/agent/prompts.py` | ~200 | System prompts |
-| `src/api/routes.py` | ~150 | FastAPI endpoints |
-| `src/tools/read_tools.py` | ~1,793 | Read/search/resolve tools |
-| `src/tools/update_tools.py` | ~1,474 | Update/modify tools |
-| `src/tools/create_tools.py` | ~487 | Create entity tools |
-| `src/tools/base.py` | ~428 | Fuzzy matching, base classes |
-| `src/tools/confirmation.py` | ~200 | Confirmation framework |
+| File | Purpose |
+|------|---------|
+| `src/agent/graph.py` | LangGraph agent with streaming, title generation, heartbeats |
+| `src/agent/prompts.py` | System prompts with workspace/group/entity context |
+| `src/api/routes.py` | FastAPI endpoints with parallel context resolution |
+| `src/tools/read_tools.py` | Read/search/resolve tools |
+| `src/tools/update_tools.py` | Update/modify tools |
+| `src/tools/create_tools.py` | Create entity tools |
+| `src/tools/note_tools.py` | Note CRUD tools |
+| `src/tools/reminder_tools.py` | Reminder CRUD tools |
+| `src/tools/context_tools.py` | Entity instructions retrieval |
+| `src/tools/base.py` | Fuzzy matching, ToolContext, data change tracking |
+| `src/tools/confirmation.py` | Confirmation framework with specialized helpers |
+| `src/graphql/client.py` | GraphQL client with profile/instructions methods |
 
 ### Frontend Repo (TypeScript)
 
 | File | Purpose |
 |------|---------|
-| `components/ally/AllyChat.tsx` | Main chat container |
-| `components/ally/AllyChatMessages.tsx` | Message rendering |
-| `components/ally/AllyConfirmation.tsx` | Confirmation dialog |
-| `hooks/ally/use-ally-chat.ts` | Core chat logic |
-| `hooks/ally/use-ally-data-invalidator.ts` | Cache invalidation |
+| `components/ally/AllyChat.tsx` | Main chat container with history/search/rename/delete |
+| `components/ally/AllyChatMessages.tsx` | Message rendering with tool grouping and markdown |
+| `components/ally/AllyConfirmation.tsx` | Confirmation with edit mode, feedback, status changes |
+| `components/ally/AllyChatInput.tsx` | Auto-resizing message input |
+| `components/layout/ally-aware-main.tsx` | Layout wrapper for Ally panel |
+| `contexts/ally-context.tsx` | Chat state management + SSE streaming engine |
+| `hooks/ally/use-ally-chat.ts` | Thin wrapper around AllyContext |
+| `hooks/ally/use-ally-data-invalidator.ts` | Per-entity-type React Query cache invalidation |
+| `lib/actions/ally.actions.ts` | Server actions with Zod validation |
+| `lib/types/ally.ts` | Extended types (CreatedEntity, ToolCall, Message) |
+| `types/ally-confirmation.ts` | Confirmation types + entity/confidence configs |
 | `app/api/v1/chat/route.ts` | SSE proxy endpoint |
-| `types/ally-confirmation.ts` | TypeScript types |
+| `app/api/v1/chat/confirm/route.ts` | Confirmation proxy endpoint |
 
 ### Backend Repo (TypeScript)
 
 | File | Purpose |
 |------|---------|
-| `apps/api/src/ally/ally.resolver.ts` | GraphQL endpoints |
-| `apps/api/src/ally/ally.service.ts` | Business logic |
-| `apps/api/src/ally/models/conversation.model.ts` | GraphQL models |
+| `apps/api/src/ally/ally.resolver.ts` | Conversation GraphQL endpoints |
+| `apps/api/src/ally/ally.service.ts` | Conversation business logic |
+| `apps/api/src/ally/models/conversation.model.ts` | Conversation GraphQL models |
+| `apps/api/src/ally/dto/conversation.input.ts` | Conversation input DTOs |
+| `apps/api/src/workspace/workspace.resolver.ts` | Workspace + entity instructions endpoints |
+| `apps/api/src/workspace/models/custom-instructions.model.ts` | Workspace instructions model |
+| `apps/api/src/workspace/models/entity-custom-instructions.model.ts` | Entity instructions model |
+| `apps/api/src/group/group/Group.ts` | Group instructions endpoints |
+| `apps/api/src/group/group/models/group-custom-instructions.model.ts` | Group instructions model |
 | `libs/prisma-schema/prisma/schema.prisma` | Database schema |
 
 ---
@@ -576,7 +909,7 @@ The tools use advanced fuzzy matching for name resolution:
 ### Testing Chat Flow
 
 1. Open the frontend at `http://localhost:3000`
-2. Click the Ally chat button (bottom-right)
+2. Open the Ally chat from the sidebar
 3. Send a message like "List all companies"
 4. Watch the streaming response and tool calls
 
@@ -599,10 +932,16 @@ Edit `ally/src/agent/prompts.py` - the `get_system_prompt()` function
 1. Add type to `ConfirmationType` enum in `ally/src/tools/confirmation.py`
 2. Handle in `AllyConfirmation.tsx` frontend component
 
+### Managing Custom Instructions
+
+- **Workspace**: Use `updateWorkspaceCustomInstructions` / `deleteWorkspaceCustomInstructions` mutations
+- **Group**: Use `updateGroupCustomInstructions` / `deleteGroupCustomInstructions` mutations
+- **Entity**: Use `upsertEntityCustomInstructions` / `deleteEntityCustomInstructions` mutations
+
 ### Debugging SSE Stream
 
 Check browser Network tab for `/api/v1/chat` request, view EventStream tab
 
 ---
 
-*Last updated: January 2025*
+*Last updated: February 2026*

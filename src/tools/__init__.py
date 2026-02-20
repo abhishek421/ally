@@ -8,6 +8,7 @@ from src.tools.research_tools import get_research_tools
 from src.tools.context_tools import get_context_tools
 from src.tools.reminder_tools import get_reminder_tools
 from src.tools.note_tools import get_note_tools
+from src.tools.memory_tools import get_memory_tools
 from src.tools.confirmation import (
     ConfirmationType,
     ConfirmationRequest,
@@ -38,6 +39,7 @@ def get_all_tools(context: ToolContext) -> list:
     tools.extend(get_context_tools(context))
     tools.extend(get_reminder_tools(context))
     tools.extend(get_note_tools(context))
+    tools.extend(get_memory_tools(context))
     return tools
 
 
@@ -52,6 +54,7 @@ __all__ = [
     "get_context_tools",
     "get_reminder_tools",
     "get_note_tools",
+    "get_memory_tools",
     # Confirmation utilities
     "ConfirmationType",
     "ConfirmationRequest",
