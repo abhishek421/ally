@@ -121,7 +121,7 @@ async def is_first_message(conversation_id: str) -> bool:
         # If we can't determine, assume it's NOT the first (safer - prevents duplicate titles)
         return False
 
-async def generate_conversation_title(user_query: str, assistant_response: str) -> str | None:
+async def generate_conversation_title(user_query: str, assistant_response: str) -> tuple[str | None, dict | None]:
     """Generate a title for a conversation based on the first exchange.
     
     Uses ChatGPT-style approach: analyzes both the user's query AND
@@ -134,8 +134,9 @@ async def generate_conversation_title(user_query: str, assistant_response: str) 
         assistant_response: The assistant's first response
         
     Returns:
-        A generated title string, or None if generation fails
+        Tuple of (title string, token usage dict or None)
     """
+    title_token_usage = None
     try:
         llm = get_llm()
         
@@ -172,6 +173,14 @@ Title:"""
         # Use invoke for a single quick response (non-streaming for speed)
         response = await llm.ainvoke(title_prompt)
         
+        # Extract token usage from title generation
+        if hasattr(response, "usage_metadata") and response.usage_metadata:
+            title_token_usage = {
+                "input_tokens": response.usage_metadata.get("input_tokens", 0),
+                "output_tokens": response.usage_metadata.get("output_tokens", 0),
+                "total_tokens": response.usage_metadata.get("total_tokens", 0),
+            }
+        
         # Extract and clean up the title (handles Gemini's content block format)
         title = _extract_text_content(response.content).strip()
         
@@ -185,13 +194,13 @@ Title:"""
         
         # If we got an empty title, use default
         if not title:
-            return "New Conversation"
+            return "New Conversation", title_token_usage
         
-        return title
+        return title, title_token_usage
         
     except Exception as e:
         logger.error(f"Error generating conversation title: {e}")
-        return "New Conversation"
+        return "New Conversation", title_token_usage
 
 
 async def get_checkpointer():
@@ -428,6 +437,10 @@ async def stream_agent(
     # Track tool calls for summary logging
     tool_calls_summary = []
 
+    # Token usage tracking
+    request_token_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    llm_call_count = 0
+
     # Heartbeat configuration
     last_heartbeat_time = time.time()
     heartbeat_interval = 1.5  # seconds
@@ -472,6 +485,14 @@ async def stream_agent(
                 if node_name == "agent":
                     messages = node_output.get("messages", [])
                     for msg in messages:
+                        # Extract token usage from AIMessage
+                        if hasattr(msg, "usage_metadata") and msg.usage_metadata:
+                            usage = msg.usage_metadata
+                            request_token_usage["input_tokens"] += usage.get("input_tokens", 0)
+                            request_token_usage["output_tokens"] += usage.get("output_tokens", 0)
+                            request_token_usage["total_tokens"] += usage.get("total_tokens", 0)
+                            llm_call_count += 1
+
                         if hasattr(msg, "tool_calls") and msg.tool_calls:
                             # Agent decided to call tools
                             # Reset status flag when new tool calls are made
@@ -522,6 +543,22 @@ async def stream_agent(
                                     "type": "data_changed",
                                     "data": change_data,
                                 }
+        # Emit token usage summary
+        if llm_call_count > 0:
+            logger.info(
+                f"📊 TOKEN USAGE: {request_token_usage['input_tokens']} input "
+                f"+ {request_token_usage['output_tokens']} output "
+                f"= {request_token_usage['total_tokens']} total "
+                f"({llm_call_count} LLM call{'s' if llm_call_count != 1 else ''})"
+            )
+            yield {
+                "type": "token_usage",
+                "data": {
+                    **request_token_usage,
+                    "llm_calls": llm_call_count,
+                },
+            }
+
         # Signal completion
         yield {"type": "done", "data": {}}
         
@@ -559,6 +596,10 @@ async def resume_agent(
     }
     confirmed = confirmation_response.get("confirmed", False)
     logger.info(f"▶️  RESUME: confirmed={confirmed}")
+
+    # Token usage tracking
+    request_token_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    llm_call_count = 0
 
     # Heartbeat configuration
     last_heartbeat_time = time.time()
@@ -621,6 +662,14 @@ async def resume_agent(
                 if node_name == "agent":
                     messages = node_output.get("messages", [])
                     for msg in messages:
+                        # Extract token usage from AIMessage
+                        if hasattr(msg, "usage_metadata") and msg.usage_metadata:
+                            usage = msg.usage_metadata
+                            request_token_usage["input_tokens"] += usage.get("input_tokens", 0)
+                            request_token_usage["output_tokens"] += usage.get("output_tokens", 0)
+                            request_token_usage["total_tokens"] += usage.get("total_tokens", 0)
+                            llm_call_count += 1
+
                         if hasattr(msg, "tool_calls") and msg.tool_calls:
                             has_seen_tool_result = False
                             for tool_call in msg.tool_calls:
@@ -657,6 +706,22 @@ async def resume_agent(
                                     "result": cleaned_result,
                                 },
                             }
+        # Emit token usage summary
+        if llm_call_count > 0:
+            logger.info(
+                f"📊 TOKEN USAGE: {request_token_usage['input_tokens']} input "
+                f"+ {request_token_usage['output_tokens']} output "
+                f"= {request_token_usage['total_tokens']} total "
+                f"({llm_call_count} LLM call{'s' if llm_call_count != 1 else ''})"
+            )
+            yield {
+                "type": "token_usage",
+                "data": {
+                    **request_token_usage,
+                    "llm_calls": llm_call_count,
+                },
+            }
+
         # Signal completion
         yield {"type": "done", "data": {}}
         
