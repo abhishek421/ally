@@ -202,7 +202,7 @@ async def event_generator(
             # For "done" event, generate title AFTER sending done (so input is available immediately)
             if event_type == "done" and first_message and accumulated_response:
                 try:
-                    title = await generate_conversation_title(message, accumulated_response)
+                    title, title_token_usage = await generate_conversation_title(message, accumulated_response)
                     if title:
                         logger.info(f"📝 Generated title: \"{title}\"")
                         yield {
@@ -210,6 +210,21 @@ async def event_generator(
                             "data": json.dumps({
                                 "title": title,
                                 "conversation_id": conversation_id,
+                            }),
+                        }
+                    # Emit title generation token usage separately
+                    if title_token_usage:
+                        logger.info(
+                            f"📊 TITLE TOKEN USAGE: {title_token_usage['input_tokens']} input "
+                            f"+ {title_token_usage['output_tokens']} output "
+                            f"= {title_token_usage['total_tokens']} total"
+                        )
+                        yield {
+                            "event": "token_usage",
+                            "data": json.dumps({
+                                **title_token_usage,
+                                "llm_calls": 1,
+                                "request_type": "title_generation",
                             }),
                         }
                 except Exception as e:
