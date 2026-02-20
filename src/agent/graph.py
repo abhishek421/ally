@@ -15,8 +15,9 @@ import time
 
 from src.config import get_settings
 from src.agent.prompts import get_system_prompt
-from src.tools import get_all_tools
+from src.tools import get_all_tools, get_tools_for_categories
 from src.tools.base import ToolContext, parse_data_change
+from src.agent.intent import classify_intent
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +258,7 @@ def create_agent_for_context(
     context: ToolContext,
     checkpointer=None,
     is_new_conversation: bool = True,
+    tools: list | None = None,
 ):
     """Create a ReAct agent with tools configured for the given context.
 
@@ -264,12 +266,14 @@ def create_agent_for_context(
         context: Tool context with auth and workspace info
         checkpointer: Optional checkpointer for conversation memory
         is_new_conversation: Whether this is the first message (for greeting behavior)
+        tools: Optional pre-selected tools list. If None, all tools are used.
 
     Returns:
         Compiled LangGraph agent
     """
     llm = get_llm()
-    tools = get_all_tools(context)
+    if tools is None:
+        tools = get_all_tools(context)
 
     # Build dynamic system prompt with user context, workspace and group instructions
     system_prompt = get_system_prompt(
@@ -303,21 +307,22 @@ def create_agent_for_context(
     return agent
 
 
-async def create_agent(context: ToolContext, is_new_conversation: bool = True):
+async def create_agent(context: ToolContext, is_new_conversation: bool = True, tools: list | None = None):
     """Create a compiled agent with checkpointer.
     
     Args:
         context: Tool context with auth and workspace info
         is_new_conversation: Whether this is the first message (for greeting behavior)
+        tools: Optional pre-selected tools list. If None, all tools are used.
         
     Returns:
         Compiled LangGraph agent with checkpointer
     """
     checkpointer = await get_checkpointer()
-    return create_agent_for_context(context, checkpointer, is_new_conversation)
+    return create_agent_for_context(context, checkpointer, is_new_conversation, tools)
 
 
-async def get_agent(context: ToolContext, is_new_conversation: bool = True):
+async def get_agent(context: ToolContext, is_new_conversation: bool = True, tools: list | None = None):
     """Create an agent for the given context.
     Note: We don't cache agents because tools are bound to specific
     auth contexts. Each request creates a fresh agent with the correct
@@ -325,10 +330,11 @@ async def get_agent(context: ToolContext, is_new_conversation: bool = True):
     Args:
         context: Tool context with auth and workspace info
         is_new_conversation: Whether this is the first message (for greeting behavior)
+        tools: Optional pre-selected tools list. If None, all tools are used.
     Returns:
         Compiled LangGraph agent
     """
-    return await create_agent(context, is_new_conversation)
+    return await create_agent(context, is_new_conversation, tools)
 
 
 async def invoke_agent(
@@ -418,8 +424,16 @@ async def stream_agent(
     # Check if this is a new conversation (for greeting behavior)
     is_new = await is_first_message(conversation_id)
     
-    # Create agent with appropriate greeting behavior
-    agent = await get_agent(context, is_new_conversation=is_new)
+    # Classify intent and load only relevant tools
+    categories = classify_intent(message)
+    tools = get_tools_for_categories(context, categories)
+    logger.info(
+        f"🎯 Intent: {[c.value for c in categories]} → "
+        f"{len(tools)} tools loaded"
+    )
+    
+    # Create agent with filtered tools
+    agent = await get_agent(context, is_new_conversation=is_new, tools=tools)
     config = {
         "configurable": {
             "thread_id": conversation_id,
