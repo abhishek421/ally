@@ -10,6 +10,7 @@ from src.tools.base import (
     format_company,
     format_person,
     format_group,
+    format_reminder,
     DataChange,
     EntityType,
     ChangeAction,
@@ -1451,6 +1452,139 @@ def get_update_tools(context: ToolContext) -> list:
         finally:
             await client.close()
 
+    @tool
+    async def update_reminder(
+        id: str,
+        title: Optional[str] = None,
+        due_date: Optional[str] = None,
+        timezone: Optional[str] = None,
+        recurring: Optional[str] = None,
+        visibility: Optional[str] = None,
+    ) -> str:
+        """Update an existing reminder.
+        
+        Args:
+            id: ID of the reminder to update (required)
+            title: New title (optional)
+            due_date: New due date in ISO format or natural language (optional)
+            timezone: New timezone (optional)
+            recurring: New recurring pattern (optional)
+            visibility: New visibility setting "PRIVATE", "WORKSPACE", "PUBLIC" (optional)
+            
+        Returns:
+            Confirmation message with updated reminder details
+        """
+        changes = {}
+        if title: changes["title"] = title
+        if due_date: changes["due_date"] = due_date
+        if timezone: changes["timezone"] = timezone
+        if recurring: changes["recurring"] = recurring
+        if visibility: changes["visibility"] = visibility
+        
+        if not changes:
+            return "No updates specified. Please provide at least one field to update."
+            
+        # Request user confirmation
+        confirmation = request_update_confirmation(
+            entity_type="reminder",
+            entity_name=title or id,
+            changes=changes,
+        )
+        
+        if not confirmation.confirmed:
+            feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
+            return f"Reminder update cancelled by user.{feedback}"
+            
+        client = context.get_client()
+        
+        mutation = """
+        mutation UpdateReminder($id: ID!, $input: UpdateReminderInput!, $workspaceId: String!) {
+            updateReminder(id: $id, input: $input, workspaceId: $workspaceId) {
+                id
+                title
+                duedate
+                timezone
+                recurring
+                reminderVisibility
+            }
+        }
+        """
+        
+        input_data = {}
+        if title: input_data["title"] = title
+        if due_date: input_data["duedate"] = due_date
+        if timezone: input_data["timezone"] = timezone
+        if recurring: input_data["recurring"] = recurring
+        if visibility: input_data["reminderVisibility"] = visibility.upper()
+        
+        try:
+            result = await client.mutate(mutation, {
+                "id": id,
+                "input": input_data,
+                "workspaceId": context.workspace_id,
+            })
+            
+            reminder = result.get("updateReminder")
+            
+            if reminder:
+                return f"Successfully updated reminder:\n\n{format_reminder(reminder)}"
+            else:
+                return "Failed to update reminder - no data returned."
+                
+        except Exception as e:
+            logger.error(f"Error updating reminder: {e}")
+            return f"Error updating reminder: {str(e)}"
+        finally:
+            await client.close()
+
+    @tool
+    async def delete_reminder(id: str, title: Optional[str] = None) -> str:
+        """Delete a reminder.
+        
+        Args:
+            id: ID of the reminder to delete (required)
+            title: Title of the reminder (optional, for confirmation UI)
+            
+        Returns:
+            Confirmation message
+        """
+        # Request user confirmation
+        confirmation = request_delete_confirmation(
+            entity_type="reminder",
+            entity_name=title or id,
+        )
+        
+        if not confirmation.confirmed:
+            feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
+            return f"Deletion cancelled by user.{feedback}"
+            
+        client = context.get_client()
+        
+        mutation = """
+        mutation DeleteReminder($id: ID!, $workspaceId: String!) {
+            deleteReminder(id: $id, workspaceId: $workspaceId)
+        }
+        """
+        
+        try:
+            result = await client.mutate(mutation, {
+                "id": id,
+                "workspaceId": context.workspace_id,
+            })
+            
+            success = result.get("deleteReminder")
+            
+            if success:
+                return f"Successfully deleted reminder '{title or id}'."
+            else:
+                return "Failed to delete reminder."
+                
+        except Exception as e:
+            logger.error(f"Error deleting reminder: {e}")
+            return f"Error deleting reminder: {str(e)}"
+        finally:
+            await client.close()
+
     return [
         # Group membership tools
         add_company_to_group,
@@ -1470,5 +1604,8 @@ def get_update_tools(context: ToolContext) -> list:
         # Simplified status update tools
         update_person_status,
         update_company_status,
+        # Reminder tools
+        update_reminder,
+        delete_reminder,
     ]
 
