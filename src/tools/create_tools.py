@@ -56,31 +56,33 @@ def get_create_tools(context: ToolContext) -> list:
         Returns:
             Confirmation message with the created company details
         """
-        # Build draft data for confirmation preview
-        draft_data = {"name": name}
-        if description:
-            draft_data["description"] = description
-        if email:
-            draft_data["email"] = email
-        if phone:
-            draft_data["phone"] = phone
-        if website:
-            draft_data["website"] = website
-        if group_id:
-            draft_data["group_id"] = group_id
-        
+        # Build full API-ready input for draft_data
+        draft_data = {
+            "name": name,
+            "workspaceId": context.workspace_id,
+            "description": description or None,
+            "emails": [{"value": email, "type": "work", "isPrimary": True}] if email else [],
+            "phoneNumbers": [{"value": phone, "type": "work", "isPrimary": True}] if phone else [],
+            "urls": [{"value": website, "label": "Website", "isPrimary": True}] if website else [],
+            "groupId": group_id or None,
+            "userId": context.user_id,
+        }
+
         # Request user confirmation before creating
         confirmation = request_create_confirmation(
             entity_type="company",
             draft_data=draft_data,
         )
-        
+
         if not confirmation.confirmed:
             feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
             return f"Company creation cancelled by user.{feedback}"
-        
+
+        # Use confirmed draft_data (may have been edited by user) as source of truth
+        confirmed_data = confirmation.modified_data if confirmation.modified_data else draft_data
+
         client = context.get_client()
-        
+
         mutation = """
         mutation CreateCompany(
             $input: CreateCompanyInput!
@@ -97,43 +99,46 @@ def get_create_tools(context: ToolContext) -> list:
             }
         }
         """
-        
-        # Build input object
+
+        # Build input from confirmed data
         input_data = {
-            "name": name,
-            "workspaceId": context.workspace_id,
+            "name": confirmed_data["name"],
+            "workspaceId": confirmed_data["workspaceId"],
         }
-        
-        if description:
-            input_data["description"] = description
-        
-        if email:
-            input_data["emails"] = [{"value": email, "type": "work", "isPrimary": True}]
-        
-        if phone:
-            input_data["phoneNumbers"] = [{"value": phone, "type": "work", "isPrimary": True}]
-        
-        if website:
-            input_data["urls"] = [{"value": website, "label": "Website", "isPrimary": True}]
-        
+
+        if confirmed_data.get("description"):
+            input_data["description"] = confirmed_data["description"]
+
+        if confirmed_data.get("emails"):
+            input_data["emails"] = confirmed_data["emails"]
+
+        if confirmed_data.get("phoneNumbers"):
+            input_data["phoneNumbers"] = confirmed_data["phoneNumbers"]
+
+        if confirmed_data.get("urls"):
+            input_data["urls"] = confirmed_data["urls"]
+
+        confirmed_group_id = confirmed_data.get("groupId")
+        confirmed_user_id = confirmed_data.get("userId", context.user_id)
+
         try:
             result = await client.mutate(mutation, {
                 "input": input_data,
-                "userId": context.user_id,
-                "groupId": group_id,
+                "userId": confirmed_user_id,
+                "groupId": confirmed_group_id,
             })
             
             company = result.get("createCompany")
-            
+
             if company:
-                group_msg = f" and added to group" if group_id else ""
+                group_msg = f" and added to group" if confirmed_group_id else ""
                 result = f"Successfully created company{group_msg}:\n\n{format_company(company)}"
                 # Add change metadata for frontend cache invalidation
                 change = DataChange(
                     entity_type=EntityType.COMPANY,
                     action=ChangeAction.CREATED,
                     entity_id=company.get("id"),
-                    group_id=group_id,
+                    group_id=confirmed_group_id,
                 )
                 return result + change.to_marker()
             else:
@@ -172,33 +177,34 @@ def get_create_tools(context: ToolContext) -> list:
         Returns:
             Confirmation message with the created person details
         """
-        # Build draft data for confirmation preview
-        draft_data = {"first_name": first_name}
-        if last_name:
-            draft_data["last_name"] = last_name
-        if job_title:
-            draft_data["job_title"] = job_title
-        if description:
-            draft_data["description"] = description
-        if email:
-            draft_data["email"] = email
-        if phone:
-            draft_data["phone"] = phone
-        if group_id:
-            draft_data["group_id"] = group_id
-        
+        # Build full API-ready input for draft_data
+        draft_data = {
+            "firstName": first_name,
+            "lastName": last_name or None,
+            "jobTitle": job_title or None,
+            "description": description or None,
+            "workspaceId": context.workspace_id,
+            "emails": [{"value": email, "type": "work", "isPrimary": True}] if email else [],
+            "phoneNumbers": [{"value": phone, "type": "mobile", "isPrimary": True}] if phone else [],
+            "groupId": group_id or None,
+            "userId": context.user_id,
+        }
+
         # Request user confirmation before creating
         confirmation = request_create_confirmation(
             entity_type="person",
             draft_data=draft_data,
         )
-        
+
         if not confirmation.confirmed:
             feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
             return f"Person creation cancelled by user.{feedback}"
-        
+
+        # Use confirmed draft_data (may have been edited by user) as source of truth
+        confirmed_data = confirmation.modified_data if confirmation.modified_data else draft_data
+
         client = context.get_client()
-        
+
         mutation = """
         mutation CreatePerson(
             $input: CreatePeopleInput!
@@ -216,46 +222,49 @@ def get_create_tools(context: ToolContext) -> list:
             }
         }
         """
-        
-        # Build input object
+
+        # Build input from confirmed data
         input_data = {
-            "firstName": first_name,
-            "workspaceId": context.workspace_id,
+            "firstName": confirmed_data["firstName"],
+            "workspaceId": confirmed_data["workspaceId"],
         }
-        
-        if last_name:
-            input_data["lastName"] = last_name
-        
-        if job_title:
-            input_data["jobTitle"] = job_title
-        
-        if description:
-            input_data["description"] = description
-        
-        if email:
-            input_data["emails"] = [{"value": email, "type": "work", "isPrimary": True}]
-        
-        if phone:
-            input_data["phoneNumbers"] = [{"value": phone, "type": "mobile", "isPrimary": True}]
-        
+
+        if confirmed_data.get("lastName"):
+            input_data["lastName"] = confirmed_data["lastName"]
+
+        if confirmed_data.get("jobTitle"):
+            input_data["jobTitle"] = confirmed_data["jobTitle"]
+
+        if confirmed_data.get("description"):
+            input_data["description"] = confirmed_data["description"]
+
+        if confirmed_data.get("emails"):
+            input_data["emails"] = confirmed_data["emails"]
+
+        if confirmed_data.get("phoneNumbers"):
+            input_data["phoneNumbers"] = confirmed_data["phoneNumbers"]
+
+        confirmed_group_id = confirmed_data.get("groupId")
+        confirmed_user_id = confirmed_data.get("userId", context.user_id)
+
         try:
             result = await client.mutate(mutation, {
                 "input": input_data,
-                "userId": context.user_id,
-                "groupId": group_id,
+                "userId": confirmed_user_id,
+                "groupId": confirmed_group_id,
             })
             
             person = result.get("createPerson")
-            
+
             if person:
-                group_msg = f" and added to group" if group_id else ""
+                group_msg = f" and added to group" if confirmed_group_id else ""
                 result = f"Successfully created person{group_msg}:\n\n{format_person(person)}"
                 # Add change metadata for frontend cache invalidation
                 change = DataChange(
                     entity_type=EntityType.PERSON,
                     action=ChangeAction.CREATED,
                     entity_id=person.get("id"),
-                    group_id=group_id,
+                    group_id=confirmed_group_id,
                 )
                 return result + change.to_marker()
             else:
@@ -305,28 +314,32 @@ def get_create_tools(context: ToolContext) -> list:
         if group_type.upper() not in valid_types:
             return f"Invalid group type '{group_type}'. Must be one of: {', '.join(valid_types)}"
         
-        # Build draft data for confirmation preview
+        # Build full API-ready input for draft_data
         draft_data = {
             "name": name,
+            "workspaceId": context.workspace_id,
             "type": group_type.upper(),
-            "is_private": is_private,
+            "isPrivate": is_private,
+            "createdBy": context.user_id,
             "emoji": emoji,
+            "description": description or None,
         }
-        if description:
-            draft_data["description"] = description
-        
+
         # Request user confirmation before creating
         confirmation = request_create_confirmation(
             entity_type="group",
             draft_data=draft_data,
         )
-        
+
         if not confirmation.confirmed:
             feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
             return f"Group creation cancelled by user.{feedback}"
-        
+
+        # Use confirmed draft_data (may have been edited by user) as source of truth
+        confirmed_data = confirmation.modified_data if confirmation.modified_data else draft_data
+
         client = context.get_client()
-        
+
         mutation = """
         mutation CreateGroup($input: CreateGroupRequest!) {
             createGroup(input: $input) {
@@ -345,20 +358,20 @@ def get_create_tools(context: ToolContext) -> list:
             }
         }
         """
-        
+
         try:
             input_data = {
-                "name": name,
-                "workspaceId": context.workspace_id,
-                "type": group_type.upper(),
-                "isPrivate": is_private,
-                "createdBy": context.user_id,
-                "emoji": emoji,
+                "name": confirmed_data["name"],
+                "workspaceId": confirmed_data["workspaceId"],
+                "type": confirmed_data["type"],
+                "isPrivate": confirmed_data["isPrivate"],
+                "createdBy": confirmed_data["createdBy"],
+                "emoji": confirmed_data["emoji"],
             }
 
-            if description:
-                input_data["description"] = description
-            
+            if confirmed_data.get("description"):
+                input_data["description"] = confirmed_data["description"]
+
             result = await client.mutate(mutation, {"input": input_data})
             
             # createGroup returns an array of groups, get the first one
