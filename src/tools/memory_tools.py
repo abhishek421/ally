@@ -6,6 +6,7 @@ from typing import Optional
 from langchain_core.tools import tool
 
 from src.tools.base import ToolContext
+from src.tools.context_var import get_tool_context
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +32,8 @@ def format_memory(memory: dict) -> str:
     return "\n".join(lines)
 
 
-def get_memory_tools(context: ToolContext) -> list:
-    """Get all Object Memory tools configured with the given context.
-
-    Args:
-        context: Tool context with auth and workspace info
+def get_memory_tools() -> list:
+    """Get all Object Memory tools.
 
     Returns:
         List of tool functions
@@ -79,6 +77,7 @@ def get_memory_tools(context: ToolContext) -> list:
         if entity_type_upper == "OBJECT" and not object_definition_id:
             return "object_definition_id is required when entity_type is 'OBJECT'."
 
+        context = get_tool_context()
         client = context.get_client()
 
         try:
@@ -148,6 +147,7 @@ def get_memory_tools(context: ToolContext) -> list:
         if entity_type_upper not in ("PERSON", "COMPANY", "OBJECT"):
             return f"Invalid entity type '{entity_type}'. Must be 'PERSON', 'COMPANY', or 'OBJECT'."
 
+        context = get_tool_context()
         client = context.get_client()
 
         try:
