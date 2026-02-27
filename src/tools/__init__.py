@@ -63,7 +63,6 @@ ALWAYS_INCLUDE = {ToolCategory.READ}
 
 
 def get_tools_for_categories(
-    context: ToolContext,
     categories: list[ToolCategory],
 ) -> list:
     """Load only the tools for the specified categories.
@@ -72,7 +71,6 @@ def get_tools_for_categories(
     to whatever categories the intent classifier returns.
 
     Args:
-        context: Tool context with auth and workspace info
         categories: List of ToolCategory values from intent classification
 
     Returns:
@@ -83,7 +81,7 @@ def get_tools_for_categories(
     tools = []
     for category in all_categories:
         getter = TOOL_REGISTRY[category]
-        cat_tools = getter(context)
+        cat_tools = getter()
         tools.extend(cat_tools)
         logger.info(f"   📦 {category.value}: {len(cat_tools)} tools loaded")
 
@@ -94,24 +92,21 @@ def get_tools_for_categories(
     return tools
 
 
-def get_all_tools(context: ToolContext) -> list:
+def get_all_tools() -> list:
     """Get all available tools for the agent.
-
-    Args:
-        context: Tool context with auth and workspace info
 
     Returns:
         List of all tool functions
     """
     tools = []
-    tools.extend(get_read_tools(context))
-    tools.extend(get_create_tools(context))
-    tools.extend(get_update_tools(context))
-    tools.extend(get_research_tools(context))
-    tools.extend(get_context_tools(context))
-    tools.extend(get_reminder_tools(context))
-    tools.extend(get_note_tools(context))
-    tools.extend(get_memory_tools(context))
+    tools.extend(get_read_tools())
+    tools.extend(get_create_tools())
+    tools.extend(get_update_tools())
+    tools.extend(get_research_tools())
+    tools.extend(get_context_tools())
+    tools.extend(get_reminder_tools())
+    tools.extend(get_note_tools())
+    tools.extend(get_memory_tools())
     return tools
 
 

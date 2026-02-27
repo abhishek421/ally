@@ -4,6 +4,7 @@ import logging
 from datetime import datetime as dt
 from langchain_core.tools import tool
 
+from src.tools.context_var import get_tool_context
 from src.tools.base import (
     ToolContext,
     EntityType,
@@ -105,12 +106,9 @@ def format_reminder(reminder: dict) -> str:
     return "\n".join(lines)
 
 
-def get_reminder_tools(context: ToolContext) -> list:
-    """Get all reminder-related tools with the given context.
-    
-    Args:
-        context: Tool context with auth and workspace info
-        
+def get_reminder_tools() -> list:
+    """Get all reminder-related tools.
+
     Returns:
         List of reminder tools
     """
@@ -176,6 +174,7 @@ def get_reminder_tools(context: ToolContext) -> list:
             feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
             return f"Reminder creation cancelled by user.{feedback}"
 
+        context = get_tool_context()
         client = context.get_client()
 
         mutation = """
@@ -254,6 +253,7 @@ def get_reminder_tools(context: ToolContext) -> list:
         Returns:
             Formatted list of reminders
         """
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -323,6 +323,7 @@ def get_reminder_tools(context: ToolContext) -> list:
         Returns:
             Formatted reminder details
         """
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -391,6 +392,7 @@ def get_reminder_tools(context: ToolContext) -> list:
         Returns:
             Confirmation message with the updated reminder details
         """
+        context = get_tool_context()
         client = context.get_client()
         
         # First, get the current reminder to show what will be changed
@@ -518,6 +520,7 @@ def get_reminder_tools(context: ToolContext) -> list:
         Returns:
             Confirmation message
         """
+        context = get_tool_context()
         client = context.get_client()
         
         # First, get the reminder to show what will be deleted

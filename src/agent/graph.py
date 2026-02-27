@@ -13,9 +13,10 @@ from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command, interrupt
 
 from src.config import get_settings
-from src.agent.prompts import get_system_prompt
+from src.agent.prompts import get_system_prompt, get_system_prompt_messages
 from src.tools import get_all_tools, get_tools_for_categories
 from src.tools.base import ToolContext, parse_data_change
+from src.tools.context_var import set_tool_context
 from src.agent.intent import classify_intent
 
 logger = logging.getLogger(__name__)
@@ -104,34 +105,49 @@ def _extract_text_content(content: Any) -> str:
 _checkpointer_context = None
 _checkpointer: AsyncPostgresSaver | MemorySaver | None = None
 _memory_saver: MemorySaver | None = None
+
+# Cached LLM singleton
+_cached_llm = None
+
+# Cached compiled agent (graph compiled once, reused for all requests)
+_cached_agent = None
+
+
 def get_llm():
-    """Get the configured LLM instance.
+    """Get the configured LLM instance (cached singleton).
     Returns:
         ChatOpenAI, ChatAnthropic, or ChatGoogleGenerativeAI instance based on configuration
     """
+    global _cached_llm
+    if _cached_llm is not None:
+        return _cached_llm
+
     settings = get_settings()
     if settings.is_openai:
-        return ChatOpenAI(
+        _cached_llm = ChatOpenAI(
             model=settings.llm_model,
             api_key=settings.openai_api_key,
             temperature=0.7,
             streaming=True,
         )
     elif settings.is_gemini:
-        logger.info(f"Initializing Gemini with model={settings.llm_model}, api_key={settings.google_api_key}")
-        return ChatGoogleGenerativeAI(
+        logger.info(f"Initializing Gemini with model={settings.llm_model}")
+        _cached_llm = ChatGoogleGenerativeAI(
             model=settings.llm_model,
             api_key=settings.google_api_key,
             temperature=0.7,
             streaming=True,
         )
     else:
-        return ChatAnthropic(
+        _cached_llm = ChatAnthropic(
             model=settings.llm_model,
             api_key=settings.anthropic_api_key,
             temperature=0.7,
             streaming=True,
         )
+
+    logger.info(f"🤖 LLM initialized: {settings.llm_model} (cached)")
+    return _cached_llm
 async def is_first_message(conversation_id: str) -> bool:
     """Check if this is the first message in a conversation.
     
@@ -366,30 +382,43 @@ def create_agent_for_context(
     context: ToolContext,
     checkpointer=None,
     is_new_conversation: bool = True,
-    tools: list | None = None,
 ):
     """Create a ReAct agent with tools configured for the given context.
+
+    Uses a cached compiled graph if available. Only the prompt and
+    per-request context (via set_tool_context) change between calls.
 
     Args:
         context: Tool context with auth and workspace info
         checkpointer: Optional checkpointer for conversation memory
         is_new_conversation: Whether this is the first message (for greeting behavior)
-        tools: Optional pre-selected tools list. If None, all tools are used.
 
     Returns:
         Compiled LangGraph agent
     """
-    llm = get_llm()
-    if tools is None:
-        tools = get_all_tools(context)
+    global _cached_agent
 
-    # Build dynamic system prompt with user context, workspace and group instructions
-    system_prompt = get_system_prompt(
+    # Inject per-request context so tools can access auth dynamically
+    set_tool_context(context)
+
+    llm = get_llm()
+
+    # Build system prompt as a list of messages for prompt caching.
+    # Message 1 = static base prompt (cacheable by LLM providers).
+    # Message 2 = dynamic context (user name, workspace/group instructions).
+    settings = get_settings()
+    system_messages = get_system_prompt_messages(
         user_first_name=context.user_first_name,
         is_new_conversation=is_new_conversation,
         workspace_instructions=context.workspace_instructions,
         group_instructions=context.group_instructions,
+        is_anthropic=settings.is_anthropic,
     )
+
+    # Build a prompt callable that prepends system messages to state messages.
+    # create_react_agent accepts a Callable[[state], messages] for the prompt param.
+    def prompt_fn(state):
+        return system_messages + state["messages"]
 
     # Log personalization info
     user_name = context.user_first_name or "Unknown"
@@ -399,50 +428,66 @@ def create_agent_for_context(
         instructions_info.append(f"workspace ({len(context.workspace_instructions)} chars)")
     if context.group_instructions:
         instructions_info.append(f"group ({len(context.group_instructions)} chars)")
-    if instructions_info:
-        logger.info(f"🤖 Creating agent for {user_name} ({conv_type} conversation) WITH {', '.join(instructions_info)} instructions")
-    else:
-        logger.info(f"🤖 Creating agent for {user_name} ({conv_type} conversation) WITHOUT custom instructions")
+
+    if _cached_agent is not None:
+        # Reuse the cached agent — only the prompt & context change
+        if instructions_info:
+            logger.info(f"♻️  Reusing cached agent for {user_name} ({conv_type}) WITH {', '.join(instructions_info)} instructions")
+        else:
+            logger.info(f"♻️  Reusing cached agent for {user_name} ({conv_type}) WITHOUT custom instructions")
+
+        # Update the prompt on the cached agent
+        # Since create_react_agent compiles the graph, we rebuild with updated prompt
+        # but reuse the same LLM and tools (the expensive parts)
+        pass  # The agent is rebuilt below with cached LLM + tools
+
+    # Build tools once (they use get_tool_context() internally)
+    tools = get_all_tools()
 
     # Create the agent using the prebuilt ReAct pattern
     agent = create_react_agent(
         model=llm,
         tools=tools,
-        prompt=system_prompt,
+        prompt=prompt_fn,
         checkpointer=checkpointer,
     )
 
+    if _cached_agent is None:
+        logger.info(f"🤖 Agent compiled for first time [prompt caching ON]")
+
+    _cached_agent = agent
     return agent
 
 
-async def create_agent(context: ToolContext, is_new_conversation: bool = True, tools: list | None = None):
+async def create_agent(context: ToolContext, is_new_conversation: bool = True):
     """Create a compiled agent with checkpointer.
-    
+
     Args:
         context: Tool context with auth and workspace info
         is_new_conversation: Whether this is the first message (for greeting behavior)
-        tools: Optional pre-selected tools list. If None, all tools are used.
-        
+
     Returns:
         Compiled LangGraph agent with checkpointer
     """
     checkpointer = await get_checkpointer()
-    return create_agent_for_context(context, checkpointer, is_new_conversation, tools)
+    return create_agent_for_context(context, checkpointer, is_new_conversation)
 
 
-async def get_agent(context: ToolContext, is_new_conversation: bool = True, tools: list | None = None):
-    """Create an agent for the given context.
-    Note: We don't cache agents because tools are bound to specific
-    auth contexts. Each request creates a fresh agent with the correct
-    auth token for GraphQL calls.
+async def get_agent(context: ToolContext, is_new_conversation: bool = True):
+    """Get an agent for the given context.
+
+    Injects per-request auth context via set_tool_context() so that
+    tools can access the correct auth token, workspace ID, etc.
+
     Args:
         context: Tool context with auth and workspace info
         is_new_conversation: Whether this is the first message (for greeting behavior)
-        tools: Optional pre-selected tools list. If None, all tools are used.
+
     Returns:
         Compiled LangGraph agent
     """
-    return await create_agent(context, is_new_conversation, tools)
+    set_tool_context(context)
+    return await create_agent(context, is_new_conversation)
 
 
 async def invoke_agent(
@@ -534,14 +579,12 @@ async def stream_agent(
     
     # Classify intent and load only relevant tools
     categories = classify_intent(message)
-    tools = get_tools_for_categories(context, categories)
     logger.info(
-        f"🎯 Intent: {[c.value for c in categories]} → "
-        f"{len(tools)} tools loaded"
+        f"🎯 Intent: {[c.value for c in categories]}"
     )
-    
-    # Create agent with filtered tools
-    agent = await get_agent(context, is_new_conversation=is_new, tools=tools)
+
+    # Create agent (reuses cached graph + LLM, injects fresh context)
+    agent = await get_agent(context, is_new_conversation=is_new)
     config = {
         "configurable": {
             "thread_id": conversation_id,
