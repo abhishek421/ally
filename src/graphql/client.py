@@ -13,11 +13,17 @@ logger = logging.getLogger(__name__)
 
 
 class GraphQLClient:
-    """Async GraphQL client for the backend API."""
+    """Async GraphQL client for the backend API.
+
+    Uses a persistent HTTP session to avoid creating a new TCP connection
+    for every query.  Call ``connect()`` once (or let ``execute()``
+    auto-connect), then reuse for as many queries as needed.  Call
+    ``disconnect()`` (or the backward-compatible ``close()``) when done.
+    """
 
     def __init__(self, auth_token: str, workspace_id: str, session_id: str = ""):
         """Initialize the GraphQL client.
-        
+
         Args:
             auth_token: JWT token for authentication
             workspace_id: Current workspace ID
@@ -28,27 +34,63 @@ class GraphQLClient:
         self.session_id = session_id
         self.settings = get_settings()
         self._client: Client | None = None
+        self._session = None  # persistent session handle
 
-    async def _get_client(self) -> Client:
-        """Get or create the GQL client."""
-        if self._client is None:
-            headers = {
-                "Authorization": f"Bearer {self.auth_token}",
-                "Content-Type": "application/json",
-            }
-            # Include session ID if available (required by backend SessionGuard)
-            if self.session_id:
-                headers["x-session-id"] = self.session_id
-            
-            transport = HTTPXAsyncTransport(
-                url=self.settings.backend_graphql_url,
-                headers=headers,
-            )
-            self._client = Client(
-                transport=transport,
-                fetch_schema_from_transport=False,
-            )
-        return self._client
+    # ------------------------------------------------------------------
+    # Connection lifecycle
+    # ------------------------------------------------------------------
+
+    async def connect(self) -> None:
+        """Open a persistent GQL session (reusable across queries).
+
+        Safe to call multiple times — only opens if not already connected.
+        """
+        if self._session is not None:
+            return  # already connected
+
+        headers = {
+            "Authorization": f"Bearer {self.auth_token}",
+            "Content-Type": "application/json",
+        }
+        if self.session_id:
+            headers["x-session-id"] = self.session_id
+
+        transport = HTTPXAsyncTransport(
+            url=self.settings.backend_graphql_url,
+            headers=headers,
+            timeout=httpx.Timeout(
+                connect=self.settings.graphql_connect_timeout,
+                read=self.settings.graphql_request_timeout,
+                write=self.settings.graphql_request_timeout,
+                pool=self.settings.graphql_connect_timeout,
+            ),
+        )
+        self._client = Client(
+            transport=transport,
+            fetch_schema_from_transport=False,
+        )
+        # Enter the async context manager once — keeps the underlying
+        # httpx.AsyncClient (and its TCP connection pool) alive.
+        self._session = await self._client.__aenter__()
+
+    async def disconnect(self) -> None:
+        """Close the persistent session and release resources."""
+        if self._client is not None:
+            try:
+                await self._client.__aexit__(None, None, None)
+            except Exception:
+                pass  # best-effort cleanup
+            finally:
+                self._session = None
+                self._client = None
+
+    async def close(self) -> None:
+        """Alias for ``disconnect()`` — kept for backward compatibility."""
+        await self.disconnect()
+
+    # ------------------------------------------------------------------
+    # Query execution
+    # ------------------------------------------------------------------
 
     async def execute(
         self,
@@ -56,26 +98,29 @@ class GraphQLClient:
         variables: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Execute a GraphQL query or mutation.
-        
+
+        Auto-connects if the session has not been opened yet.
+
         Args:
             query: GraphQL query string
             variables: Query variables
-            
+
         Returns:
             Query result data
-            
+
         Raises:
             Exception: If the query fails
         """
-        client = await self._get_client()
-        
+        # Auto-connect on first use
+        if self._session is None:
+            await self.connect()
+
         try:
-            async with client as session:
-                result = await session.execute(
-                    gql(query),
-                    variable_values=variables,
-                )
-                return result
+            result = await self._session.execute(
+                gql(query),
+                variable_values=variables,
+            )
+            return result
         except Exception as e:
             logger.error(f"GraphQL query failed: {e}")
             raise
@@ -86,7 +131,7 @@ class GraphQLClient:
         variables: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Execute a GraphQL query.
-        
+
         Alias for execute() for semantic clarity.
         """
         return await self.execute(query, variables)
@@ -97,16 +142,20 @@ class GraphQLClient:
         variables: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Execute a GraphQL mutation.
-        
+
         Alias for execute() for semantic clarity.
         """
         return await self.execute(mutation, variables)
 
+    # ------------------------------------------------------------------
+    # Convenience helpers
+    # ------------------------------------------------------------------
+
     async def get_current_user_id(self) -> str | None:
         """Get the current user's database ID from the backend.
-        
+
         This resolves the Cognito sub to the actual database user ID.
-        
+
         Returns:
             The user's database ID or None if not found
         """
@@ -117,7 +166,7 @@ class GraphQLClient:
             }
         }
         """
-        
+
         try:
             result = await self.execute(query)
             user = result.get("currentLoggedInUser")
@@ -130,10 +179,10 @@ class GraphQLClient:
 
     async def get_current_user_profile(self) -> dict | None:
         """Get the current user's profile from the backend.
-        
+
         Returns user info including first name, last name, and email
         for personalization purposes.
-        
+
         Returns:
             Dict with user profile or None if not found
             {
@@ -153,7 +202,7 @@ class GraphQLClient:
             }
         }
         """
-        
+
         try:
             result = await self.execute(query)
             user = result.get("currentLoggedInUser")
@@ -229,23 +278,16 @@ class GraphQLClient:
             logger.warning(f"📡 Failed to get group custom instructions: {e}")
             return None
 
-    async def close(self):
-        """Close the client connection."""
-        if self._client is not None:
-            await self._client.close_async()
-            self._client = None
-
 
 def get_graphql_client(auth_token: str, workspace_id: str, session_id: str = "") -> GraphQLClient:
     """Factory function to create a GraphQL client.
-    
+
     Args:
         auth_token: JWT token for authentication
         workspace_id: Current workspace ID
         session_id: Session ID for backend session validation
-        
+
     Returns:
         Configured GraphQL client
     """
     return GraphQLClient(auth_token, workspace_id, session_id)
-

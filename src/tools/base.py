@@ -2,7 +2,7 @@
 
 import json
 import logging
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from enum import Enum
 from typing import Any, Optional
 
@@ -246,10 +246,23 @@ class ToolContext:
     user_email: Optional[str] = None  # User's email for context
     workspace_instructions: Optional[str] = None  # Custom instructions for the workspace
     group_instructions: Optional[str] = None  # Custom instructions for the active group
+    _client: Optional[GraphQLClient] = field(default=None, init=False, repr=False)
 
     def get_client(self) -> GraphQLClient:
-        """Get a GraphQL client with the current context."""
-        return GraphQLClient(self.auth_token, self.workspace_id, self.session_id)
+        """Get a cached GraphQL client for this request context.
+
+        Returns the same client instance on repeated calls so all tool
+        invocations within a single request share one HTTP connection.
+        """
+        if self._client is None:
+            self._client = GraphQLClient(self.auth_token, self.workspace_id, self.session_id)
+        return self._client
+
+    async def close_client(self) -> None:
+        """Close the cached GraphQL client and release its connection."""
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
 
 
 class BaseTool:
