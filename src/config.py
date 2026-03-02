@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     aws_cognito_user_pool_id: str = ""
     aws_cognito_client_id: str = ""
 
+    # GraphQL Client Configuration
+    graphql_connect_timeout: float = 10.0   # seconds to establish TCP connection
+    graphql_request_timeout: float = 30.0   # seconds per query/mutation
+
     # Token / Context Configuration
     default_context_window: int = 128000
     context_warning_threshold: float = 0.7   # 70% — emit warning
