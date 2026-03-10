@@ -738,36 +738,22 @@ def get_update_tools() -> list:
         group_name: Optional[str] = None,
         new_value_color: Optional[str] = None,
     ) -> str:
-        """Update a company's column value within a group.
+        """Update a company's column value (e.g. Status, Priority) within a group.
         
-        This tool will ask for user confirmation before applying the update,
-        showing a preview of the change (old value → new value).
-        
-        Use this tool to update group-specific fields like Status, Priority, etc.
-        For SELECT/MULTISELECT columns, use select_option_id.
-        For TEXT/NUMBER columns, use value.
-        
-        Example: "Move company Acme Corp to Followup status in Leads group" would require:
-        1. First resolve the company name to get company_id
-        2. Resolve the group name to get group_id  
-        3. Get group columns to find the Status column_id
-        4. Get column options to find the Followup option's select_option_id
-        5. Call this tool with all the IDs AND the display names for confirmation
+        Requires finding entity/group IDs and column/option IDs first.
+        Use select_option_id for dropdowns, value for text/numbers.
         
         Args:
-            company_id: ID of the company to update (required)
-            group_id: ID of the group context for the update (required)
-            column_id: ID of the column to update (required)
-            company_name: Display name of the company (required for confirmation UI)
-            column_name: Display name of the column, e.g. "Status" (required for confirmation UI)
-            new_value_label: Display label of the new value, e.g. "Lead" (required for confirmation UI)
-            value: New value for TEXT/NUMBER columns (optional)
-            select_option_id: ID of the select option for SELECT/MULTISELECT columns (optional)
-            group_name: Display name of the group (optional, for confirmation UI)
-            new_value_color: Color of new value badge (optional)
-            
-        Returns:
-            Confirmation message
+            company_id: ID of the company
+            group_id: ID of the group
+            column_id: ID of the column
+            company_name: Display name (for confirmation)
+            column_name: Column name (for confirmation)
+            new_value_label: New label (for confirmation)
+            value: Optional value for text columns
+            select_option_id: Optional ID for select columns
+            group_name: Optional group name
+            new_value_color: Optional color
         """
         if not value and not select_option_id:
             return "Please provide either 'value' (for TEXT/NUMBER columns) or 'select_option_id' (for SELECT/MULTISELECT columns)."

@@ -2,7 +2,7 @@
 
 Classifies user messages into tool categories using keyword/pattern matching.
 This allows the agent to load only relevant tools for each request,
-reducing token usage by 45-55%.
+reducing token usage significantly.
 
 See: DYNAMIC_TOOL_SELECTION_PLAN.md for full design rationale.
 """
@@ -14,9 +14,53 @@ from src.tools import ToolCategory
 logger = logging.getLogger(__name__)
 
 
-# Keyword patterns mapped to tool categories
-# READ is not listed here because it's always included via ALWAYS_INCLUDE
+# Keyword patterns mapped to tool categories.
+# CORE is always loaded via ALWAYS_INCLUDE — not matched here.
 INTENT_PATTERNS: dict[ToolCategory, list[str]] = {
+    ToolCategory.SEARCH: [
+        r"\bfind\b",
+        r"\bsearch\b",
+        r"\blist\b",
+        r"\bshow\s+me\b",
+        r"\bwho\s+is\b",
+        r"\bwhere\s+is\b",
+        r"\bwhat\s+groups\b",
+        r"\bwhat\s+companies\b",
+        r"\bwhat\s+people\b",
+        r"\blookup\b",
+        r"\blook\s*up\b",
+    ],
+    ToolCategory.DETAILS: [
+        r"\bdetails\b",
+        r"\bfull\s+info\b",
+        r"\bprofile\b",
+        r"\beverything\s+about\b",
+        r"\bhistory\b",
+    ],
+    ToolCategory.PIPELINE: [
+        r"\bstatus\b",
+        r"\bpipeline\b",
+        r"\bstage\b",
+        r"\bcolumn\b",
+        r"\bcolumns\b",
+        r"\bkanban\b",
+        r"\bboard\b",
+        r"\bfilter\s+by\s+status\b",
+        r"\bwhat\s+(?:are|is)\s+(?:the\s+)?status",
+    ],
+    ToolCategory.EMAIL: [
+        r"\bemail\b",
+        r"\bemails\b",
+        r"\bmail\b",
+        r"\bdraft\b",
+        r"\bsend\b",
+        r"\btemplate\b",
+        r"\btemplates\b",
+        r"\bthread\b",
+        r"\binteractions\b",
+        r"\breply\b",
+        r"\bcompose\b",
+    ],
     ToolCategory.CREATE: [
         r"\bcreate\b",
         r"\badd\s+(?:a\s+)?(?:new\s+)?(?:company|person|contact|group|view)\b",
@@ -36,7 +80,7 @@ INTENT_PATTERNS: dict[ToolCategory, list[str]] = {
         r"\bset\s+(?:status|stage|priority)\b",
         r"\bassign\b",
         r"\bunlink\b",
-        r"\badd\s+(?:to\s+group|to\s+company)\b",
+        r"\badd\s+(?:\w+\s+)?(?:to\s+group|to\s+company)\b",
     ],
     ToolCategory.NOTES: [
         r"\bnote\b",
@@ -68,17 +112,22 @@ INTENT_PATTERNS: dict[ToolCategory, list[str]] = {
         r"\bguidelines?\b",
         r"\bworkspace\s+(?:rules|settings)\b",
     ],
+    ToolCategory.MEMORY: [
+        r"\bremember\b",
+        r"\bpreference\b",
+        r"\bpreferences\b",
+        r"\brecall\b",
+        r"\bwhat\s+do\s+(?:you|I)\s+know\s+about\b",
+    ],
 }
 
 
 def classify_intent(message: str) -> list[ToolCategory]:
     """Classify user message into tool categories using keyword matching.
 
-    Returns list of matched categories. Falls back to [READ] if no
-    specific intent is detected (user is probably asking a question).
-
-    Note: READ is always included via ALWAYS_INCLUDE in the tool registry,
-    so it doesn't need to be matched here.
+    Returns list of matched categories. Returns empty list if no
+    specific intent is detected (greetings, casual chat) — the
+    ALWAYS_INCLUDE set (CORE + CONTEXT) handles those.
 
     Args:
         message: The user's message text
@@ -87,16 +136,20 @@ def classify_intent(message: str) -> list[ToolCategory]:
         List of matched ToolCategory values
     """
     message_lower = message.lower().strip()
+    logger.info(f"🔍 Classifying intent for: '{message_lower}'")
     matched = set()
 
     for category, patterns in INTENT_PATTERNS.items():
         for pattern in patterns:
             if re.search(pattern, message_lower):
+                logger.debug(f"   ✅ Matched {category.value} via pattern: {pattern}")
                 matched.add(category)
                 break
 
-    # Fallback: if nothing matched, it's likely a read/general query
-    if not matched:
-        return [ToolCategory.READ]
+    if matched:
+        logger.info(f"   🎯 Result: {[c.value for c in matched]}")
+    else:
+        logger.info("   🎯 Result: [] (casual/greeting — CORE only)")
 
     return list(matched)
+

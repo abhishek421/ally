@@ -106,8 +106,9 @@ _checkpointer_context = None
 _checkpointer: AsyncPostgresSaver | MemorySaver | None = None
 _memory_saver: MemorySaver | None = None
 
-# Cached LLM singleton
+# Cached LLM singletons
 _cached_llm = None
+_cached_mini_llm = None
 
 # Cached compiled agent (graph compiled once, reused for all requests)
 _cached_agent = None
@@ -148,6 +149,47 @@ openai_api_key="REDACTED"
 
     logger.info(f"🤖 LLM initialized: {settings.llm_model} (cached)")
     return _cached_llm
+
+
+def get_mini_llm():
+    """Get a faster, cheaper model for background tasks (cached singleton).
+    
+    Uses gpt-4o-mini for OpenAI, claude-3-haiku for Anthropic, or gemini-1.5-flash.
+    """
+    global _cached_mini_llm
+    if _cached_mini_llm is not None:
+        return _cached_mini_llm
+
+    settings = get_settings()
+    
+    # Determine the mini model based on current provider
+    if settings.is_openai:
+        mini_model = "gpt-4o-mini"
+        _cached_mini_llm = ChatOpenAI(
+            model=mini_model,
+openai_api_key="REDACTED"
+            temperature=0,  # More deterministic for tasks like titles
+            streaming=False,
+        )
+    elif settings.is_gemini:
+        mini_model = "gemini-1.5-flash"
+        _cached_mini_llm = ChatGoogleGenerativeAI(
+            model=mini_model,
+            api_key=settings.google_api_key,
+            temperature=0,
+            streaming=False,
+        )
+    else:
+        mini_model = "claude-3-haiku-20240307"
+        _cached_mini_llm = ChatAnthropic(
+            model=mini_model,
+            api_key=settings.anthropic_api_key,
+            temperature=0,
+            streaming=False,
+        )
+
+    logger.info(f"⚡ Mini LLM initialized: {mini_model} (cached)")
+    return _cached_mini_llm
 async def is_first_message(conversation_id: str) -> bool:
     """Check if this is the first message in a conversation.
     
@@ -199,12 +241,10 @@ async def generate_conversation_title(user_query: str, assistant_response: str) 
     """
     title_token_usage = None
     try:
-        llm = get_llm()
-        
         # Truncate long messages to avoid token waste
         query_truncated = user_query[:500] if len(user_query) > 500 else user_query
         response_truncated = assistant_response[:500] if len(assistant_response) > 500 else assistant_response
-        
+
         title_prompt = f"""Generate a short, descriptive title (2-6 words) for this conversation.
 
 The title should capture the main topic or intent.
@@ -231,7 +271,8 @@ Rules:
 
 Title:"""
         
-        # Use invoke for a single quick response (non-streaming for speed)
+        # Use mini LLM for single quick response (non-streaming for speed)
+        llm = get_mini_llm()
         response = await llm.ainvoke(title_prompt)
         
         # Extract token usage from title generation
@@ -382,6 +423,7 @@ def create_agent_for_context(
     context: ToolContext,
     checkpointer=None,
     is_new_conversation: bool = True,
+    categories: Optional[List[Any]] = None,
 ):
     """Create a ReAct agent with tools configured for the given context.
 
@@ -392,16 +434,28 @@ def create_agent_for_context(
         context: Tool context with auth and workspace info
         checkpointer: Optional checkpointer for conversation memory
         is_new_conversation: Whether this is the first message (for greeting behavior)
-
-    Returns:
-        Compiled LangGraph agent
+        categories: Intent categories for dynamic tool selection
     """
     global _cached_agent
 
     # Inject per-request context so tools can access auth dynamically
     set_tool_context(context)
 
-    llm = get_llm()
+    # Select LLM based on query complexity.
+    # Simple queries (listing, lookups, greetings) use mini model (15x cheaper, ~50% faster).
+    # Complex queries (create, update, research, etc.) use full model.
+    use_mini = False
+    if categories is not None:
+        from src.tools import SIMPLE_CATEGORIES
+        if all(c in SIMPLE_CATEGORIES for c in categories) if categories else True:
+            use_mini = True
+
+    if use_mini:
+        llm = get_mini_llm()
+        logger.info("⚡ Using mini model for simple query")
+    else:
+        llm = get_llm()
+        logger.info("🤖 Using full model for complex query")
 
     # Build system prompt as a list of messages for prompt caching.
     # Message 1 = static base prompt (cacheable by LLM providers).
@@ -430,19 +484,19 @@ def create_agent_for_context(
         instructions_info.append(f"group ({len(context.group_instructions)} chars)")
 
     if _cached_agent is not None:
-        # Reuse the cached agent — only the prompt & context change
         if instructions_info:
             logger.info(f"♻️  Reusing cached agent for {user_name} ({conv_type}) WITH {', '.join(instructions_info)} instructions")
         else:
             logger.info(f"♻️  Reusing cached agent for {user_name} ({conv_type}) WITHOUT custom instructions")
 
-        # Update the prompt on the cached agent
-        # Since create_react_agent compiles the graph, we rebuild with updated prompt
-        # but reuse the same LLM and tools (the expensive parts)
-        pass  # The agent is rebuilt below with cached LLM + tools
+        # The agent is rebuilt below with cached LLM + tools
+        pass
 
-    # Build tools once (they use get_tool_context() internally)
-    tools = get_all_tools()
+    # Build tools dynamically based on inferred user intent
+    if categories:
+        tools = get_tools_for_categories(categories)
+    else:
+        tools = get_all_tools()
 
     # Create the agent using the prebuilt ReAct pattern
     agent = create_react_agent(
@@ -459,21 +513,30 @@ def create_agent_for_context(
     return agent
 
 
-async def create_agent(context: ToolContext, is_new_conversation: bool = True):
+async def create_agent(
+    context: ToolContext, 
+    is_new_conversation: bool = True,
+    categories: Optional[List[Any]] = None,
+):
     """Create a compiled agent with checkpointer.
 
     Args:
         context: Tool context with auth and workspace info
         is_new_conversation: Whether this is the first message (for greeting behavior)
+        categories: Intent categories for dynamic tool selection
 
     Returns:
         Compiled LangGraph agent with checkpointer
     """
     checkpointer = await get_checkpointer()
-    return create_agent_for_context(context, checkpointer, is_new_conversation)
+    return create_agent_for_context(context, checkpointer, is_new_conversation, categories)
 
 
-async def get_agent(context: ToolContext, is_new_conversation: bool = True):
+async def get_agent(
+    context: ToolContext, 
+    is_new_conversation: bool = True,
+    categories: Optional[List[Any]] = None,
+):
     """Get an agent for the given context.
 
     Injects per-request auth context via set_tool_context() so that
@@ -482,12 +545,13 @@ async def get_agent(context: ToolContext, is_new_conversation: bool = True):
     Args:
         context: Tool context with auth and workspace info
         is_new_conversation: Whether this is the first message (for greeting behavior)
+        categories: Intent categories for dynamic tool selection
 
     Returns:
         Compiled LangGraph agent
     """
     set_tool_context(context)
-    return await create_agent(context, is_new_conversation)
+    return await create_agent(context, is_new_conversation, categories)
 
 
 async def invoke_agent(
@@ -584,7 +648,7 @@ async def stream_agent(
     )
 
     # Create agent (reuses cached graph + LLM, injects fresh context)
-    agent = await get_agent(context, is_new_conversation=is_new)
+    agent = await get_agent(context, is_new_conversation=is_new, categories=categories)
     config = {
         "configurable": {
             "thread_id": conversation_id,

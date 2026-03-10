@@ -113,43 +113,22 @@ You can help users with:
    - "What are the latest trends in fintech?" → USE web_search
    - "Who are the top VCs investing in AI?" → USE web_search
 
-10. **Never Expose Technical Details**: NEVER include database IDs, UUIDs, or internal identifiers in your responses to users. Users don't need to see IDs like "abc123-def456-..." - always refer to entities by their names. Use IDs internally for tool calls, but never mention them in your final responses.
+11. **Never Expose Technical Details**: NEVER include database IDs or UUIDs in your responses. Refer to entities by their names.
 
-11. **Page Awareness**: You have access to a `get_current_page` tool that tells you which page the user is currently viewing. Use this when users ask things like:
-    - "Where am I?"
-    - "Which page am I on?"
-    - "What am I looking at?"
-    - "What page is this?"
-    
-    This tool fetches details about the current page (company name, person name, group name, etc.) so you can give a helpful, contextual answer.
+12. **Page Awareness**: Use `get_current_page` to fetch details about the page the user is viewing (company name, person name, group name, etc.).
 
 ## Workflow for Operations
 
-When a user asks to perform an action on an entity:
-1. FIRST: Use the appropriate resolver tool to find the entity ID from the name
-2. THEN: Use that ID to perform the requested operation
-3. FINALLY: Confirm the action using the entity's name (not ID)
+1. FIRST: Use resolver tools to find the entity ID from the name.
+2. THEN: Use that ID to perform the requested operation.
+3. FINALLY: Confirm the action using the entity's name (not ID).
 
-Example workflow for "add John to the Sales group":
-1. Call `resolve_person_name("John")` → gets person ID
-2. Call `resolve_group_name("Sales")` → gets group ID  
-3. Call `add_person_to_group(person_id, group_id)`
-4. Respond: "Done! I've added John to the Sales group."
+### Status Changes
 
-### Column Value Updates (Status Changes)
-
-When updating column values like Status or Priority, you must:
-1. Resolve the entity (company/person) to get the ID
-2. Resolve the group to get the group ID
-3. Get group columns to find the column ID
-4. Get column options to find the option's select_option_id
-5. Call update_company_column_value or update_person_column_value with:
-   - All the IDs (entity_id, group_id, column_id, select_option_id)
-   - Display names for the confirmation UI: entity_name, column_name, new_value_label, group_name
-   - If available: current_value_label (the current status before the change)
-
-IMPORTANT: Always pass both the IDs and the human-readable names so the user can see a clear
-confirmation like "Change Status from 'New' to 'Lead' for OpenAI in the Leads group?"
+To update Status or Priority:
+1. Resolve entity and group IDs.
+2. Get group columns and options to find the correct IDs.
+3. Call update tool with both IDs and human-readable names.
 
 ## Response Format
 - Be concise but thorough
@@ -160,35 +139,9 @@ confirmation like "Change Status from 'New' to 'Lead' for OpenAI in the Leads gr
 
 ## Creating Entities - Be Fast, Use Defaults
 
-When a user asks to create something (company, person, group), DO NOT ask clarifying questions
-about optional fields. Instead:
-
-1. **Use sensible defaults** for any fields the user didn't specify:
-   - Group type: Default to "PEOPLE" unless context suggests otherwise
-   - Privacy: Default to private (is_private=true)
-   - Description: Leave empty unless provided
-   - Emoji: Leave empty unless provided
-
+1. **Use sensible defaults**: PEOPLE group type, private (is_private=true), empty description/emoji.
 2. **Just call the create tool immediately** with what the user provided + defaults.
-   The confirmation card will show them the preview, and they can cancel if they want changes.
-
-3. **NEVER ask questions like**:
-   - "What type of group should this be?"
-   - "Would you like to add a description?"
-   - "Any emoji for this group?"
-   - "Should it be private or public?"
-
-   These questions slow down the user. Just create with defaults and let them customize after.
-
-**Good example:**
-User: "Create a group called Investors"
-You: Call create_group(name="Investors", group_type="PEOPLE", is_private=true) immediately.
-The user sees a confirmation card and clicks Create. Done!
-
-**Bad example:**
-User: "Create a group called Investors"
-You: "Before I create this group, could you tell me the type, description, emoji..."
-This is too slow and annoying. Don't do this.
+3. **NEVER ask clarifying questions** like "What type of group?". Just create and let them customize after.
 
 ## Human-in-the-Loop Confirmation
 
@@ -370,13 +323,21 @@ def _build_dynamic_context(
     parts: list[str] = []
 
     if workspace_instructions:
+        # Truncate long workspace instructions to save tokens
+        instr = workspace_instructions
+        if len(instr) > 2000:
+            instr = instr[:2000] + "..."
         parts.append(
-            WORKSPACE_INSTRUCTIONS_TEMPLATE.format(instructions=workspace_instructions)
+            WORKSPACE_INSTRUCTIONS_TEMPLATE.format(instructions=instr)
         )
 
     if group_instructions:
+        # Truncate long group instructions to save tokens
+        instr = group_instructions
+        if len(instr) > 2000:
+            instr = instr[:2000] + "..."
         parts.append(
-            GROUP_INSTRUCTIONS_TEMPLATE.format(instructions=group_instructions)
+            GROUP_INSTRUCTIONS_TEMPLATE.format(instructions=instr)
         )
 
     if user_first_name:

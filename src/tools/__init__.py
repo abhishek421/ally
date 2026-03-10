@@ -9,7 +9,14 @@ from enum import Enum
 from typing import Callable
 
 from src.tools.base import BaseTool, ToolContext
-from src.tools.read_tools import get_read_tools
+from src.tools.read_tools import (
+    get_read_tools,
+    get_core_tools,
+    get_search_tools,
+    get_details_tools,
+    get_pipeline_tools,
+    get_email_tools,
+)
 from src.tools.create_tools import get_create_tools
 from src.tools.update_tools import get_update_tools
 from src.tools.research_tools import get_research_tools
@@ -36,30 +43,47 @@ logger = logging.getLogger(__name__)
 # Tool Category Registry
 # ---------------------------------------------------------------------------
 
-class ToolCategory(str, Enum):
-    """Categories for grouping tools by user intent."""
-    READ = "read"
-    CREATE = "create"
-    UPDATE = "update"
-    RESEARCH = "research"
-    CONTEXT = "context"
-    NOTES = "notes"
-    REMINDERS = "reminders"
+class ToolCategory(Enum):
+    """Categories of tools for intent classification."""
+    READ = "read"           # All read tools combined (fallback)
+    CORE = "core"           # Resolvers + composite lookups (always loaded)
+    SEARCH = "search"       # Entity listing and searching
+    DETAILS = "details"     # Full entity detail fetches
+    PIPELINE = "pipeline"   # Pipeline status, columns, column options
+    EMAIL = "email"         # Email interactions, templates, drafting
+    CREATE = "create"       # Entity creation
+    UPDATE = "update"       # Entity updates, deletes
+    RESEARCH = "research"   # Web search via Perplexity
+    CONTEXT = "context"     # Workspace/entity instructions
+    REMINDERS = "reminders" # Reminder CRUD
+    NOTES = "notes"         # Note CRUD
+    MEMORY = "memory"       # Long-term entity memory
 
 
 # Registry mapping categories to their tool getter functions
 TOOL_REGISTRY: dict[ToolCategory, Callable] = {
     ToolCategory.READ: get_read_tools,
+    ToolCategory.CORE: get_core_tools,
+    ToolCategory.SEARCH: get_search_tools,
+    ToolCategory.DETAILS: get_details_tools,
+    ToolCategory.PIPELINE: get_pipeline_tools,
+    ToolCategory.EMAIL: get_email_tools,
     ToolCategory.CREATE: get_create_tools,
     ToolCategory.UPDATE: get_update_tools,
     ToolCategory.RESEARCH: get_research_tools,
     ToolCategory.CONTEXT: get_context_tools,
     ToolCategory.NOTES: get_note_tools,
     ToolCategory.REMINDERS: get_reminder_tools,
+    ToolCategory.MEMORY: get_memory_tools,
 }
 
-# Tools that should ALWAYS be included (resolvers are needed for almost everything)
-ALWAYS_INCLUDE = {ToolCategory.READ}
+# Tools loaded on every request regardless of intent.
+# CORE (6 tools): resolvers + composite lookups + page awareness
+# CONTEXT (1 tool): entity-specific instructions
+ALWAYS_INCLUDE = {ToolCategory.CORE, ToolCategory.CONTEXT}
+
+# Categories safe to route to gpt-4o-mini (simple queries)
+SIMPLE_CATEGORIES = {ToolCategory.CORE, ToolCategory.SEARCH, ToolCategory.CONTEXT}
 
 
 def get_tools_for_categories(
@@ -67,7 +91,7 @@ def get_tools_for_categories(
 ) -> list:
     """Load only the tools for the specified categories.
 
-    Always includes the ALWAYS_INCLUDE categories (READ) in addition
+    Always includes the ALWAYS_INCLUDE categories in addition
     to whatever categories the intent classifier returns.
 
     Args:
@@ -79,11 +103,14 @@ def get_tools_for_categories(
     all_categories = set(categories) | ALWAYS_INCLUDE
 
     tools = []
+    seen_names = set()  # Deduplicate tools that appear in multiple categories
     for category in all_categories:
         getter = TOOL_REGISTRY[category]
         cat_tools = getter()
-        tools.extend(cat_tools)
-        logger.info(f"   📦 {category.value}: {len(cat_tools)} tools loaded")
+        new_tools = [t for t in cat_tools if t.name not in seen_names]
+        seen_names.update(t.name for t in new_tools)
+        tools.extend(new_tools)
+        logger.info(f"   📦 {category.value}: {len(new_tools)} tools loaded")
 
     logger.info(
         f"🔧 Total tools loaded: {len(tools)} "
@@ -116,9 +143,15 @@ __all__ = [
     "ToolCategory",
     "TOOL_REGISTRY",
     "ALWAYS_INCLUDE",
+    "SIMPLE_CATEGORIES",
     "get_all_tools",
     "get_tools_for_categories",
     "get_read_tools",
+    "get_core_tools",
+    "get_search_tools",
+    "get_details_tools",
+    "get_pipeline_tools",
+    "get_email_tools",
     "get_create_tools",
     "get_update_tools",
     "get_research_tools",
@@ -137,3 +170,4 @@ __all__ = [
     "request_update_confirmation",
     "request_delete_confirmation",
 ]
+

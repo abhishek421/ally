@@ -124,25 +124,17 @@ def get_reminder_tools() -> list:
         company_id: str | None = None,
         deal_id: str | None = None,
     ) -> str:
-        """Create a new reminder in the workspace.
-        
-        This tool will ask for user confirmation before creating the reminder,
-        showing a preview of the data to be created.
+        """Create a new reminder.
         
         Args:
-            title: Title of the reminder (required)
-            duedate: Due date and time in ISO format (e.g., '2024-03-25T15:00:00'). 
-                     Calculate the exact date based on the current date.
-                     For example, if today is Feb 3rd and user says "tomorrow at 3pm", use '2024-02-04T15:00:00'.
-            timezone: Timezone for the reminder (default: UTC)
-            recurring: Recurring pattern - "NONE", "DAILY", "WEEKLY", "MONTHLY", "YEARLY" (default: NONE)
-            reminder_visibility: Visibility - "PRIVATE", "WORKSPACE", "PUBLIC" (default: PRIVATE)
-            people_id: Optional ID of a person to link the reminder to
-            company_id: Optional ID of a company to link the reminder to
-            deal_id: Optional ID of a deal to link the reminder to
-            
-        Returns:
-            Confirmation message with the created reminder details
+            title: Title of the reminder
+            duedate: Due date in ISO format (e.g. '2024-03-25T15:00:00')
+            timezone: Timezone (default: UTC)
+            recurring: "NONE", "DAILY", "WEEKLY", "MONTHLY", "YEARLY"
+            reminder_visibility: "PRIVATE", "WORKSPACE", "PUBLIC"
+            people_id: Optional person ID to link
+            company_id: Optional company ID to link
+            deal_id: Optional deal ID to link
         """
         # Normalize the duedate to ISO 8601 format
         normalized_duedate = normalize_duedate(duedate)
@@ -375,22 +367,16 @@ def get_reminder_tools() -> list:
     ) -> str:
         """Update an existing reminder.
         
-        This tool will ask for user confirmation before updating,
-        showing what fields will be changed.
-        
         Args:
-            reminder_id: The ID of the reminder to update (required)
-            title: New title for the reminder (optional)
+            reminder_id: ID of the reminder to update
+            title: New title (optional)
             duedate: New due date in ISO format (optional)
             timezone: New timezone (optional)
-            recurring: New recurring pattern - "NONE", "DAILY", "WEEKLY", "MONTHLY", "YEARLY" (optional)
-            reminder_visibility: New visibility - "PRIVATE", "WORKSPACE", "PUBLIC" (optional)
-            people_id: New person ID to link to (optional)
-            company_id: New company ID to link to (optional)
-            deal_id: New deal ID to link to (optional)
-            
-        Returns:
-            Confirmation message with the updated reminder details
+            recurring: "NONE", "DAILY", "WEEKLY", "MONTHLY", "YEARLY"
+            reminder_visibility: "PRIVATE", "WORKSPACE", "PUBLIC"
+            people_id: New person ID to link (optional)
+            company_id: New company ID to link (optional)
+            deal_id: New deal ID to link (optional)
         """
         context = get_tool_context()
         client = context.get_client()
