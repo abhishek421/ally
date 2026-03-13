@@ -20,6 +20,8 @@ INTENT_PATTERNS: dict[ToolCategory, list[str]] = {
     ToolCategory.CREATE: [
         r"\bcreate\b",
         r"\badd\s+(?:a\s+)?(?:new\s+)?(?:company|person|contact|group|view)\b",
+        r"\badd\b.*\b(?:to\s+(?:the\s+)?(?:\w+\s+)?group)\b",  # "add ... to clients group"
+        r"\badd\s+\d+\b",  # "add 3 ..." (adding multiple entities)
         r"\bmake\s+(?:a\s+)?(?:new\s+)?\b",
         r"\bset\s*up\b",
         r"\bnew\s+(?:company|person|contact|group)\b",

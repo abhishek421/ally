@@ -42,7 +42,8 @@ class DataChange:
     action: ChangeAction
     entity_id: Optional[str] = None
     group_id: Optional[str] = None
-    
+    draft_id: Optional[str] = None
+
     def to_marker(self) -> str:
         """Convert to a marker string that can be appended to tool results."""
         data = {
@@ -53,6 +54,8 @@ class DataChange:
             data["entityId"] = self.entity_id
         if self.group_id:
             data["groupId"] = self.group_id
+        if self.draft_id:
+            data["draftId"] = self.draft_id
         return DATA_CHANGE_MARKER + json.dumps(data)
 
 

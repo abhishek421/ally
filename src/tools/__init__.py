@@ -27,6 +27,7 @@ from src.tools.confirmation import (
     request_create_confirmation,
     request_update_confirmation,
     request_delete_confirmation,
+    request_batch_create_confirmation,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,8 +59,11 @@ TOOL_REGISTRY: dict[ToolCategory, Callable] = {
     ToolCategory.REMINDERS: get_reminder_tools,
 }
 
-# Tools that should ALWAYS be included (resolvers are needed for almost everything)
-ALWAYS_INCLUDE = {ToolCategory.READ}
+# Tools that should ALWAYS be included.
+# READ: resolvers are needed for almost everything.
+# CREATE: only 6 tools; needed in follow-up messages when user confirms a create
+#         (intent classifier can't detect "yes"/"go ahead" as CREATE intent).
+ALWAYS_INCLUDE = {ToolCategory.READ, ToolCategory.CREATE}
 
 
 def get_tools_for_categories(
@@ -141,4 +145,5 @@ __all__ = [
     "request_create_confirmation",
     "request_update_confirmation",
     "request_delete_confirmation",
+    "request_batch_create_confirmation",
 ]

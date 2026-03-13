@@ -1,14 +1,17 @@
 """CREATE tools for creating companies, people, groups, and views."""
 
+import hashlib
+import json
 import logging
 from typing import Optional
+from uuid import uuid4
 
 from langchain_core.tools import tool
 
 from src.tools.base import (
-    ToolContext, 
-    format_company, 
-    format_person, 
+    ToolContext,
+    format_company,
+    format_person,
     format_group,
     DataChange,
     EntityType,
@@ -16,6 +19,7 @@ from src.tools.base import (
 )
 from src.tools.confirmation import (
     request_create_confirmation,
+    request_batch_create_confirmation,
 )
 
 logger = logging.getLogger(__name__)
@@ -498,10 +502,345 @@ def get_create_tools(context: ToolContext) -> list:
         finally:
             await client.close()
 
+    @tool
+    async def create_people_batch(
+        people: list[dict],
+    ) -> str:
+        """Create multiple people (contacts) across one or more groups in a single batch.
+
+        Use this tool when creating multiple people at once, or when creating people
+        with specific group assignments. Each person dict can specify which group to add to.
+
+        Args:
+            people: List of person dicts. Each dict can have:
+                - firstName (required): First name
+                - lastName: Last name
+                - jobTitle: Job title
+                - description: Description or notes
+                - email: Primary email address
+                - phone: Primary phone number
+                - groupId: ID of group to add this person to
+                - groupName: Display name of the group (for UI)
+
+        Returns:
+            Summary of created people
+        """
+        draft_entities = []
+        groups_summary = {}
+
+        for idx, person in enumerate(people):
+            # Deterministic draft ID: LangGraph re-executes tools on resume,
+            # so uuid4() would produce different IDs. Use a hash of the input
+            # data + index so draft IDs are stable across re-executions.
+            id_seed = json.dumps({"idx": idx, "data": person}, sort_keys=True)
+            draft_id = f"draft-{hashlib.sha256(id_seed.encode()).hexdigest()[:12]}"
+            group_id = person.get("groupId") or person.get("group_id")
+            group_name = person.get("groupName") or person.get("group_name") or ""
+
+            draft_entities.append({
+                "draft_id": draft_id,
+                "group_id": group_id,
+                "group_name": group_name,
+                "data": {
+                    "firstName": person.get("firstName") or person.get("first_name", ""),
+                    "lastName": person.get("lastName") or person.get("last_name") or "",
+                    "jobTitle": person.get("jobTitle") or person.get("job_title") or "",
+                    "description": person.get("description") or "",
+                    "emails": [{"value": person["email"], "type": "work", "isPrimary": True}] if person.get("email") else [],
+                    "phoneNumbers": [{"value": person["phone"], "type": "mobile", "isPrimary": True}] if person.get("phone") else [],
+                    "workspaceId": context.workspace_id,
+                    "userId": context.user_id,
+                    "groupId": group_id,
+                },
+            })
+
+            if group_id:
+                if group_id not in groups_summary:
+                    groups_summary[group_id] = {"group_id": group_id, "group_name": group_name, "count": 0}
+                groups_summary[group_id]["count"] += 1
+
+        # ONE interrupt for all entities
+        confirmation = request_batch_create_confirmation(
+            entity_type="person",
+            draft_entities=draft_entities,
+            groups_summary=list(groups_summary.values()),
+        )
+
+        if not confirmation.confirmed:
+            return f"Cancelled. No people were created."
+
+        # Determine which entities to create
+        accepted_ids = set()
+        modified_map = {}
+        if confirmation.accepted_entities:
+            for ae in confirmation.accepted_entities:
+                accepted_ids.add(ae["draft_id"])
+                if ae.get("modified_data"):
+                    modified_map[ae["draft_id"]] = ae["modified_data"]
+        else:
+            # If no explicit accepted_entities, accept all (simple "Accept all")
+            accepted_ids = {d["draft_id"] for d in draft_entities}
+
+        rejected_ids = set(confirmation.rejected_entity_ids or [])
+        accepted_ids -= rejected_ids
+
+        if not accepted_ids:
+            return "All people were rejected. No people created."
+
+        mutation = """
+        mutation CreatePerson(
+            $input: CreatePeopleInput!
+            $userId: ID!
+            $groupId: ID
+        ) {
+            createPerson(input: $input, userId: $userId, groupId: $groupId) {
+                id
+                firstName
+                lastName
+                jobTitle
+                description
+                emails { id value type isPrimary }
+                phoneNumbers { id value type isPrimary }
+            }
+        }
+        """
+
+        created = []
+        result_parts = []
+        try:
+            for draft in draft_entities:
+                if draft["draft_id"] not in accepted_ids:
+                    continue
+
+                entity_data = modified_map.get(draft["draft_id"]) or draft["data"]
+
+                input_data = {
+                    "firstName": entity_data["firstName"],
+                    "workspaceId": entity_data.get("workspaceId", context.workspace_id),
+                }
+                if entity_data.get("lastName"):
+                    input_data["lastName"] = entity_data["lastName"]
+                if entity_data.get("jobTitle"):
+                    input_data["jobTitle"] = entity_data["jobTitle"]
+                if entity_data.get("description"):
+                    input_data["description"] = entity_data["description"]
+                if entity_data.get("emails"):
+                    input_data["emails"] = entity_data["emails"]
+                if entity_data.get("phoneNumbers"):
+                    input_data["phoneNumbers"] = entity_data["phoneNumbers"]
+
+                group_id = entity_data.get("groupId") or draft.get("group_id")
+                user_id = entity_data.get("userId", context.user_id)
+
+                try:
+                    logger.info(f"Creating person {draft['draft_id']}: name={input_data.get('firstName')} {input_data.get('lastName', '')}, groupId={group_id}")
+                    client = context.get_client()
+                    res = await client.mutate(mutation, {
+                        "input": input_data,
+                        "userId": user_id,
+                        "groupId": group_id,
+                    })
+                    await client.close()
+                    logger.info(f"Mutation result for {draft['draft_id']}: {res}")
+
+                    person = res.get("createPerson")
+                    if person:
+                        created.append(person)
+                        change = DataChange(
+                            entity_type=EntityType.PERSON,
+                            action=ChangeAction.CREATED,
+                            entity_id=person.get("id"),
+                            group_id=group_id,
+                            draft_id=draft["draft_id"],
+                        )
+                        result_parts.append(change.to_marker())
+                    else:
+                        logger.error(f"createPerson returned None for {draft['draft_id']}. Full response: {res}")
+                except Exception as e:
+                    logger.error(f"Error creating person {draft['draft_id']}: {e}", exc_info=True)
+
+            summary = f"Successfully created {len(created)} of {len(accepted_ids)} people."
+            if rejected_ids:
+                summary += f" {len(rejected_ids)} were rejected."
+            return summary + "".join(result_parts)
+
+        except Exception as e:
+            logger.error(f"Error in create_people_batch: {e}")
+            return f"Error creating people: {str(e)}"
+
+    @tool
+    async def create_companies_batch(
+        companies: list[dict],
+    ) -> str:
+        """Create multiple companies across one or more groups in a single batch.
+
+        Use this tool when creating multiple companies at once, or when creating companies
+        with specific group assignments.
+
+        Args:
+            companies: List of company dicts. Each dict can have:
+                - name (required): Company name
+                - description: Company description
+                - email: Primary email address
+                - phone: Primary phone number
+                - website: Company website URL
+                - groupId: ID of group to add this company to
+                - groupName: Display name of the group (for UI)
+
+        Returns:
+            Summary of created companies
+        """
+        draft_entities = []
+        groups_summary = {}
+
+        for idx, company in enumerate(companies):
+            # Deterministic draft ID: LangGraph re-executes tools on resume,
+            # so uuid4() would produce different IDs. Use a hash of the input
+            # data + index so draft IDs are stable across re-executions.
+            id_seed = json.dumps({"idx": idx, "data": company}, sort_keys=True)
+            draft_id = f"draft-{hashlib.sha256(id_seed.encode()).hexdigest()[:12]}"
+            group_id = company.get("groupId") or company.get("group_id")
+            group_name = company.get("groupName") or company.get("group_name") or ""
+
+            draft_entities.append({
+                "draft_id": draft_id,
+                "group_id": group_id,
+                "group_name": group_name,
+                "data": {
+                    "name": company.get("name", ""),
+                    "description": company.get("description") or "",
+                    "emails": [{"value": company["email"], "type": "work", "isPrimary": True}] if company.get("email") else [],
+                    "phoneNumbers": [{"value": company["phone"], "type": "work", "isPrimary": True}] if company.get("phone") else [],
+                    "urls": [{"value": company["website"], "label": "Website", "isPrimary": True}] if company.get("website") else [],
+                    "workspaceId": context.workspace_id,
+                    "userId": context.user_id,
+                    "groupId": group_id,
+                },
+            })
+
+            if group_id:
+                if group_id not in groups_summary:
+                    groups_summary[group_id] = {"group_id": group_id, "group_name": group_name, "count": 0}
+                groups_summary[group_id]["count"] += 1
+
+        # ONE interrupt for all entities
+        logger.info(f"[BATCH] Requesting batch confirmation for {len(draft_entities)} companies")
+        confirmation = request_batch_create_confirmation(
+            entity_type="company",
+            draft_entities=draft_entities,
+            groups_summary=list(groups_summary.values()),
+        )
+        logger.info(f"[BATCH] Confirmation received: confirmed={confirmation.confirmed}, accepted_entities={confirmation.accepted_entities}, rejected_entity_ids={confirmation.rejected_entity_ids}")
+
+        if not confirmation.confirmed:
+            logger.info("[BATCH] Confirmation was NOT confirmed, returning cancelled")
+            return f"Cancelled. No companies were created."
+
+        # Determine which entities to create
+        accepted_ids = set()
+        modified_map = {}
+        if confirmation.accepted_entities:
+            for ae in confirmation.accepted_entities:
+                accepted_ids.add(ae["draft_id"])
+                if ae.get("modified_data"):
+                    modified_map[ae["draft_id"]] = ae["modified_data"]
+        else:
+            accepted_ids = {d["draft_id"] for d in draft_entities}
+
+        rejected_ids = set(confirmation.rejected_entity_ids or [])
+        accepted_ids -= rejected_ids
+
+        logger.info(f"[BATCH] accepted_ids={accepted_ids}, rejected_ids={rejected_ids}, draft_entity_ids={[d['draft_id'] for d in draft_entities]}")
+
+        if not accepted_ids:
+            logger.info("[BATCH] No accepted IDs, returning rejected")
+            return "All companies were rejected. No companies created."
+
+        logger.info(f"[BATCH] Proceeding to create {len(accepted_ids)} companies")
+        mutation = """
+        mutation CreateCompany(
+            $input: CreateCompanyInput!
+            $userId: ID!
+            $groupId: ID
+        ) {
+            createCompany(input: $input, userId: $userId, groupId: $groupId) {
+                id
+                name
+                description
+                emails { id value type isPrimary }
+                phoneNumbers { id value type isPrimary }
+                urls { id label value isPrimary }
+            }
+        }
+        """
+
+        created = []
+        result_parts = []
+        try:
+            for draft in draft_entities:
+                if draft["draft_id"] not in accepted_ids:
+                    continue
+
+                entity_data = modified_map.get(draft["draft_id"]) or draft["data"]
+
+                input_data = {
+                    "name": entity_data["name"],
+                    "workspaceId": entity_data.get("workspaceId", context.workspace_id),
+                }
+                if entity_data.get("description"):
+                    input_data["description"] = entity_data["description"]
+                if entity_data.get("emails"):
+                    input_data["emails"] = entity_data["emails"]
+                if entity_data.get("phoneNumbers"):
+                    input_data["phoneNumbers"] = entity_data["phoneNumbers"]
+                if entity_data.get("urls"):
+                    input_data["urls"] = entity_data["urls"]
+
+                group_id = entity_data.get("groupId") or draft.get("group_id")
+                user_id = entity_data.get("userId", context.user_id)
+
+                try:
+                    logger.info(f"Creating company {draft['draft_id']}: name={input_data.get('name')}, groupId={group_id}")
+                    client = context.get_client()
+                    res = await client.mutate(mutation, {
+                        "input": input_data,
+                        "userId": user_id,
+                        "groupId": group_id,
+                    })
+                    await client.close()
+                    logger.info(f"Mutation result for {draft['draft_id']}: {res}")
+
+                    company = res.get("createCompany")
+                    if company:
+                        created.append(company)
+                        change = DataChange(
+                            entity_type=EntityType.COMPANY,
+                            action=ChangeAction.CREATED,
+                            entity_id=company.get("id"),
+                            group_id=group_id,
+                            draft_id=draft["draft_id"],
+                        )
+                        result_parts.append(change.to_marker())
+                    else:
+                        logger.error(f"createCompany returned None for {draft['draft_id']}. Full response: {res}")
+                except Exception as e:
+                    logger.error(f"Error creating company {draft['draft_id']}: {e}", exc_info=True)
+
+            summary = f"Successfully created {len(created)} of {len(accepted_ids)} companies."
+            if rejected_ids:
+                summary += f" {len(rejected_ids)} were rejected."
+            return summary + "".join(result_parts)
+
+        except Exception as e:
+            logger.error(f"Error in create_companies_batch: {e}")
+            return f"Error creating companies: {str(e)}"
+
     return [
         create_company,
         create_person,
         create_group,
         create_view_in_group,
+        create_people_batch,
+        create_companies_batch,
     ]
 

@@ -311,6 +311,8 @@ class ConfirmationRequest(BaseModel):
     selected_ids: list[str] | None = Field(None, description="Selected option IDs for SELECT_MANY")
     feedback: str | None = Field(None, description="Optional feedback from user")
     activeURL: str | None = Field(None, description="Current page URL for group context")
+    accepted_entities: list[dict] | None = Field(None, description="Batch: accepted entities [{draft_id, modified_data?}]")
+    rejected_entity_ids: list[str] | None = Field(None, description="Batch: rejected draft IDs")
 
 
 async def confirmation_event_generator(
@@ -401,6 +403,8 @@ async def confirm_action(
         "selected_id": request.selected_id,
         "selected_ids": request.selected_ids,
         "feedback": request.feedback,
+        "accepted_entities": request.accepted_entities,
+        "rejected_entity_ids": request.rejected_entity_ids,
     }
 
     return EventSourceResponse(

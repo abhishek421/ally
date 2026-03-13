@@ -17,6 +17,7 @@ class ConfirmationType(str, Enum):
     SELECT_ONE = "select_one"              # Radio buttons - select one option
     SELECT_MANY = "select_many"            # Checkboxes - select multiple options
     CONFIRM_WITH_EDIT = "confirm_with_edit"  # Confirm with optional modifications
+    CONFIRM_BATCH_CREATE = "confirm_batch_create"  # Batch entity creation with inline draft rows
 
 
 @dataclass
@@ -51,6 +52,8 @@ class ConfirmationRequest:
     allow_cancel_feedback: bool = True
     entity_type: Optional[str] = None  # "person", "company", "group"
     action_label: Optional[str] = None  # Custom confirm button label
+    draft_entities: Optional[list[dict]] = None  # Batch create: list of draft entities
+    groups_summary: Optional[list[dict]] = None  # Batch create: per-group breakdown
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -60,7 +63,7 @@ class ConfirmationRequest:
             "message": self.message,
             "allow_cancel_feedback": self.allow_cancel_feedback,
         }
-        
+
         if self.options:
             result["options"] = [
                 {
@@ -72,16 +75,22 @@ class ConfirmationRequest:
                 }
                 for opt in self.options
             ]
-        
+
         if self.draft_data:
             result["draft_data"] = self.draft_data
-        
+
         if self.entity_type:
             result["entity_type"] = self.entity_type
-        
+
         if self.action_label:
             result["action_label"] = self.action_label
-        
+
+        if self.draft_entities:
+            result["draft_entities"] = self.draft_entities
+
+        if self.groups_summary:
+            result["groups_summary"] = self.groups_summary
+
         return result
 
 
@@ -101,6 +110,8 @@ class ConfirmationResponse:
     selected_ids: Optional[list[str]] = None
     feedback: Optional[str] = None
     modified_data: Optional[dict] = None
+    accepted_entities: Optional[list[dict]] = None   # Batch: [{draft_id, modified_data?}]
+    rejected_entity_ids: Optional[list[str]] = None   # Batch: [draft_id, ...]
 
 
 def request_confirmation(request: ConfirmationRequest) -> ConfirmationResponse:
@@ -142,6 +153,8 @@ def request_confirmation(request: ConfirmationRequest) -> ConfirmationResponse:
             selected_ids=response_data.get("selected_ids"),
             feedback=response_data.get("feedback"),
             modified_data=response_data.get("modified_data"),
+            accepted_entities=response_data.get("accepted_entities"),
+            rejected_entity_ids=response_data.get("rejected_entity_ids"),
         )
     
     # If response is not a dict, treat as cancellation
@@ -283,6 +296,39 @@ def request_delete_confirmation(
         entity_type=entity_type,
         action_label="Remove",
         allow_cancel_feedback=True,
+    ))
+
+
+def request_batch_create_confirmation(
+    entity_type: str,
+    draft_entities: list[dict],
+    groups_summary: list[dict],
+) -> ConfirmationResponse:
+    """Request confirmation before batch creating entities.
+
+    Sends a single interrupt with all draft entities for inline table preview.
+
+    Args:
+        entity_type: Type of entity ("person", "company")
+        draft_entities: List of draft entity dicts with draft_id, group_id, group_name, data
+        groups_summary: Per-group breakdown [{group_id, group_name, count}]
+
+    Returns:
+        ConfirmationResponse with accepted_entities and/or rejected_entity_ids
+    """
+    entity_label = entity_type.replace("_", " ").title()
+    count = len(draft_entities)
+    plural = "s" if count != 1 else ""
+
+    return request_confirmation(ConfirmationRequest(
+        type=ConfirmationType.CONFIRM_BATCH_CREATE,
+        title=f"Create {count} {entity_label}{plural}",
+        message=f"Review the {count} {entity_type}{plural} before creating.",
+        entity_type=entity_type,
+        draft_entities=draft_entities,
+        groups_summary=groups_summary,
+        action_label=f"Create {count} {entity_label}{plural}",
+        allow_cancel_feedback=False,
     ))
 
 

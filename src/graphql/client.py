@@ -68,7 +68,7 @@ class GraphQLClient:
             Exception: If the query fails
         """
         client = await self._get_client()
-        
+
         try:
             async with client as session:
                 result = await session.execute(
@@ -79,6 +79,11 @@ class GraphQLClient:
         except Exception as e:
             logger.error(f"GraphQL query failed: {e}")
             raise
+        finally:
+            # Reset client so next execute() gets a fresh transport.
+            # The gql Client's context manager closes the transport on exit,
+            # so reusing the same instance for subsequent calls fails silently.
+            self._client = None
 
     async def query(
         self,
