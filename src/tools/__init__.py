@@ -78,9 +78,7 @@ TOOL_REGISTRY: dict[ToolCategory, Callable] = {
 }
 
 # Tools loaded on every request regardless of intent.
-# CORE (6 tools): resolvers + composite lookups + page awareness
-# CONTEXT (1 tool): entity-specific instructions
-ALWAYS_INCLUDE = {ToolCategory.CORE, ToolCategory.CONTEXT}
+ALWAYS_INCLUDE = {ToolCategory.CORE}
 
 # Categories safe to route to gpt-4o-mini (simple queries)
 SIMPLE_CATEGORIES = {ToolCategory.CORE, ToolCategory.SEARCH, ToolCategory.CONTEXT}

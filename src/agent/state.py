@@ -6,12 +6,22 @@ from langgraph.graph.message import add_messages
 
 
 def limit_messages(all_messages: list, new_messages: list) -> list:
-    """Reducer to add messages and limit the total history.
-    
-    Keeps only the last 20 messages to prevent token bloat in long conversations.
+    """Reducer to add messages or replace history.
     """
-    combined = add_messages(all_messages, new_messages)
-    return combined[-20:]  # Keep last 20 messages
+    # 1. Check for replacement sentinel in new messages
+    if new_messages and len(new_messages) > 0:
+        for i, msg in enumerate(new_messages):
+            if hasattr(msg, "content") and msg.content == "__REPLACE_HISTORY__":
+                # Replace: only take what's after the sentinel
+                # AND filter out any non-message crud
+                return [m for m in new_messages[i+1:] if hasattr(m, "content") and not isinstance(m, dict)]
+        
+    # 2. Standard addition, but also filter out any non-message crud from BOTH sides
+    # (Repairing existing corrupted state)
+    clean_all = [m for m in all_messages if hasattr(m, "content") and not isinstance(m, dict)]
+    clean_new = [m for m in new_messages if hasattr(m, "content") and not isinstance(m, dict)]
+    
+    return add_messages(clean_all, clean_new)
 
 
 class AgentState(TypedDict):
@@ -23,6 +33,9 @@ class AgentState(TypedDict):
     
     # Messages accumulate using the limit_messages reducer
     messages: Annotated[list, limit_messages]
+    
+    # Required by create_react_agent
+    remaining_steps: int
     
     # Workspace context
     workspace_id: str

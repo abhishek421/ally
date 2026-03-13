@@ -2546,12 +2546,12 @@ async def get_current_page() -> str:
     Returns:
         A description of the current page and any entity details
     """
+    context = get_tool_context()
     active_url = context.active_url
     
     if not active_url:
         return "I don't have information about which page you're currently viewing. The page context wasn't provided."
     
-    context = get_tool_context()
     client = context.get_client()
     
     try:
@@ -2937,14 +2937,61 @@ async def search_and_get_person(name: str) -> str:
 # Tool Getter Functions — grouped by category for intent-based selection
 # ---------------------------------------------------------------------------
 
+@tool
+async def resolve_entity_name(
+    name: str,
+    entity_type: str = "auto",
+) -> str:
+    """Resolve a company, person, or group name to an ID.
+
+    Use this when you need an ID for a name mentioned by the user.
+    Args:
+        name: Name to resolve (handles typos/partial names)
+        entity_type: "company", "people", "group", or "auto" (searches all)
+    """
+    if entity_type == "company":
+        return await resolve_company_name.ainvoke({"name": name})
+    elif entity_type == "people":
+        return await resolve_person_name.ainvoke({"name": name})
+    elif entity_type == "group":
+        return await resolve_group_name.ainvoke({"name": name})
+    
+    # Auto-resolve: try company first, then person, then group
+    res = await resolve_company_name.ainvoke({"name": name})
+    if "RESOLVED:" in res: return res
+    res = await resolve_person_name.ainvoke({"name": name})
+    if "RESOLVED:" in res: return res
+    return await resolve_group_name.ainvoke({"name": name})
+
+
+@tool
+async def search_and_get_entity(
+    query: str,
+    entity_type: str = "people",
+    limit: int = 10,
+) -> str:
+    """Search for entities or get details if an ID is provided.
+
+    Args:
+        query: Name to search OR a UUID/ID to get details for.
+        entity_type: "people" or "company" (default: "people")
+        limit: Max results if searching (default: 10)
+    """
+    is_id = len(query) > 30 and "-" in query # Rough check for UUID
+    
+    if entity_type == "company":
+        if is_id: return await get_company_by_id.ainvoke({"id": query})
+        return await search_and_get_company.ainvoke({"name": query})
+    
+    if is_id: return await get_person_by_id.ainvoke({"person_id": query})
+    return await search_and_get_person.ainvoke({"name": query})
+
+
 def get_core_tools() -> list:
-    """Essential tools loaded on every request (resolvers + composite lookups)."""
+    """Essential tools loaded on every request."""
     return [
-        resolve_company_name,
-        resolve_person_name,
-        resolve_group_name,
-        search_and_get_company,
-        search_and_get_person,
+        resolve_entity_name,
+        search_and_get_entity,
         get_current_page,
     ]
 

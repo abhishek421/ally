@@ -669,7 +669,51 @@ def get_create_tools() -> list:
         finally:
             await client.close()
 
+    @tool
+    async def create_entity(
+        entity_type: str,
+        name: str,
+        description: Optional[str] = None,
+        email: Optional[str] = None,
+        phone: Optional[str] = None,
+        group_id: Optional[str] = None,
+    ) -> str:
+        """Create a new company, person, or group.
+        
+        Args:
+            entity_type: "company", "people", or "group"
+            name: Name of the entity
+            description: Optional description
+            email: Optional email
+            phone: Optional phone
+            group_id: Optional group ID to add entity to
+        """
+        if entity_type == "company":
+            return await create_company.ainvoke({
+                "name": name, 
+                "description": description, 
+                "email": email, 
+                "phone": phone, 
+                "group_id": group_id
+            })
+        elif entity_type == "people":
+            return await create_person.ainvoke({
+                "first_name": name, # create_person expects first_name
+                "email": email, 
+                "phone": phone, 
+                "description": description, 
+                "group_id": group_id
+            })
+        elif entity_type == "group":
+            return await create_group.ainvoke({
+                "name": name, 
+                "group_type": "PEOPLE", # Note: Check if 'group_type' or 'type'
+                "description": description
+            })
+        return f"Invalid entity type: {entity_type}"
+
     return [
+        create_entity,
         create_company,
         create_person,
         create_group,

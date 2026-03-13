@@ -18,6 +18,8 @@ from src.tools import get_all_tools, get_tools_for_categories
 from src.tools.base import ToolContext, parse_data_change
 from src.tools.context_var import set_tool_context
 from src.agent.intent import classify_intent
+from src.agent.compression import compress_messages
+from src.agent.state import AgentState
 
 logger = logging.getLogger(__name__)
 
@@ -493,9 +495,11 @@ def create_agent_for_context(
         pass
 
     # Build tools dynamically based on inferred user intent
-    if categories:
+    if categories is not None:
+        # If categories=[], only ALWAYS_INCLUDE tools are loaded (saves ~20k tokens)
         tools = get_tools_for_categories(categories)
     else:
+        # Fallback to all tools only if classification was explicitly skipped (standard fallback)
         tools = get_all_tools()
 
     # Create the agent using the prebuilt ReAct pattern
@@ -504,6 +508,7 @@ def create_agent_for_context(
         tools=tools,
         prompt=prompt_fn,
         checkpointer=checkpointer,
+        state_schema=AgentState,
     )
 
     if _cached_agent is None:
@@ -690,6 +695,15 @@ async def stream_agent(
         return
 
     try:
+        # CONVERSATION COMPRESSION
+        # Before starting, fetch current state, compress messages, and update checkpointer
+        current_state = await agent.aget_state(config)
+        if current_state.values.get("messages"):
+            compressed = compress_messages(current_state.values["messages"])
+            if len(compressed) != len(current_state.values["messages"]):
+                await agent.aupdate_state(config, {"messages": compressed})
+                logger.info(f"✨ State updated with compressed/repaired history")
+
         # Stream using updates mode to get step-by-step progress
         async for chunk in agent.astream(
             {
@@ -879,8 +893,17 @@ async def resume_agent(
     has_seen_tool_result = False
 
     try:
-        # Get interrupt IDs from the agent's state snapshot
+        # CONVERSATION COMPRESSION & REPAIR
+        # Before resuming, repair and compress history to avoid INVALID_CHAT_HISTORY
         state_snapshot = await agent.aget_state(config)
+        if state_snapshot.values.get("messages"):
+            from src.agent.compression import compress_messages
+            compressed = compress_messages(state_snapshot.values["messages"])
+            if len(compressed) != len(state_snapshot.values["messages"]):
+                await agent.aupdate_state(config, {"messages": compressed})
+                logger.info(f"✨ State updated with compressed/repaired history (RESUME)")
+                # Refresh snapshot after update
+                state_snapshot = await agent.aget_state(config)
         
         # ... (interrupt logic) ...
         pending_interrupts = []

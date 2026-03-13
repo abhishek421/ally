@@ -71,6 +71,10 @@ PERPLEXITY_API_KEY=REDACTED
         "gemini-1.5-flash": 1000000,
     }
 
+    # Conversation Compression
+    compression_enabled: bool = True
+    compression_recent_count: int = 8  # Keep last 8 messages verbatim
+
     @property
     def is_openai(self) -> bool:
         """Check if using OpenAI provider."""

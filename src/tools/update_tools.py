@@ -1584,26 +1584,116 @@ def get_update_tools() -> list:
         finally:
             await client.close()
 
+    @tool
+    async def update_entity_basic_fields(
+        entity_type: str,
+        id: str,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        email: Optional[str] = None,
+        phone: Optional[str] = None,
+    ) -> str:
+        """Update basic fields (name, description, email, phone) for an entity.
+        
+        Args:
+            entity_type: "company", "people", or "group"
+            id: ID of the entity to update
+            name: New name (optional)
+            description: New description (optional)
+            email: New email (optional)
+            phone: New phone (optional)
+        """
+        if entity_type == "company":
+            return await update_company.ainvoke({
+                "company_id": id, 
+                "company_name": name or "Company", # Use current/new name as display
+                "name": name, 
+                "description": description
+            })
+        elif entity_type == "people":
+            return await update_person.ainvoke({
+                "person_id": id, 
+                "person_name": name or "Person",
+                "description": description
+                # Note: first_name/last_name/job_title not exposed in Mega-Tool yet
+            })
+        elif entity_type == "group":
+            return await update_group.ainvoke({"id": id, "name": name, "description": description})
+        return f"Invalid entity type: {entity_type}"
+
+    @tool
+    async def update_entity_status_or_column(
+        entity_type: str,
+        entity_id: str,
+        group_id: str,
+        column_id: str,
+        option_id: str,
+    ) -> str:
+        """Update a column value (like Status or Priority) for an entity in a group.
+        
+        Args:
+            entity_type: "company" or "people"
+            entity_id: ID of the entity
+            group_id: ID of the group
+            column_id: ID of the column (e.g., Status column ID)
+            option_id: ID of the option to select (e.g., "Lead" status ID)
+        """
+        if entity_type == "company":
+            return await update_company_column_value.ainvoke({
+                "company_id": entity_id, 
+                "group_id": group_id, 
+                "column_id": column_id, 
+                "option_id": option_id,
+                "company_name": "Company", # Required by Tool schema but usually for display
+                "column_name": "Status",
+                "new_value_label": "Update"
+            })
+        return await update_person_column_value.ainvoke({
+            "person_id": entity_id, 
+            "group_id": group_id, 
+            "column_id": column_id, 
+            "option_id": option_id,
+            "person_name": "Person",
+            "column_name": "Status",
+            "new_value_label": "Update"
+        })
+
+    @tool
+    async def manage_entity_group_membership(
+        action: str,
+        entity_type: str,
+        entity_id: str,
+        group_id: str,
+        entity_name: str = "Entity",
+        group_name: str = "Group",
+    ) -> str:
+        """Add or remove an entity from a group.
+        
+        Args:
+            action: "add" or "remove"
+            entity_type: "company" or "people"
+            entity_id: ID of the entity
+            group_id: ID of the group
+            entity_name: Name of entity (optional, for confirmation)
+            group_name: Name of group (optional, for confirmation)
+        """
+        if action == "add":
+            if entity_type == "company":
+                return await add_company_to_group.ainvoke({"company_id": entity_id, "group_id": group_id})
+            return await add_person_to_group.ainvoke({"person_id": entity_id, "group_id": group_id})
+        else:
+            if entity_type == "company":
+                return await remove_company_from_group.ainvoke({"company_id": entity_id, "group_id": group_id, "company_name": entity_name, "group_name": group_name})
+            return await remove_person_from_group.ainvoke({"person_id": entity_id, "group_id": group_id, "person_name": entity_name, "group_name": group_name})
+
     return [
-        # Group membership tools
-        add_company_to_group,
-        remove_company_from_group,
-        add_person_to_group,
-        remove_person_from_group,
-        # Company-person relationship tools
-        add_person_to_company,
-        remove_person_from_company,
-        # Entity update tools
-        update_company,
-        update_person,
-        update_group,
-        # Group column value update tools
-        update_company_column_value,
-        update_person_column_value,
-        # Simplified status update tools
+        update_entity_basic_fields,
+        update_entity_status_or_column,
+        manage_entity_group_membership,
+        # Simplified status update tools (keeping for fallback)
         update_person_status,
         update_company_status,
-        # Reminder tools
+        # Reminder/Note tools
         update_reminder,
         delete_reminder,
     ]
