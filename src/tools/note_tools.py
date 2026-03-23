@@ -5,6 +5,7 @@ from typing import Optional
 
 from langchain_core.tools import tool
 
+from src.tools.context_var import get_tool_context
 from src.tools.base import (
     ToolContext,
     DataChange,
@@ -67,12 +68,9 @@ def format_note(note: dict) -> str:
     return "\n".join(lines)
 
 
-def get_note_tools(context: ToolContext) -> list:
-    """Get all NOTE tools configured with the given context.
-    
-    Args:
-        context: Tool context with auth and workspace info
-        
+def get_note_tools() -> list:
+    """Get all NOTE tools.
+
     Returns:
         List of tool functions
     """
@@ -108,6 +106,7 @@ def get_note_tools(context: ToolContext) -> list:
         if entity_type_upper not in NOTE_ENTITY_TYPES:
             return f"Invalid entity type '{entity_type}'. Must be 'PEOPLE' (or 'PERSON') for a person or 'COMPANY' for a company."
         
+        context = get_tool_context()
         client = context.get_client()
         
         try:
@@ -189,6 +188,7 @@ def get_note_tools(context: ToolContext) -> list:
             feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
             return f"Note creation cancelled by user.{feedback}"
         
+        context = get_tool_context()
         client = context.get_client()
         try:
             # Create the note
@@ -264,6 +264,7 @@ def get_note_tools(context: ToolContext) -> list:
         if entity_type_upper not in NOTE_ENTITY_TYPES:
             return f"Invalid entity type '{entity_type}'. Must be 'PEOPLE' (or 'PERSON') or 'COMPANY'."
         
+        context = get_tool_context()
         client = context.get_client()
         
         try:
@@ -386,6 +387,7 @@ def get_note_tools(context: ToolContext) -> list:
         Returns:
             The note details
         """
+        context = get_tool_context()
         client = context.get_client()
         
         try:
@@ -449,6 +451,7 @@ def get_note_tools(context: ToolContext) -> list:
         if not content and is_private is None and not tags:
             return "Please provide at least one field to update (content, is_private, or tags)."
         
+        context = get_tool_context()
         client = context.get_client()
         
         try:
@@ -500,6 +503,7 @@ def get_note_tools(context: ToolContext) -> list:
             feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
             return f"Note update cancelled.{feedback}"
         
+        context = get_tool_context()
         client = context.get_client()
         try:
             # Perform the update
@@ -560,6 +564,7 @@ def get_note_tools(context: ToolContext) -> list:
         Returns:
             Confirmation message
         """
+        context = get_tool_context()
         client = context.get_client()
         
         try:
@@ -599,6 +604,7 @@ def get_note_tools(context: ToolContext) -> list:
             feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
             return f"Note deletion cancelled.{feedback}"
             
+        context = get_tool_context()
         client = context.get_client()
         try:
             # Delete the note

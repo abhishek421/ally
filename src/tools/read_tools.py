@@ -5,6 +5,7 @@ from typing import Optional
 
 from langchain_core.tools import tool
 
+from src.tools.context_var import get_tool_context
 from src.tools.base import (
     ToolContext,
     format_company,
@@ -26,12 +27,9 @@ from src.tools.confirmation import (
 logger = logging.getLogger(__name__)
 
 
-def get_read_tools(context: ToolContext) -> list:
-    """Get all READ tools configured with the given context.
-    
-    Args:
-        context: Tool context with auth and workspace info
-        
+def get_read_tools() -> list:
+    """Get all READ tools.
+
     Returns:
         List of tool functions
     """
@@ -52,6 +50,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             Formatted list of companies
         """
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -126,6 +125,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             Formatted list of people
         """
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -196,6 +196,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             Formatted list of groups
         """
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -258,6 +259,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             Formatted list of companies in the group
         """
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -334,6 +336,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             Formatted list of people in the group
         """
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -407,6 +410,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             Detailed company information
         """
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -496,6 +500,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             Detailed person information
         """
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -579,6 +584,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             Formatted list of matching companies
         """
+        context = get_tool_context()
         client = context.get_client()
         
         gql_query = """
@@ -677,6 +683,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             Formatted list of matching people
         """
+        context = get_tool_context()
         client = context.get_client()
         
         gql_query = """
@@ -776,6 +783,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             Detailed group information
         """
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -830,6 +838,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             Formatted list of matching groups with their IDs
         """
+        context = get_tool_context()
         client = context.get_client()
         
         gql_query = """
@@ -903,6 +912,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             The company ID and details, or asks user to select if ambiguous
         """
+        context = get_tool_context()
         client = context.get_client()
 
         # Use getWorkspaceCompany with search parameter (same as frontend)
@@ -1018,6 +1028,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             The person ID and details, or asks user to select if ambiguous
         """
+        context = get_tool_context()
         client = context.get_client()
 
         # Use getWorkspacePeople with search parameter (same as frontend)
@@ -1140,6 +1151,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             The group ID and details, or asks user to select if ambiguous
         """
+        context = get_tool_context()
         client = context.get_client()
         
         gql_query = """
@@ -1229,6 +1241,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             Formatted list of email interactions for the person
         """
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -1309,6 +1322,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             Formatted list of email interactions for the company
         """
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -1397,6 +1411,7 @@ def get_read_tools(context: ToolContext) -> list:
         if not person_id and not company_id:
             return "Error: You must provide either a person_id OR a company_id to fetch a thread."
 
+        context = get_tool_context()
         client = context.get_client()
         
         try:
@@ -1516,6 +1531,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             Formatted list of templates with IDs and descriptions
         """
+        context = get_tool_context()
         client = context.get_client()
         query = """
         query GetEmailTemplates($workspaceId: String!, $limit: Int, $nextToken: String) {
@@ -1570,6 +1586,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             Formatted list of matching templates
         """
+        context = get_tool_context()
         client = context.get_client()
         query = """
         query SearchEmailTemplates($workspaceId: String!, $searchKeyword: String, $limit: Int) {
@@ -1659,6 +1676,7 @@ def get_read_tools(context: ToolContext) -> list:
         final_subject = final_data.get("subject", subject)
         final_body = final_data.get("body", body)
         
+        context = get_tool_context()
         client = context.get_client()
         try:
             # 2. Resolve group_id if not provided
@@ -1757,6 +1775,7 @@ def get_read_tools(context: ToolContext) -> list:
         final_subject = final_data.get("subject", subject)
         final_body = final_data.get("body", body)
         
+        context = get_tool_context()
         client = context.get_client()
         try:
             # 2. Resolve group_id
@@ -1840,6 +1859,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             List of columns with their IDs, names, and data types
         """
+        context = get_tool_context()
         client = context.get_client()
         
         # Use the group resolver to get columns based on entity type
@@ -1922,6 +1942,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             List of available options with their IDs and values
         """
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -2058,6 +2079,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             List of available status options with their values and colors
         """
+        context = get_tool_context()
         client = context.get_client()
         
         try:
@@ -2160,6 +2182,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             List of entities matching the status
         """
+        context = get_tool_context()
         client = context.get_client()
         
         try:
@@ -2331,6 +2354,7 @@ def get_read_tools(context: ToolContext) -> list:
         Returns:
             The column ID and details, or suggestions if multiple matches found
         """
+        context = get_tool_context()
         client = context.get_client()
         
         # Use the group resolver to get columns based on entity type
@@ -2434,6 +2458,7 @@ def get_read_tools(context: ToolContext) -> list:
         if not active_url:
             return "I don't have information about which page you're currently viewing. The page context wasn't provided."
         
+        context = get_tool_context()
         client = context.get_client()
         
         try:

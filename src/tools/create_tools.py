@@ -5,6 +5,7 @@ from typing import Optional
 
 from langchain_core.tools import tool
 
+from src.tools.context_var import get_tool_context
 from src.tools.base import (
     ToolContext, 
     format_company, 
@@ -23,12 +24,9 @@ from src.tools.confirmation import (
 logger = logging.getLogger(__name__)
 
 
-def get_create_tools(context: ToolContext) -> list:
-    """Get all CREATE tools configured with the given context.
-    
-    Args:
-        context: Tool context with auth and workspace info
-        
+def get_create_tools() -> list:
+    """Get all CREATE tools.
+
     Returns:
         List of tool functions
     """
@@ -81,6 +79,7 @@ def get_create_tools(context: ToolContext) -> list:
             feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
             return f"Company creation cancelled by user.{feedback}"
         
+        context = get_tool_context()
         client = context.get_client()
         
         mutation = """
@@ -199,6 +198,7 @@ def get_create_tools(context: ToolContext) -> list:
             feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
             return f"Person creation cancelled by user.{feedback}"
         
+        context = get_tool_context()
         client = context.get_client()
         
         mutation = """
@@ -327,6 +327,7 @@ def get_create_tools(context: ToolContext) -> list:
             feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
             return f"Group creation cancelled by user.{feedback}"
         
+        context = get_tool_context()
         client = context.get_client()
         
         mutation = """
@@ -403,6 +404,7 @@ def get_create_tools(context: ToolContext) -> list:
         Returns:
             Confirmation message with the created view details
         """
+        context = get_tool_context()
         client = context.get_client()
         
         # First, get the group to determine target entity if not provided
@@ -618,6 +620,7 @@ def get_create_tools(context: ToolContext) -> list:
         if entity_type.upper() not in valid_types:
             return f"Invalid entity type '{entity_type}'. Must be one of: {', '.join(valid_types)}"
         
+        context = get_tool_context()
         client = context.get_client()
         
         mutation = """
