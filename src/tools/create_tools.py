@@ -11,6 +11,8 @@ from src.tools.base import (
     format_company, 
     format_person, 
     format_group,
+    format_reminder,
+    format_note,
     DataChange,
     EntityType,
     ChangeAction,
@@ -674,6 +676,7 @@ def get_create_tools() -> list:
         create_person,
         create_group,
         create_view_in_group,
+        create_reminder,
         create_note,
     ]
 
