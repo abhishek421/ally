@@ -29,7 +29,7 @@ class UserProfile:
     email: str | None = None
 
 
-async def resolve_user_profile(auth: AuthContext) -> UserProfile:
+async def resolve_user_profile(auth: AuthContext, client: GraphQLClient) -> UserProfile:
     """Resolve the user's profile including database ID and name.
 
     The JWT token contains a Cognito sub, but the backend database uses
@@ -38,11 +38,11 @@ async def resolve_user_profile(auth: AuthContext) -> UserProfile:
 
     Args:
         auth: Auth context from the request
+        client: Shared GraphQL client for this request
 
     Returns:
         UserProfile with database user ID and profile info
     """
-    client = GraphQLClient(auth.auth_token, auth.workspace_id, auth.session_id)
     try:
         profile = await client.get_current_user_profile()
         if profile:
@@ -57,11 +57,9 @@ async def resolve_user_profile(auth: AuthContext) -> UserProfile:
     except Exception as e:
         logger.error(f"Error resolving user profile: {e}")
         return UserProfile(user_id=auth.user_id)
-    finally:
-        await client.close()
 
 
-async def resolve_workspace_instructions(auth: AuthContext) -> str | None:
+async def resolve_workspace_instructions(auth: AuthContext, client: GraphQLClient) -> str | None:
     """Fetch custom instructions for the workspace.
 
     These instructions are set by workspace admins to provide business
@@ -69,12 +67,12 @@ async def resolve_workspace_instructions(auth: AuthContext) -> str | None:
 
     Args:
         auth: Auth context from the request
+        client: Shared GraphQL client for this request
 
     Returns:
         Custom instructions string or None if not set
     """
     logger.info(f"🔍 Fetching custom instructions for workspace: {auth.workspace_id}")
-    client = GraphQLClient(auth.auth_token, auth.workspace_id, auth.session_id)
     try:
         instructions = await client.get_workspace_custom_instructions()
         if instructions:
@@ -86,8 +84,6 @@ async def resolve_workspace_instructions(auth: AuthContext) -> str | None:
     except Exception as e:
         logger.warning(f"❌ Error fetching workspace instructions: {e}")
         return None
-    finally:
-        await client.close()
 
 
 def extract_group_id_from_url(active_url: str | None) -> str | None:
@@ -111,7 +107,7 @@ def extract_group_id_from_url(active_url: str | None) -> str | None:
     return match.group(1) if match else None
 
 
-async def resolve_group_instructions(auth: AuthContext, active_url: str | None) -> str | None:
+async def resolve_group_instructions(auth: AuthContext, active_url: str | None, client: GraphQLClient) -> str | None:
     """Fetch custom instructions for the active group.
 
     These instructions are set by group creators or workspace admins to provide
@@ -120,6 +116,7 @@ async def resolve_group_instructions(auth: AuthContext, active_url: str | None) 
     Args:
         auth: Auth context from the request
         active_url: The current page URL the user is viewing
+        client: Shared GraphQL client for this request
 
     Returns:
         Custom instructions string or None if not set or not on a group page
@@ -129,7 +126,6 @@ async def resolve_group_instructions(auth: AuthContext, active_url: str | None) 
         return None
 
     logger.info(f"🔍 Fetching custom instructions for group: {group_id}")
-    client = GraphQLClient(auth.auth_token, auth.workspace_id, auth.session_id)
     try:
         instructions = await client.get_group_custom_instructions(group_id)
         if instructions:
@@ -140,8 +136,6 @@ async def resolve_group_instructions(auth: AuthContext, active_url: str | None) 
     except Exception as e:
         logger.warning(f"❌ Error fetching group instructions: {e}")
         return None
-    finally:
-        await client.close()
 
 
 class ChatRequest(BaseModel):
@@ -241,6 +235,9 @@ async def event_generator(
             "event": "done",
             "data": json.dumps({}),
         }
+    finally:
+        # Clean up the tool-level shared GraphQL client
+        await context.close_client()
 
 
 @router.post("/chat")
@@ -271,12 +268,17 @@ async def chat(
     - `error` - Error message if something went wrong
     - `done` - Stream completion signal
     """
-    # Fetch user profile, workspace instructions, and group instructions in parallel
-    user_profile, workspace_instructions, group_instructions = await asyncio.gather(
-        resolve_user_profile(auth),
-        resolve_workspace_instructions(auth),
-        resolve_group_instructions(auth, request.activeURL),
-    )
+    # Use a single shared GraphQL client for all parallel resolution calls
+    resolution_client = GraphQLClient(auth.auth_token, auth.workspace_id, auth.session_id)
+    try:
+        # Fetch user profile, workspace instructions, and group instructions in parallel
+        user_profile, workspace_instructions, group_instructions = await asyncio.gather(
+            resolve_user_profile(auth, resolution_client),
+            resolve_workspace_instructions(auth, resolution_client),
+            resolve_group_instructions(auth, request.activeURL, resolution_client),
+        )
+    finally:
+        await resolution_client.close()
 
     # Log the incoming query in a clean format
     query_preview = request.message[:80] + "..." if len(request.message) > 80 else request.message
@@ -348,6 +350,9 @@ async def confirmation_event_generator(
             "event": "done",
             "data": json.dumps({}),
         }
+    finally:
+        # Clean up the tool-level shared GraphQL client
+        await context.close_client()
 
 
 @router.post("/chat/confirm")
@@ -376,12 +381,17 @@ async def confirm_action(
     Same event types as /chat endpoint.
     """
 
-    # Fetch user profile, workspace instructions, and group instructions in parallel
-    user_profile, workspace_instructions, group_instructions = await asyncio.gather(
-        resolve_user_profile(auth),
-        resolve_workspace_instructions(auth),
-        resolve_group_instructions(auth, request.activeURL),
-    )
+    # Use a single shared GraphQL client for all parallel resolution calls
+    resolution_client = GraphQLClient(auth.auth_token, auth.workspace_id, auth.session_id)
+    try:
+        # Fetch user profile, workspace instructions, and group instructions in parallel
+        user_profile, workspace_instructions, group_instructions = await asyncio.gather(
+            resolve_user_profile(auth, resolution_client),
+            resolve_workspace_instructions(auth, resolution_client),
+            resolve_group_instructions(auth, request.activeURL, resolution_client),
+        )
+    finally:
+        await resolution_client.close()
 
     # Create tool context with user profile, workspace instructions, and group instructions
     context = ToolContext(
@@ -462,4 +472,3 @@ async def get_conversation_history(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get conversation history: {str(e)}",
         )
-
