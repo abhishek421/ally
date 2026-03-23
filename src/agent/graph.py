@@ -1,8 +1,8 @@
-"""LangGraph ReAct agent implementation."""
-
+import json
 import logging
 import re
-from typing import Any
+import time
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -11,7 +11,6 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command, interrupt
-import time
 
 from src.config import get_settings
 from src.agent.prompts import get_system_prompt
@@ -20,6 +19,51 @@ from src.tools.base import ToolContext, parse_data_change
 from src.agent.intent import classify_intent
 
 logger = logging.getLogger(__name__)
+
+def get_context_window(model_name: str) -> int:
+    """Get the context window limit for a given model name."""
+    settings = get_settings()
+    windows = settings.model_context_windows
+    
+    if model_name in windows:
+        return windows[model_name]
+    
+    for key, value in windows.items():
+        if model_name.startswith(key):
+            return value
+            
+    return settings.default_context_window
+
+
+def compute_budget_status(total_tokens: int, model_name: str) -> dict:
+    """Compute the budget status for a conversation.
+    
+    Returns a dict with model, limit, used, remaining, percentage_used,
+    and status ("ok" | "warning" | "blocked").
+    """
+    settings = get_settings()
+    limit = get_context_window(model_name)
+    remaining = max(0, limit - total_tokens)
+    percentage_used = min(100.0, (total_tokens / limit) * 100) if limit > 0 else 0
+    
+    warning_pct = settings.context_warning_threshold * 100   # 70
+    limit_pct = settings.context_limit_threshold * 100       # 80
+    
+    if percentage_used >= limit_pct:
+        status = "blocked"
+    elif percentage_used >= warning_pct:
+        status = "warning"
+    else:
+        status = "ok"
+    
+    return {
+        "model": model_name,
+        "limit": limit,
+        "used": total_tokens,
+        "remaining": remaining,
+        "percentage_used": round(percentage_used, 2),
+        "status": status,
+    }
 
 
 def _extract_text_content(content: Any) -> str:
@@ -197,11 +241,66 @@ Title:"""
         if not title:
             return "New Conversation", title_token_usage
         
+        # Log title generation telemetry
+        if title_token_usage:
+            telemetry = {
+                "event": "token_usage",
+                "request_type": "title_generation",
+                "model": getattr(llm, "model_name", "unknown"),
+                "tokens": title_token_usage
+            }
+            logger.info(f"📊 TELEMETRY: {json.dumps(telemetry)}")
+        
+
         return title, title_token_usage
         
     except Exception as e:
         logger.error(f"Error generating conversation title: {e}")
         return "New Conversation", title_token_usage
+
+
+async def get_conversation_usage(conversation_id: str) -> dict:
+    """Fetch history and calculate cumulative token usage from metadata.
+    
+    Args:
+        conversation_id: The thread ID to check
+        
+    Returns:
+        Dict with input_tokens, output_tokens, total_tokens
+    """
+    try:
+        checkpointer = await get_checkpointer()
+        config = {"configurable": {"thread_id": conversation_id}}
+        
+        # Get the latest state from checkpointer
+        state_data = await checkpointer.aget(config)
+        if not state_data:
+            return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+            
+        # LangGraph savers return a CheckpointTuple; the checkpoint is in the 'checkpoint' key/attr
+        checkpoint = state_data.get("checkpoint") if isinstance(state_data, dict) else getattr(state_data, "checkpoint", state_data)
+        
+        # messages are usually in channel_values
+        channel_values = checkpoint.get("channel_values") if isinstance(checkpoint, dict) else getattr(checkpoint, "channel_values", {})
+        messages = channel_values.get("messages", [])
+        
+        total_input = 0
+        total_output = 0
+        
+        for msg in messages:
+            if hasattr(msg, "usage_metadata") and msg.usage_metadata:
+                total_input += msg.usage_metadata.get("input_tokens", 0)
+                total_output += msg.usage_metadata.get("output_tokens", 0)
+        
+        return {
+            "input_tokens": total_input,
+            "output_tokens": total_output,
+            "total_tokens": total_input + total_output
+        }
+    except Exception as e:
+        logger.warning(f"Error calculating conversation usage: {e}")
+        return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
 
 
 async def get_checkpointer():
@@ -460,6 +559,29 @@ async def stream_agent(
     heartbeat_interval = 1.5  # seconds
     has_seen_tool_result = False
 
+    # PRE-REQUEST BUDGET CHECK
+    settings = get_settings()
+    history_usage = await get_conversation_usage(conversation_id)
+    pre_check = compute_budget_status(history_usage["total_tokens"], settings.llm_model)
+    
+    if pre_check["status"] == "blocked":
+        logger.warning(
+            f"🚫 BUDGET EXCEEDED for conversation {conversation_id}: "
+            f"{pre_check['percentage_used']}% used ({pre_check['used']}/{pre_check['limit']} tokens)"
+        )
+        yield {
+            "type": "context_window_status",
+            "data": pre_check,
+        }
+        yield {
+            "type": "error",
+            "data": {
+                "message": "This conversation has reached its context limit. Please start a new conversation for best results."
+            },
+        }
+        yield {"type": "done", "data": {}}
+        return
+
     try:
         # Stream using updates mode to get step-by-step progress
         async for chunk in agent.astream(
@@ -557,7 +679,8 @@ async def stream_agent(
                                     "type": "data_changed",
                                     "data": change_data,
                                 }
-        # Emit token usage summary
+        # Emit token usage summary and telemetry
+
         if llm_call_count > 0:
             logger.info(
                 f"📊 TOKEN USAGE: {request_token_usage['input_tokens']} input "
@@ -565,6 +688,20 @@ async def stream_agent(
                 f"= {request_token_usage['total_tokens']} total "
                 f"({llm_call_count} LLM call{'s' if llm_call_count != 1 else ''})"
             )
+            
+            # Log structured telemetry
+            settings = get_settings()
+            telemetry = {
+                "event": "token_usage",
+                "request_type": "chat",
+                "conversation_id": conversation_id,
+                "model": settings.llm_model,
+                "tokens": request_token_usage,
+                "llm_calls": llm_call_count
+            }
+            logger.info(f"📊 TELEMETRY: {json.dumps(telemetry)}")
+            
+
             yield {
                 "type": "token_usage",
                 "data": {
@@ -572,6 +709,17 @@ async def stream_agent(
                     "llm_calls": llm_call_count,
                 },
             }
+
+            # Emit Context Window Status
+            post_history = await get_conversation_usage(conversation_id)
+            cumulative_total = post_history["total_tokens"] + request_token_usage["total_tokens"]
+            budget_status = compute_budget_status(cumulative_total, settings.llm_model)
+            
+            yield {
+                "type": "context_window_status",
+                "data": budget_status,
+            }
+
 
         # Signal completion
         yield {"type": "done", "data": {}}
@@ -720,7 +868,8 @@ async def resume_agent(
                                     "result": cleaned_result,
                                 },
                             }
-        # Emit token usage summary
+        # Emit token usage summary and telemetry
+
         if llm_call_count > 0:
             logger.info(
                 f"📊 TOKEN USAGE: {request_token_usage['input_tokens']} input "
@@ -728,6 +877,20 @@ async def resume_agent(
                 f"= {request_token_usage['total_tokens']} total "
                 f"({llm_call_count} LLM call{'s' if llm_call_count != 1 else ''})"
             )
+            
+            # Log structured telemetry
+            settings = get_settings()
+            telemetry = {
+                "event": "token_usage",
+                "request_type": "chat_resume",
+                "conversation_id": conversation_id,
+                "model": settings.llm_model,
+                "tokens": request_token_usage,
+                "llm_calls": llm_call_count
+            }
+            logger.info(f"📊 TELEMETRY: {json.dumps(telemetry)}")
+            
+
             yield {
                 "type": "token_usage",
                 "data": {
@@ -735,6 +898,17 @@ async def resume_agent(
                     "llm_calls": llm_call_count,
                 },
             }
+
+            # Emit Context Window Status
+            post_history = await get_conversation_usage(conversation_id)
+            cumulative_total = post_history["total_tokens"] + request_token_usage["total_tokens"]
+            budget_status = compute_budget_status(cumulative_total, settings.llm_model)
+            
+            yield {
+                "type": "context_window_status",
+                "data": budget_status,
+            }
+
 
         # Signal completion
         yield {"type": "done", "data": {}}
