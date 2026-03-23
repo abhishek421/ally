@@ -5,6 +5,7 @@ from typing import Optional
 
 from langchain_core.tools import tool
 
+from src.tools.context_var import get_tool_context
 from src.tools.base import (
     ToolContext,
     format_company,
@@ -15,6 +16,7 @@ from src.tools.base import (
     EntityType,
     ChangeAction,
 )
+from src.tools.reminder_tools import format_reminder
 from src.tools.confirmation import (
     request_update_confirmation,
     request_delete_confirmation,
@@ -28,12 +30,9 @@ from src.tools.confirmation import (
 logger = logging.getLogger(__name__)
 
 
-def get_update_tools(context: ToolContext) -> list:
-    """Get all UPDATE tools configured with the given context.
-    
-    Args:
-        context: Tool context with auth and workspace info
-        
+def get_update_tools() -> list:
+    """Get all UPDATE tools.
+
     Returns:
         List of tool functions
     """
@@ -49,6 +48,7 @@ def get_update_tools(context: ToolContext) -> list:
         Returns:
             Confirmation message
         """
+        context = get_tool_context()
         client = context.get_client()
         
         mutation = """
@@ -122,6 +122,7 @@ def get_update_tools(context: ToolContext) -> list:
             feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
             return f"Removal cancelled by user.{feedback}"
         
+        context = get_tool_context()
         client = context.get_client()
         
         mutation = """
@@ -171,6 +172,7 @@ def get_update_tools(context: ToolContext) -> list:
         Returns:
             Confirmation message
         """
+        context = get_tool_context()
         client = context.get_client()
         
         mutation = """
@@ -244,6 +246,7 @@ def get_update_tools(context: ToolContext) -> list:
             feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
             return f"Removal cancelled by user.{feedback}"
         
+        context = get_tool_context()
         client = context.get_client()
         
         mutation = """
@@ -296,6 +299,7 @@ def get_update_tools(context: ToolContext) -> list:
         Returns:
             Confirmation message
         """
+        context = get_tool_context()
         client = context.get_client()
         
         mutation = """
@@ -343,6 +347,7 @@ def get_update_tools(context: ToolContext) -> list:
         Returns:
             Confirmation message
         """
+        context = get_tool_context()
         client = context.get_client()
         
         mutation = """
@@ -419,6 +424,7 @@ def get_update_tools(context: ToolContext) -> list:
             feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
             return f"Company update cancelled by user.{feedback}"
         
+        context = get_tool_context()
         client = context.get_client()
         
         mutation = """
@@ -515,6 +521,7 @@ def get_update_tools(context: ToolContext) -> list:
             feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
             return f"Person update cancelled by user.{feedback}"
         
+        context = get_tool_context()
         client = context.get_client()
         
         mutation = """
@@ -589,6 +596,7 @@ def get_update_tools(context: ToolContext) -> list:
         Returns:
             Confirmation message with updated group details
         """
+        context = get_tool_context()
         client = context.get_client()
         
         mutation = """
@@ -765,6 +773,7 @@ def get_update_tools(context: ToolContext) -> list:
         if not value and not select_option_id:
             return "Please provide either 'value' (for TEXT/NUMBER columns) or 'select_option_id' (for SELECT/MULTISELECT columns)."
         
+        context = get_tool_context()
         client = context.get_client()
         
         try:
@@ -913,6 +922,7 @@ def get_update_tools(context: ToolContext) -> list:
         if not value and not select_option_id:
             return "Please provide either 'value' (for TEXT/NUMBER columns) or 'select_option_id' (for SELECT/MULTISELECT columns)."
         
+        context = get_tool_context()
         client = context.get_client()
         
         try:
@@ -1044,6 +1054,7 @@ def get_update_tools(context: ToolContext) -> list:
         """
         from src.tools.base import fuzzy_match_entities
 
+        context = get_tool_context()
         client = context.get_client()
 
         # Variables to hold resolved data
@@ -1264,6 +1275,7 @@ def get_update_tools(context: ToolContext) -> list:
         """
         from src.tools.base import fuzzy_match_entities
 
+        context = get_tool_context()
         client = context.get_client()
 
         # Variables to hold resolved data
@@ -1495,6 +1507,7 @@ def get_update_tools(context: ToolContext) -> list:
             feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
             return f"Reminder update cancelled by user.{feedback}"
             
+        context = get_tool_context()
         client = context.get_client()
         
         mutation = """
@@ -1558,6 +1571,7 @@ def get_update_tools(context: ToolContext) -> list:
             feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
             return f"Deletion cancelled by user.{feedback}"
             
+        context = get_tool_context()
         client = context.get_client()
         
         mutation = """

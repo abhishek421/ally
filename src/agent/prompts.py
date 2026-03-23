@@ -1,6 +1,11 @@
 """System prompts for the Ally AI agent."""
 
+import logging
 from typing import Optional
+
+from langchain_core.messages import SystemMessage
+
+logger = logging.getLogger(__name__)
 
 
 # Base system prompt template with placeholder for user context
@@ -349,6 +354,116 @@ def get_system_prompt(
 """
 
     return prompt
+
+
+def _build_dynamic_context(
+    user_first_name: Optional[str] = None,
+    is_new_conversation: bool = True,
+    workspace_instructions: Optional[str] = None,
+    group_instructions: Optional[str] = None,
+) -> str:
+    """Build only the dynamic portion of the system prompt.
+
+    This is the part that changes per-user and per-request.
+    Kept small so LLM providers only need to process this on each call.
+    """
+    parts: list[str] = []
+
+    if workspace_instructions:
+        parts.append(
+            WORKSPACE_INSTRUCTIONS_TEMPLATE.format(instructions=workspace_instructions)
+        )
+
+    if group_instructions:
+        parts.append(
+            GROUP_INSTRUCTIONS_TEMPLATE.format(instructions=group_instructions)
+        )
+
+    if user_first_name:
+        greeting_instruction = (
+            NEW_CONVERSATION_GREETING.format(user_name=user_first_name)
+            if is_new_conversation
+            else EXISTING_CONVERSATION_GREETING.format(user_name=user_first_name)
+        )
+        parts.append(
+            USER_CONTEXT_TEMPLATE.format(
+                user_name=user_first_name,
+                greeting_instruction=greeting_instruction,
+            )
+        )
+    else:
+        parts.append(
+            """
+## Your Personality & Tone
+- Be warm and conversational, like a helpful colleague
+- Use contractions for a natural feel
+- Avoid robotic phrases
+
+## Being Helpful
+- If the user seems confused, proactively explain in simpler terms
+- Offer follow-up suggestions
+- Keep responses concise but warm
+"""
+        )
+
+    return "\n".join(parts)
+
+
+def get_system_prompt_messages(
+    user_first_name: Optional[str] = None,
+    is_new_conversation: bool = True,
+    workspace_instructions: Optional[str] = None,
+    group_instructions: Optional[str] = None,
+    is_anthropic: bool = False,
+) -> list[SystemMessage]:
+    """Build system prompt as a list of messages for prompt caching.
+
+    Splits the prompt into two SystemMessages:
+      1. Static base prompt (~220 lines) — identical across all users and requests.
+         LLM providers cache this prefix so it isn't re-processed every call.
+      2. Dynamic context (user name, greeting, workspace/group instructions) — small,
+         changes per-request.
+
+    For Anthropic, the static message includes a cache_control marker so the provider
+    knows to cache it explicitly. OpenAI and Gemini cache automatically based on
+    matching prefixes.
+
+    Args:
+        user_first_name: User's first name for personalization
+        is_new_conversation: Whether this is the first message in the conversation
+        workspace_instructions: Custom instructions set by workspace admin
+        group_instructions: Custom instructions for the active group
+        is_anthropic: Whether the current LLM provider is Anthropic
+
+    Returns:
+        List of SystemMessage objects [static_msg, dynamic_msg]
+    """
+    # --- Message 1: Static base prompt (CACHEABLE) ---
+    static_kwargs = {}
+    if is_anthropic:
+        # Anthropic's prompt caching: mark the static block for explicit caching.
+        # This tells the API to cache this prefix, reducing TTFT by up to 85%.
+        static_kwargs["additional_kwargs"] = {
+            "cache_control": {"type": "ephemeral"}
+        }
+
+    static_msg = SystemMessage(content=BASE_SYSTEM_PROMPT, **static_kwargs)
+
+    # --- Message 2: Dynamic context (small, per-request) ---
+    dynamic_content = _build_dynamic_context(
+        user_first_name=user_first_name,
+        is_new_conversation=is_new_conversation,
+        workspace_instructions=workspace_instructions,
+        group_instructions=group_instructions,
+    )
+    dynamic_msg = SystemMessage(content=dynamic_content)
+
+    logger.info(
+        f"📋 Prompt split: static={len(BASE_SYSTEM_PROMPT)} chars (cached), "
+        f"dynamic={len(dynamic_content)} chars"
+    )
+
+    return [static_msg, dynamic_msg]
 
 
 # Keep SYSTEM_PROMPT as alias for backwards compatibility (uses default - no user context)
