@@ -737,7 +737,7 @@ async def stream_agent(
                 f"= {request_token_usage['total_tokens']} total "
                 f"({llm_call_count} LLM call{'s' if llm_call_count != 1 else ''})"
             )
-            
+
             # Log structured telemetry
             settings = get_settings()
             telemetry = {
@@ -762,14 +762,14 @@ async def stream_agent(
             post_history = await get_conversation_usage(conversation_id)
             cumulative_total = post_history["total_tokens"] + request_token_usage["total_tokens"]
             budget_status = compute_budget_status(cumulative_total, settings.llm_model)
-            
+
             yield {
                 "type": "context_window_status",
                 "data": budget_status,
             }
             post_done_ms = (time.time() - done_time) * 1000
             logger.info(f"📊 Post-done metadata completed in {post_done_ms:.0f}ms (invisible to user)")
-        
+
     except Exception as e:
         logger.error(f"Error in stream_agent: {e}")
         yield {"type": "error", "data": {"message": str(e)}}
@@ -927,7 +927,7 @@ async def resume_agent(
                 f"= {request_token_usage['total_tokens']} total "
                 f"({llm_call_count} LLM call{'s' if llm_call_count != 1 else ''})"
             )
-            
+
             # Log structured telemetry
             settings = get_settings()
             telemetry = {
@@ -952,14 +952,14 @@ async def resume_agent(
             post_history = await get_conversation_usage(conversation_id)
             cumulative_total = post_history["total_tokens"] + request_token_usage["total_tokens"]
             budget_status = compute_budget_status(cumulative_total, settings.llm_model)
-            
+
             yield {
                 "type": "context_window_status",
                 "data": budget_status,
             }
             post_done_ms = (time.time() - done_time) * 1000
             logger.info(f"📊 Post-done metadata completed in {post_done_ms:.0f}ms (invisible to user)")
-        
+
     except Exception as e:
         logger.error(f"Error resuming agent: {e}")
         yield {"type": "error", "data": {"message": str(e)}}

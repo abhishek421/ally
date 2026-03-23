@@ -11,6 +11,8 @@ from src.tools.base import (
     format_company, 
     format_person, 
     format_group,
+    format_reminder,
+    format_note,
     DataChange,
     EntityType,
     ChangeAction,
