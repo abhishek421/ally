@@ -722,8 +722,14 @@ async def stream_agent(
                                     "type": "data_changed",
                                     "data": change_data,
                                 }
-        # Emit token usage summary and telemetry
+        # Signal completion FIRST so the frontend unlocks the input immediately.
+        # Metadata events (token_usage, context_window_status) follow as
+        # non-blocking tail events that the frontend processes independently.
+        done_time = time.time()
+        logger.info(f"✅ DONE event emitted — UI unlocked")
+        yield {"type": "done", "data": {}}
 
+        # Emit token usage summary and telemetry (after done — no user-perceived delay)
         if llm_call_count > 0:
             logger.info(
                 f"📊 TOKEN USAGE: {request_token_usage['input_tokens']} input "
@@ -731,7 +737,7 @@ async def stream_agent(
                 f"= {request_token_usage['total_tokens']} total "
                 f"({llm_call_count} LLM call{'s' if llm_call_count != 1 else ''})"
             )
-            
+
             # Log structured telemetry
             settings = get_settings()
             telemetry = {
@@ -743,7 +749,6 @@ async def stream_agent(
                 "llm_calls": llm_call_count
             }
             logger.info(f"📊 TELEMETRY: {json.dumps(telemetry)}")
-            
 
             yield {
                 "type": "token_usage",
@@ -757,16 +762,14 @@ async def stream_agent(
             post_history = await get_conversation_usage(conversation_id)
             cumulative_total = post_history["total_tokens"] + request_token_usage["total_tokens"]
             budget_status = compute_budget_status(cumulative_total, settings.llm_model)
-            
+
             yield {
                 "type": "context_window_status",
                 "data": budget_status,
             }
+            post_done_ms = (time.time() - done_time) * 1000
+            logger.info(f"📊 Post-done metadata completed in {post_done_ms:.0f}ms (invisible to user)")
 
-
-        # Signal completion
-        yield {"type": "done", "data": {}}
-        
     except Exception as e:
         logger.error(f"Error in stream_agent: {e}")
         yield {"type": "error", "data": {"message": str(e)}}
@@ -911,8 +914,12 @@ async def resume_agent(
                                     "result": cleaned_result,
                                 },
                             }
-        # Emit token usage summary and telemetry
+        # Signal completion FIRST so the frontend unlocks the input immediately.
+        done_time = time.time()
+        logger.info(f"✅ DONE event emitted — UI unlocked")
+        yield {"type": "done", "data": {}}
 
+        # Emit token usage summary and telemetry (after done — no user-perceived delay)
         if llm_call_count > 0:
             logger.info(
                 f"📊 TOKEN USAGE: {request_token_usage['input_tokens']} input "
@@ -920,7 +927,7 @@ async def resume_agent(
                 f"= {request_token_usage['total_tokens']} total "
                 f"({llm_call_count} LLM call{'s' if llm_call_count != 1 else ''})"
             )
-            
+
             # Log structured telemetry
             settings = get_settings()
             telemetry = {
@@ -932,7 +939,6 @@ async def resume_agent(
                 "llm_calls": llm_call_count
             }
             logger.info(f"📊 TELEMETRY: {json.dumps(telemetry)}")
-            
 
             yield {
                 "type": "token_usage",
@@ -946,16 +952,14 @@ async def resume_agent(
             post_history = await get_conversation_usage(conversation_id)
             cumulative_total = post_history["total_tokens"] + request_token_usage["total_tokens"]
             budget_status = compute_budget_status(cumulative_total, settings.llm_model)
-            
+
             yield {
                 "type": "context_window_status",
                 "data": budget_status,
             }
+            post_done_ms = (time.time() - done_time) * 1000
+            logger.info(f"📊 Post-done metadata completed in {post_done_ms:.0f}ms (invisible to user)")
 
-
-        # Signal completion
-        yield {"type": "done", "data": {}}
-        
     except Exception as e:
         logger.error(f"Error resuming agent: {e}")
         yield {"type": "error", "data": {"message": str(e)}}
