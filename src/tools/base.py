@@ -286,129 +286,140 @@ class BaseTool:
         await self.client.close()
 
 
-def format_company(company: dict) -> str:
+def format_company(company: dict, compact: bool = False) -> str:
     """Format a company dict for display.
-    
+
     Args:
         company: Company data from GraphQL
-        
+        compact: If True, return name + ID only (saves tokens)
+
     Returns:
         Formatted string representation
     """
     lines = [f"**{company.get('name', 'Unknown')}** (ID: {company.get('id', 'N/A')})"]
-    
+
+    if compact:
+        return lines[0]
+
     if company.get('description'):
         lines.append(f"  Description: {company['description']}")
-    
+
     emails = company.get('emails', [])
     if emails:
         email_str = ", ".join(e.get('value', '') for e in emails if e.get('value'))
         if email_str:
             lines.append(f"  Emails: {email_str}")
-    
+
     phones = company.get('phoneNumbers', [])
     if phones:
         phone_str = ", ".join(p.get('value', '') for p in phones if p.get('value'))
         if phone_str:
             lines.append(f"  Phone: {phone_str}")
-    
+
     return "\n".join(lines)
 
 
-def format_person(person: dict) -> str:
+def format_person(person: dict, compact: bool = False) -> str:
     """Format a person dict for display.
-    
+
     Args:
         person: Person data from GraphQL
-        
+        compact: If True, return name + ID + job title only (saves tokens)
+
     Returns:
         Formatted string representation
     """
     name = f"{person.get('firstName', '')} {person.get('lastName', '')}".strip() or "Unknown"
     lines = [f"**{name}** (ID: {person.get('id', 'N/A')})"]
-    
+
     if person.get('jobTitle'):
         lines.append(f"  Job Title: {person['jobTitle']}")
-    
+
+    if compact:
+        return "\n".join(lines)
+
     if person.get('description'):
         lines.append(f"  Description: {person['description']}")
-    
+
     emails = person.get('emails', [])
     if emails:
         email_str = ", ".join(e.get('value', '') for e in emails if e.get('value'))
         if email_str:
             lines.append(f"  Emails: {email_str}")
-    
+
     phones = person.get('phoneNumbers', [])
     if phones:
         phone_str = ", ".join(p.get('value', '') for p in phones if p.get('value'))
         if phone_str:
             lines.append(f"  Phone: {phone_str}")
-    
+
     companies = person.get('companyMetaData', [])
     if companies:
         company_names = [
-            c.get('company', {}).get('name', '') 
-            for c in companies 
+            c.get('company', {}).get('name', '')
+            for c in companies
             if c.get('company', {}).get('name')
         ]
         if company_names:
             lines.append(f"  Companies: {', '.join(company_names)}")
-    
+
     return "\n".join(lines)
 
 
-def format_email(email: dict) -> str:
+def format_email(email: dict, compact: bool = False) -> str:
     """Format an email/interaction dict for display.
-    
+
     Args:
         email: Email interaction data from GraphQL
-        
+        compact: If True, return subject + date + message ID only (saves tokens)
+
     Returns:
         Formatted string representation
     """
     subject = email.get('subject') or '(No subject)'
     direction = email.get('direction', 'unknown')
     direction_icon = "📤" if direction == "sent" else "📥"
-    
+
     lines = [f"{direction_icon} **{subject}**"]
-    
+
     # Date
     date = email.get('date', '')
     if date:
-        # Format date nicely if it's a string
         if isinstance(date, str):
             lines.append(f"  Date: {date[:10] if len(date) >= 10 else date}")
         else:
             lines.append(f"  Date: {date}")
-            
-    # IDs (for tool use)
+
+    # IDs (always included — agent needs these)
     msg_id = email.get('messageId')
     if msg_id:
         lines.append(f"  Message ID: {msg_id}")
-        
+
     thread_id = email.get('threadId')
     if thread_id:
         lines.append(f"  Thread ID: {thread_id}")
-    
+
+    if compact:
+        return "\n".join(lines)
+
     # From/To
     from_addr = email.get('from', '')
     if from_addr:
         lines.append(f"  From: {from_addr}")
-    
+
     to_addrs = email.get('to', [])
     if to_addrs:
         lines.append(f"  To: {', '.join(to_addrs[:3])}" + (" ..." if len(to_addrs) > 3 else ""))
-    
+
     # Interaction type (for manual interactions)
     interaction_type = email.get('interactionType')
     if interaction_type:
         lines.append(f"  Type: {interaction_type}")
-    
+
     event_name = email.get('eventName')
     if event_name:
         lines.append(f"  Event: {event_name}")
-    
+
     # Body preview (first 150 chars)
     body = email.get('body', '')
     if body:
@@ -416,37 +427,41 @@ def format_email(email: dict) -> str:
         if len(body) > 150:
             preview += "..."
         lines.append(f"  Preview: {preview}")
-    
+
     return "\n".join(lines)
 
 
-def format_group(group: dict) -> str:
+def format_group(group: dict, compact: bool = False) -> str:
     """Format a group dict for display.
-    
+
     Args:
         group: Group data from GraphQL
-        
+        compact: If True, return emoji + name + ID + type only (saves tokens)
+
     Returns:
         Formatted string representation
     """
     emoji = group.get('emoji', '')
     name = group.get('name', 'Unknown')
     lines = [f"**{emoji} {name}** (ID: {group.get('id', 'N/A')})"]
-    
-    if group.get('description'):
-        lines.append(f"  Description: {group['description']}")
-    
+
     group_type = group.get('type', 'Unknown')
     lines.append(f"  Type: {group_type}")
-    
+
+    if compact:
+        return "\n".join(lines)
+
+    if group.get('description'):
+        lines.append(f"  Description: {group['description']}")
+
     is_private = group.get('isPrivate', False)
     lines.append(f"  Private: {'Yes' if is_private else 'No'}")
-    
+
     views = group.get('views', [])
     if views:
         view_names = [v.get('name', '') for v in views if v.get('name')]
         if view_names:
             lines.append(f"  Views: {', '.join(view_names)}")
-    
+
     return "\n".join(lines)
 

@@ -5,6 +5,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -14,11 +15,9 @@ from langgraph.types import Command, interrupt
 
 from src.config import get_settings
 from src.agent.prompts import get_system_prompt, get_system_prompt_messages
-from src.tools import get_all_tools, get_tools_for_categories
+from src.tools import get_all_tools
 from src.tools.base import ToolContext, parse_data_change
 from src.tools.context_var import set_tool_context
-from src.agent.intent import classify_intent
-from src.agent.compression import compress_messages
 from src.agent.state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -112,8 +111,8 @@ _memory_saver: MemorySaver | None = None
 _cached_llm = None
 _cached_mini_llm = None
 
-# Cached compiled agent (graph compiled once, reused for all requests)
-_cached_agent = None
+# Track whether the agent has been compiled at least once (for logging)
+_agent_compiled_once = False
 
 
 def get_llm():
@@ -425,39 +424,22 @@ def create_agent_for_context(
     context: ToolContext,
     checkpointer=None,
     is_new_conversation: bool = True,
-    categories: Optional[List[Any]] = None,
+    tools: list | None = None,
 ):
-    """Create a ReAct agent with tools configured for the given context.
-
-    Uses a cached compiled graph if available. Only the prompt and
-    per-request context (via set_tool_context) change between calls.
+    """Create a ReAct agent for the given context.
 
     Args:
         context: Tool context with auth and workspace info
         checkpointer: Optional checkpointer for conversation memory
         is_new_conversation: Whether this is the first message (for greeting behavior)
-        categories: Intent categories for dynamic tool selection
+        tools: Pre-filtered tools list. When None, falls back to get_all_tools().
     """
-    global _cached_agent
+    global _agent_compiled_once
 
     # Inject per-request context so tools can access auth dynamically
     set_tool_context(context)
 
-    # Select LLM based on query complexity.
-    # Simple queries (listing, lookups, greetings) use mini model (15x cheaper, ~50% faster).
-    # Complex queries (create, update, research, etc.) use full model.
-    use_mini = False
-    if categories is not None:
-        from src.tools import SIMPLE_CATEGORIES
-        if all(c in SIMPLE_CATEGORIES for c in categories) if categories else True:
-            use_mini = True
-
-    if use_mini:
-        llm = get_mini_llm()
-        logger.info("⚡ Using mini model for simple query")
-    else:
-        llm = get_llm()
-        logger.info("🤖 Using full model for complex query")
+    llm = get_llm()
 
     # Build system prompt as a list of messages for prompt caching.
     # Message 1 = static base prompt (cacheable by LLM providers).
@@ -485,22 +467,15 @@ def create_agent_for_context(
     if context.group_instructions:
         instructions_info.append(f"group ({len(context.group_instructions)} chars)")
 
-    if _cached_agent is not None:
-        if instructions_info:
-            logger.info(f"♻️  Reusing cached agent for {user_name} ({conv_type}) WITH {', '.join(instructions_info)} instructions")
-        else:
-            logger.info(f"♻️  Reusing cached agent for {user_name} ({conv_type}) WITHOUT custom instructions")
-
-        # The agent is rebuilt below with cached LLM + tools
-        pass
-
-    # Build tools dynamically based on inferred user intent
-    if categories is not None:
-        # If categories=[], only ALWAYS_INCLUDE tools are loaded (saves ~20k tokens)
-        tools = get_tools_for_categories(categories)
+    if instructions_info:
+        logger.info(f"🤖 Creating agent for {user_name} ({conv_type}) WITH {', '.join(instructions_info)} instructions")
     else:
-        # Fallback to all tools only if classification was explicitly skipped (standard fallback)
+        logger.info(f"🤖 Creating agent for {user_name} ({conv_type})")
+
+    # Use pre-filtered tools if provided, otherwise load all tools
+    if tools is None:
         tools = get_all_tools()
+    logger.info(f"🔧 Total tools loaded: {len(tools)}")
 
     # Create the agent using the prebuilt ReAct pattern
     agent = create_react_agent(
@@ -511,36 +486,36 @@ def create_agent_for_context(
         state_schema=AgentState,
     )
 
-    if _cached_agent is None:
-        logger.info(f"🤖 Agent compiled for first time [prompt caching ON]")
+    if not _agent_compiled_once:
+        logger.info("🤖 Agent compiled for first time [prompt caching ON]")
+        _agent_compiled_once = True
 
-    _cached_agent = agent
     return agent
 
 
 async def create_agent(
-    context: ToolContext, 
+    context: ToolContext,
     is_new_conversation: bool = True,
-    categories: Optional[List[Any]] = None,
+    tools: list | None = None,
 ):
     """Create a compiled agent with checkpointer.
 
     Args:
         context: Tool context with auth and workspace info
         is_new_conversation: Whether this is the first message (for greeting behavior)
-        categories: Intent categories for dynamic tool selection
+        tools: Pre-filtered tools list. When None, falls back to get_all_tools().
 
     Returns:
         Compiled LangGraph agent with checkpointer
     """
     checkpointer = await get_checkpointer()
-    return create_agent_for_context(context, checkpointer, is_new_conversation, categories)
+    return create_agent_for_context(context, checkpointer, is_new_conversation, tools)
 
 
 async def get_agent(
-    context: ToolContext, 
+    context: ToolContext,
     is_new_conversation: bool = True,
-    categories: Optional[List[Any]] = None,
+    tools: list | None = None,
 ):
     """Get an agent for the given context.
 
@@ -550,13 +525,13 @@ async def get_agent(
     Args:
         context: Tool context with auth and workspace info
         is_new_conversation: Whether this is the first message (for greeting behavior)
-        categories: Intent categories for dynamic tool selection
+        tools: Pre-filtered tools list. When None, falls back to get_all_tools().
 
     Returns:
         Compiled LangGraph agent
     """
     set_tool_context(context)
-    return await create_agent(context, is_new_conversation, categories)
+    return await create_agent(context, is_new_conversation, tools)
 
 
 async def invoke_agent(
@@ -645,15 +620,58 @@ async def stream_agent(
     """
     # Check if this is a new conversation (for greeting behavior)
     is_new = await is_first_message(conversation_id)
-    
-    # Classify intent and load only relevant tools
-    categories = classify_intent(message)
-    logger.info(
-        f"🎯 Intent: {[c.value for c in categories]}"
-    )
 
-    # Create agent (reuses cached graph + LLM, injects fresh context)
-    agent = await get_agent(context, is_new_conversation=is_new, categories=categories)
+    # --- Dynamic Tool Selection ---
+    settings = get_settings()
+    filtered_tools = None  # None = fall back to all tools
+
+    if settings.dynamic_tool_selection_enabled or settings.dynamic_tool_selection_log_only:
+        try:
+            from src.agent.intent import classify_intent
+            from src.tools import get_tools_for_categories
+
+            # Read conversation history for multi-turn context
+            conversation_history = None
+            try:
+                checkpointer = await get_checkpointer()
+                cp_config = {"configurable": {"thread_id": conversation_id}}
+                checkpoint = await checkpointer.aget(cp_config)
+                if checkpoint:
+                    values = checkpoint.values() if callable(checkpoint.values) else checkpoint.values
+                    conversation_history = values.get("messages", []) if isinstance(values, dict) else []
+            except Exception as e:
+                logger.debug(f"Could not read history for intent classification: {e}")
+
+            intent_result = await classify_intent(
+                message=message,
+                conversation_history=conversation_history,
+                settings=settings,
+            )
+
+            # Emit classification event for frontend observability
+            yield {
+                "type": "intent_classification",
+                "data": {
+                    "categories": [c.value for c in intent_result.categories],
+                    "confidence": intent_result.confidence,
+                    "source": intent_result.source,
+                },
+            }
+
+            if settings.dynamic_tool_selection_log_only:
+                # Log-only mode: classify but still load all tools
+                logger.info(f"📊 [LOG-ONLY] Would filter to {len(intent_result.categories)} categories")
+            elif intent_result.confidence >= settings.intent_confidence_threshold:
+                filtered_tools = get_tools_for_categories(intent_result.categories)
+            else:
+                logger.warning(
+                    f"⚠️ Low confidence ({intent_result.confidence:.2f}), loading all tools"
+                )
+        except Exception as e:
+            logger.error(f"Intent classification failed, falling back to all tools: {e}")
+
+    # Create agent (with filtered tools if available, otherwise all tools)
+    agent = await get_agent(context, is_new_conversation=is_new, tools=filtered_tools)
     config = {
         "configurable": {
             "thread_id": conversation_id,
@@ -695,14 +713,32 @@ async def stream_agent(
         return
 
     try:
-        # CONVERSATION COMPRESSION
-        # Before starting, fetch current state, compress messages, and update checkpointer
+        # CHECKPOINT CLEANUP
+        # SystemMessages should never be stored in the checkpoint — they are injected
+        # at inference time by prompt_fn. Any SystemMessages in the stored state are
+        # compression artifacts from old code (e.g. "__REPLACE_HISTORY__" sentinel,
+        # "PREVIOUS CONVERSATION SUMMARY:" messages). Strip them out now.
         current_state = await agent.aget_state(config)
-        if current_state.values.get("messages"):
-            compressed = compress_messages(current_state.values["messages"])
-            if len(compressed) != len(current_state.values["messages"]):
-                await agent.aupdate_state(config, {"messages": compressed})
-                logger.info(f"✨ State updated with compressed/repaired history")
+        stored_messages = current_state.values.get("messages", [])
+        cleaned = [m for m in stored_messages if not isinstance(m, SystemMessage)]
+        if len(cleaned) != len(stored_messages):
+            removed = len(stored_messages) - len(cleaned)
+            logger.info(f"🧹 Cleaned {removed} stale SystemMessage(s) from checkpoint history")
+            await agent.aupdate_state(config, {"messages": [SystemMessage(content="__REPLACE_HISTORY__")] + cleaned})
+
+        # CONVERSATION COMPRESSION (before streaming)
+        if settings.compression_in_stream:
+            try:
+                current_state_for_compression = await agent.aget_state(config)
+                stored_for_compression = current_state_for_compression.values.get("messages", [])
+                if stored_for_compression:
+                    from src.agent.compression import compress_messages
+                    compressed = compress_messages(stored_for_compression)
+                    if len(compressed) != len(stored_for_compression):
+                        await agent.aupdate_state(config, {"messages": compressed})
+                        logger.info(f"💾 Compressed: {len(stored_for_compression)} → {len(compressed)} messages")
+            except Exception as e:
+                logger.warning(f"Compression failed (non-fatal): {e}")
 
         # Stream using updates mode to get step-by-step progress
         async for chunk in agent.astream(

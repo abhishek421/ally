@@ -78,7 +78,8 @@ TOOL_REGISTRY: dict[ToolCategory, Callable] = {
 }
 
 # Tools loaded on every request regardless of intent.
-ALWAYS_INCLUDE = {ToolCategory.CORE}
+# CORE (3) + SEARCH (8) + CONTEXT (1) + MEMORY (2) = 14 tools baseline.
+ALWAYS_INCLUDE = {ToolCategory.CORE, ToolCategory.SEARCH, ToolCategory.CONTEXT, ToolCategory.MEMORY}
 
 # Categories safe to route to gpt-4o-mini (simple queries)
 SIMPLE_CATEGORIES = {ToolCategory.CORE, ToolCategory.SEARCH, ToolCategory.CONTEXT}
@@ -135,6 +136,56 @@ def get_all_tools() -> list:
     return tools
 
 
+# ---------------------------------------------------------------------------
+# Reverse lookup: tool name → category (for multi-turn context detection)
+# Built lazily on first access to avoid import-time side effects.
+# ---------------------------------------------------------------------------
+
+_tool_to_category_cache: dict[str, ToolCategory] | None = None
+
+
+def _build_tool_to_category() -> dict[str, ToolCategory]:
+    """Build reverse mapping from tool name to its category."""
+    mapping: dict[str, ToolCategory] = {}
+    # Skip READ (aggregate) — use sub-categories instead
+    for category, getter in TOOL_REGISTRY.items():
+        if category == ToolCategory.READ:
+            continue
+        try:
+            for tool in getter():
+                name = getattr(tool, "name", None)
+                if name and name not in mapping:
+                    mapping[name] = category
+        except Exception:
+            pass  # Gracefully skip if getter fails at import time
+    return mapping
+
+
+@property
+def _get_tool_to_category():
+    pass  # placeholder — real access is via the function below
+
+
+def get_tool_to_category() -> dict[str, ToolCategory]:
+    """Get the tool-name-to-category reverse lookup (cached)."""
+    global _tool_to_category_cache
+    if _tool_to_category_cache is None:
+        _tool_to_category_cache = _build_tool_to_category()
+        logger.info(f"📋 Built TOOL_TO_CATEGORY map: {len(_tool_to_category_cache)} tools")
+    return _tool_to_category_cache
+
+
+# Module-level alias for direct import (lazy — calls getter on first use)
+TOOL_TO_CATEGORY: dict[str, ToolCategory] = {}  # populated lazily via get_tool_to_category()
+
+
+def _ensure_tool_to_category():
+    """Populate the module-level TOOL_TO_CATEGORY dict."""
+    global TOOL_TO_CATEGORY
+    if not TOOL_TO_CATEGORY:
+        TOOL_TO_CATEGORY.update(get_tool_to_category())
+
+
 __all__ = [
     "BaseTool",
     "ToolContext",
@@ -157,6 +208,8 @@ __all__ = [
     "get_reminder_tools",
     "get_note_tools",
     "get_memory_tools",
+    "TOOL_TO_CATEGORY",
+    "get_tool_to_category",
     # Confirmation utilities
     "ConfirmationType",
     "ConfirmationRequest",

@@ -13,14 +13,22 @@ def limit_messages(all_messages: list, new_messages: list) -> list:
         for i, msg in enumerate(new_messages):
             if hasattr(msg, "content") and msg.content == "__REPLACE_HISTORY__":
                 # Replace: only take what's after the sentinel
-                # AND filter out any non-message crud
-                return [m for m in new_messages[i+1:] if hasattr(m, "content") and not isinstance(m, dict)]
+                # AND filter out any non-message crud (but allow valid dicts)
+                return [m for m in new_messages[i+1:] if hasattr(m, "content") or (isinstance(m, dict) and "content" in m)]
         
-    # 2. Standard addition, but also filter out any non-message crud from BOTH sides
-    # (Repairing existing corrupted state)
-    clean_all = [m for m in all_messages if hasattr(m, "content") and not isinstance(m, dict)]
-    clean_new = [m for m in new_messages if hasattr(m, "content") and not isinstance(m, dict)]
-    
+    # 2. Standard addition — let add_messages handle dict-to-Message conversion.
+    # Only filter out items that are neither Message objects nor valid dicts.
+    def _is_message(m):
+        """Return True for LangChain Message objects or dict-format messages."""
+        if hasattr(m, "content"):
+            return True
+        if isinstance(m, dict) and "content" in m:
+            return True
+        return False
+
+    clean_all = [m for m in all_messages if _is_message(m)]
+    clean_new = [m for m in new_messages if _is_message(m)]
+
     return add_messages(clean_all, clean_new)
 
 

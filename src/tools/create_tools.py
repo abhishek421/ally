@@ -714,9 +714,6 @@ def get_create_tools() -> list:
 
     return [
         create_entity,
-        create_company,
-        create_person,
-        create_group,
         create_view_in_group,
         create_note,
     ]

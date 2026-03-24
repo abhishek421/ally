@@ -73,7 +73,21 @@ PERPLEXITY_API_KEY=REDACTED
 
     # Conversation Compression
     compression_enabled: bool = True
-    compression_recent_count: int = 8  # Keep last 8 messages verbatim
+    compression_recent_count: int = 6  # Keep last 6 messages verbatim
+
+    # Dynamic Tool Selection
+    dynamic_tool_selection_enabled: bool = False   # Kill switch for intent-based tool filtering
+    dynamic_tool_selection_log_only: bool = False   # Classify and log but still load all tools (A/B mode)
+    intent_llm_fallback_enabled: bool = False       # Use gpt-4o-mini fallback when rules are low confidence
+    intent_confidence_threshold: float = 0.6        # Below this → fall back to all tools
+
+    # Tool Result Truncation
+    tool_result_truncation_enabled: bool = True     # Use compact format for tool results
+    tool_result_max_list_items: int = 5             # Max entities shown in list results
+
+    # Conversation Compression (enhanced)
+    compression_in_stream: bool = True              # Run compression in stream_agent, not just resume
+    compression_token_threshold: int = 8000         # Compress when history tokens exceed this
 
     @property
     def is_openai(self) -> bool:

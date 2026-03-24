@@ -235,47 +235,20 @@ class GraphQLClient:
         logger.info(f"📡 GraphQL: Fetching custom instructions for workspace {self.workspace_id}")
         try:
             result = await self.execute(query, {"workspaceId": self.workspace_id})
-            logger.info(f"📡 GraphQL result: {result}")
+            if not result:
+                logger.warning("📡 GraphQL result is empty")
+                return None
+                
             instructions_data = result.get("getWorkspaceCustomInstructions")
             if instructions_data:
                 instructions = instructions_data.get("instructions")
                 logger.info(f"📡 Found instructions: {len(instructions) if instructions else 0} chars")
                 return instructions
+            
             logger.info("📡 No instructions data in response")
             return None
         except Exception as e:
             logger.warning(f"📡 Failed to get workspace custom instructions: {e}")
-            return None
-
-    async def get_group_custom_instructions(self, group_id: str) -> str | None:
-        """Get custom instructions for a specific group.
-
-        Args:
-            group_id: The group ID to fetch instructions for
-
-        Returns:
-            The custom instructions text or None if not set
-        """
-        query = """
-        query GetGroupCustomInstructions($groupId: String!) {
-            getGroupCustomInstructions(groupId: $groupId) {
-                instructions
-            }
-        }
-        """
-
-        logger.info(f"📡 GraphQL: Fetching custom instructions for group {group_id}")
-        try:
-            result = await self.execute(query, {"groupId": group_id})
-            instructions_data = result.get("getGroupCustomInstructions")
-            if instructions_data:
-                instructions = instructions_data.get("instructions")
-                logger.info(f"📡 Found group instructions: {len(instructions) if instructions else 0} chars")
-                return instructions
-            logger.info("📡 No group instructions data in response")
-            return None
-        except Exception as e:
-            logger.warning(f"📡 Failed to get group custom instructions: {e}")
             return None
 
 

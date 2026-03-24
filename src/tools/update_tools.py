@@ -1690,10 +1690,6 @@ def get_update_tools() -> list:
         update_entity_basic_fields,
         update_entity_status_or_column,
         manage_entity_group_membership,
-        # Simplified status update tools (keeping for fallback)
-        update_person_status,
-        update_company_status,
-        # Reminder/Note tools
         update_reminder,
         delete_reminder,
     ]

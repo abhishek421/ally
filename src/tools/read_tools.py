@@ -5,6 +5,7 @@ from typing import Optional
 
 from langchain_core.tools import tool
 
+from src.config import get_settings
 from src.tools.context_var import get_tool_context
 from src.tools.base import (
 ToolContext,
@@ -86,16 +87,23 @@ async def list_companies_in_workspace(
         if not companies:
             return "No companies found in this workspace."
         
-        lines = [f"Found {meta.get('total', len(companies))} companies (page {meta.get('page', 1)}):\n"]
-        for company in companies:
-            lines.append(format_company(company))
+        settings = get_settings()
+        compact = settings.tool_result_truncation_enabled
+        max_items = settings.tool_result_max_list_items if compact else len(companies)
+        total = meta.get('total', len(companies))
+
+        lines = [f"Found {total} companies (page {meta.get('page', 1)}):\n"]
+        for company in companies[:max_items]:
+            lines.append(format_company(company, compact=compact))
             lines.append("")
-        
-        if meta.get("hasNextPage"):
+
+        if compact and len(companies) > max_items:
+            lines.append(f"[Showing {max_items} of {total}. Ask for next page or a specific entity for full details.]")
+        elif meta.get("hasNextPage"):
             lines.append(f"\n(More results available - use page={meta.get('page', 1) + 1})")
-        
+
         return "\n".join(lines)
-        
+
     except Exception as e:
         logger.error(f"Error listing companies: {e}")
         return f"Error listing companies: {str(e)}"
@@ -166,16 +174,23 @@ async def list_people_in_workspace(
         if not people:
             return "No people found in this workspace."
         
-        lines = [f"Found {meta.get('total', len(people))} people (page {meta.get('page', 1)}):\n"]
-        for person in people:
-            lines.append(format_person(person))
+        settings = get_settings()
+        compact = settings.tool_result_truncation_enabled
+        max_items = settings.tool_result_max_list_items if compact else len(people)
+        total = meta.get('total', len(people))
+
+        lines = [f"Found {total} people (page {meta.get('page', 1)}):\n"]
+        for person in people[:max_items]:
+            lines.append(format_person(person, compact=compact))
             lines.append("")
-        
-        if meta.get("hasNextPage"):
+
+        if compact and len(people) > max_items:
+            lines.append(f"[Showing {max_items} of {total}. Ask for next page or a specific entity for full details.]")
+        elif meta.get("hasNextPage"):
             lines.append(f"\n(More results available - use page={meta.get('page', 1) + 1})")
-        
+
         return "\n".join(lines)
-        
+
     except Exception as e:
         logger.error(f"Error listing people: {e}")
         return f"Error listing people: {str(e)}"
@@ -221,13 +236,21 @@ async def list_groups_in_workspace() -> str:
         if not groups:
             return "No groups found in this workspace."
         
-        lines = [f"Found {len(groups)} groups:\n"]
-        for group in groups:
-            lines.append(format_group(group))
+        settings = get_settings()
+        compact = settings.tool_result_truncation_enabled
+        max_items = settings.tool_result_max_list_items if compact else len(groups)
+        total = len(groups)
+
+        lines = [f"Found {total} groups:\n"]
+        for group in groups[:max_items]:
+            lines.append(format_group(group, compact=compact))
             lines.append("")
-        
+
+        if compact and total > max_items:
+            lines.append(f"[Showing {max_items} of {total}. Ask for a specific group for full details.]")
+
         return "\n".join(lines)
-        
+
     except Exception as e:
         logger.error(f"Error listing groups: {e}")
         return f"Error listing groups: {str(e)}"
@@ -295,16 +318,23 @@ async def list_companies_in_group(
         if not companies:
             return "No companies found in this group."
         
-        lines = [f"Found {meta.get('total', len(companies))} companies in group (page {meta.get('page', 1)}):\n"]
-        for company in companies:
-            lines.append(format_company(company))
+        settings = get_settings()
+        compact = settings.tool_result_truncation_enabled
+        max_items = settings.tool_result_max_list_items if compact else len(companies)
+        total = meta.get('total', len(companies))
+
+        lines = [f"Found {total} companies in group (page {meta.get('page', 1)}):\n"]
+        for company in companies[:max_items]:
+            lines.append(format_company(company, compact=compact))
             lines.append("")
-        
-        if meta.get("hasNextPage"):
+
+        if compact and len(companies) > max_items:
+            lines.append(f"[Showing {max_items} of {total}. Ask for next page or a specific entity for full details.]")
+        elif meta.get("hasNextPage"):
             lines.append(f"\n(More results available - use page={meta.get('page', 1) + 1})")
-        
+
         return "\n".join(lines)
-        
+
     except Exception as e:
         logger.error(f"Error listing companies in group: {e}")
         return f"Error listing companies in group: {str(e)}"
@@ -377,16 +407,23 @@ async def list_people_in_group(
         if not people:
             return "No people found in this group."
         
-        lines = [f"Found {meta.get('total', len(people))} people in group (page {meta.get('page', 1)}):\n"]
-        for person in people:
-            lines.append(format_person(person))
+        settings = get_settings()
+        compact = settings.tool_result_truncation_enabled
+        max_items = settings.tool_result_max_list_items if compact else len(people)
+        total = meta.get('total', len(people))
+
+        lines = [f"Found {total} people in group (page {meta.get('page', 1)}):\n"]
+        for person in people[:max_items]:
+            lines.append(format_person(person, compact=compact))
             lines.append("")
-        
-        if meta.get("hasNextPage"):
+
+        if compact and len(people) > max_items:
+            lines.append(f"[Showing {max_items} of {total}. Ask for next page or a specific entity for full details.]")
+        elif meta.get("hasNextPage"):
             lines.append(f"\n(More results available - use page={meta.get('page', 1) + 1})")
-        
+
         return "\n".join(lines)
-        
+
     except Exception as e:
         logger.error(f"Error listing people in group: {e}")
         return f"Error listing people in group: {str(e)}"
@@ -2987,6 +3024,115 @@ async def search_and_get_entity(
     return await search_and_get_person.ainvoke({"name": query})
 
 
+# ---------------------------------------------------------------------------
+# Consolidated wrapper tools (reduce tool count for LLM)
+# ---------------------------------------------------------------------------
+
+
+@tool
+async def list_entities_in_workspace(
+    entity_type: str,
+    page: int = 1,
+    limit: int = 10,
+    search: Optional[str] = None,
+) -> str:
+    """List companies, people, or groups in the workspace.
+
+    Args:
+        entity_type: "company", "people", or "group"
+        page: Page number (default: 1)
+        limit: Results per page (default: 10, max: 50)
+        search: Optional search filter
+    """
+    if entity_type == "company":
+        args = {"page": page, "limit": limit}
+        if search:
+            args["search"] = search
+        return await list_companies_in_workspace.ainvoke(args)
+    elif entity_type == "people":
+        args = {"page": page, "limit": limit}
+        if search:
+            args["search"] = search
+        return await list_people_in_workspace.ainvoke(args)
+    elif entity_type == "group":
+        return await list_groups_in_workspace.ainvoke({})
+    return f"Invalid entity_type: {entity_type}. Use 'company', 'people', or 'group'."
+
+
+@tool
+async def list_entities_in_group(
+    entity_type: str,
+    group_id: str,
+    page: int = 1,
+    limit: int = 10,
+    search: Optional[str] = None,
+) -> str:
+    """List companies or people in a specific group.
+
+    Args:
+        entity_type: "company" or "people"
+        group_id: ID of the group
+        page: Page number (default: 1)
+        limit: Results per page (default: 10, max: 50)
+        search: Optional search filter
+    """
+    args = {"group_id": group_id, "page": page, "limit": limit}
+    if search:
+        args["search"] = search
+    if entity_type == "company":
+        return await list_companies_in_group.ainvoke(args)
+    elif entity_type == "people":
+        return await list_people_in_group.ainvoke(args)
+    return f"Invalid entity_type: {entity_type}. Use 'company' or 'people'."
+
+
+@tool
+async def search_entity_by_name(
+    entity_type: str,
+    query: str,
+    limit: int = 10,
+) -> str:
+    """Search for a company, person, or group by name.
+
+    Args:
+        entity_type: "company", "people", or "group"
+        query: Name or keyword to search for
+        limit: Max results (default: 10)
+    """
+    if entity_type == "company":
+        return await search_company_by_name.ainvoke({"query": query, "limit": limit})
+    elif entity_type == "people":
+        return await search_person_by_name.ainvoke({"query": query, "limit": limit})
+    elif entity_type == "group":
+        return await search_group_by_name.ainvoke({"query": query})
+    return f"Invalid entity_type: {entity_type}. Use 'company', 'people', or 'group'."
+
+
+@tool
+async def get_entity_by_id(
+    entity_type: str,
+    entity_id: str,
+) -> str:
+    """Get full details of a company, person, or group by ID.
+
+    Args:
+        entity_type: "company", "people", or "group"
+        entity_id: The entity's UUID
+    """
+    if entity_type == "company":
+        return await get_company_by_id.ainvoke({"id": entity_id})
+    elif entity_type == "people":
+        return await get_person_by_id.ainvoke({"person_id": entity_id})
+    elif entity_type == "group":
+        return await get_group_by_id.ainvoke({"group_id": entity_id})
+    return f"Invalid entity_type: {entity_type}. Use 'company', 'people', or 'group'."
+
+
+# ---------------------------------------------------------------------------
+# Tool category getters
+# ---------------------------------------------------------------------------
+
+
 def get_core_tools() -> list:
     """Essential tools loaded on every request."""
     return [
@@ -2999,23 +3145,16 @@ def get_core_tools() -> list:
 def get_search_tools() -> list:
     """Tools for listing and searching entities."""
     return [
-        list_companies_in_workspace,
-        list_people_in_workspace,
-        list_groups_in_workspace,
-        list_companies_in_group,
-        list_people_in_group,
-        search_company_by_name,
-        search_person_by_name,
-        search_group_by_name,
+        list_entities_in_workspace,
+        list_entities_in_group,
+        search_entity_by_name,
     ]
 
 
 def get_details_tools() -> list:
     """Tools for fetching full entity details by ID."""
     return [
-        get_company_by_id,
-        get_person_by_id,
-        get_group_by_id,
+        get_entity_by_id,
     ]
 
 
