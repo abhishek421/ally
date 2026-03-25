@@ -679,6 +679,8 @@ async def stream_agent(
     }
     # Track tool calls for summary logging
     tool_calls_summary = []
+    # Track accumulated response text for logging (streamed token-by-token)
+    accumulated_response_text = ""
 
     # Token usage tracking
     request_token_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
@@ -740,13 +742,14 @@ async def stream_agent(
             except Exception as e:
                 logger.warning(f"Compression failed (non-fatal): {e}")
 
-        # Stream using updates mode to get step-by-step progress
-        async for chunk in agent.astream(
+        # Stream using dual mode: "updates" for tool calls/results/interrupts,
+        # "messages" for token-by-token LLM output (ChatGPT-style streaming).
+        async for stream_type, chunk in agent.astream(
             {
                 "messages": [{"role": "user", "content": message}],
             },
             config=config,
-            stream_mode="updates",
+            stream_mode=["updates", "messages"],
         ):
             # Check for heartbeat
             current_time = time.time()
@@ -758,9 +761,34 @@ async def stream_agent(
                 }
                 last_heartbeat_time = current_time
 
+            # --- TOKEN-LEVEL STREAMING (messages mode) ---
+            if stream_type == "messages":
+                msg_chunk, metadata = chunk
+                node = metadata.get("langgraph_node", "")
+
+                # Stream response text token-by-token from the agent node
+                if node == "agent" and hasattr(msg_chunk, "content") and msg_chunk.content:
+                    text = _extract_text_content(msg_chunk.content)
+                    if text:
+                        accumulated_response_text += text
+                        yield {
+                            "type": "response",
+                            "data": {"content": text},
+                        }
+
+                # Extract token usage (arrives on the final chunk)
+                if hasattr(msg_chunk, "usage_metadata") and msg_chunk.usage_metadata:
+                    usage = msg_chunk.usage_metadata
+                    request_token_usage["input_tokens"] += usage.get("input_tokens", 0)
+                    request_token_usage["output_tokens"] += usage.get("output_tokens", 0)
+                    request_token_usage["total_tokens"] += usage.get("total_tokens", 0)
+                    llm_call_count += 1
+
+                continue  # messages chunks don't need updates processing
+
+            # --- NODE-LEVEL UPDATES (updates mode) ---
             # Check for interrupt FIRST (confirmation request from tools)
             if "__interrupt__" in chunk:
-                # ... interrupt handling ...
                 interrupt_info = chunk["__interrupt__"]
                 if interrupt_info and len(interrupt_info) > 0:
                     interrupt_data = interrupt_info[0].value if hasattr(interrupt_info[0], 'value') else interrupt_info[0]
@@ -770,7 +798,7 @@ async def stream_agent(
                         "data": interrupt_data,
                     }
                     return
-            
+
             # Process each update chunk
             for node_name, node_output in chunk.items():
                 if node_name == "__interrupt__":
@@ -778,17 +806,13 @@ async def stream_agent(
                 if node_name == "agent":
                     messages = node_output.get("messages", [])
                     for msg in messages:
-                        # Extract token usage from AIMessage
+                        # Fallback token usage extraction (if not captured via messages mode)
                         if hasattr(msg, "usage_metadata") and msg.usage_metadata:
-                            usage = msg.usage_metadata
-                            request_token_usage["input_tokens"] += usage.get("input_tokens", 0)
-                            request_token_usage["output_tokens"] += usage.get("output_tokens", 0)
-                            request_token_usage["total_tokens"] += usage.get("total_tokens", 0)
-                            llm_call_count += 1
+                            # Only count if messages mode didn't already capture it
+                            pass
 
                         if hasattr(msg, "tool_calls") and msg.tool_calls:
                             # Agent decided to call tools
-                            # Reset status flag when new tool calls are made
                             has_seen_tool_result = False
                             for tool_call in msg.tool_calls:
                                 tool_name = tool_call.get("name")
@@ -800,20 +824,16 @@ async def stream_agent(
                                         "args": tool_call.get("args", {}),
                                     },
                                 }
-                        elif hasattr(msg, "content") and msg.content:
-                            # Reset status flag when content arrives
-                            has_seen_tool_result = False
-                            text_content = _extract_text_content(msg.content)
-                            if text_content:
-                                content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
-                                logger.info(f"   💬 RESPONSE: {content_preview}")
-                                yield {
-                                    "type": "response",
-                                    "data": {"content": text_content},
-                                }
+
+                    # Log accumulated response text when agent node completes
+                    if accumulated_response_text:
+                        has_seen_tool_result = False
+                        preview = accumulated_response_text[:100] + "..." if len(accumulated_response_text) > 100 else accumulated_response_text
+                        logger.info(f"   💬 RESPONSE: {preview}")
+                        accumulated_response_text = ""
+
                 elif node_name == "tools":
                     # Tool execution results
-                    # Mark that we have seen tool results
                     has_seen_tool_result = True
                     messages = node_output.get("messages", [])
                     for msg in messages:
@@ -922,6 +942,7 @@ async def resume_agent(
     # Token usage tracking
     request_token_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     llm_call_count = 0
+    accumulated_response_text = ""
 
     # Heartbeat configuration
     last_heartbeat_time = time.time()
@@ -958,11 +979,11 @@ async def resume_agent(
         else:
             resume_value = confirmation_response
         
-        # Resume the agent
-        async for chunk in agent.astream(
+        # Resume the agent with token-level streaming
+        async for stream_type, chunk in agent.astream(
             Command(resume=resume_value),
             config=config,
-            stream_mode="updates",
+            stream_mode=["updates", "messages"],
         ):
             # Check for heartbeat
             current_time = time.time()
@@ -974,7 +995,30 @@ async def resume_agent(
                 }
                 last_heartbeat_time = current_time
 
-            # Check for another interrupt FIRST (nested confirmation)
+            # --- TOKEN-LEVEL STREAMING (messages mode) ---
+            if stream_type == "messages":
+                msg_chunk, metadata = chunk
+                node = metadata.get("langgraph_node", "")
+
+                if node == "agent" and hasattr(msg_chunk, "content") and msg_chunk.content:
+                    text = _extract_text_content(msg_chunk.content)
+                    if text:
+                        accumulated_response_text += text
+                        yield {
+                            "type": "response",
+                            "data": {"content": text},
+                        }
+
+                if hasattr(msg_chunk, "usage_metadata") and msg_chunk.usage_metadata:
+                    usage = msg_chunk.usage_metadata
+                    request_token_usage["input_tokens"] += usage.get("input_tokens", 0)
+                    request_token_usage["output_tokens"] += usage.get("output_tokens", 0)
+                    request_token_usage["total_tokens"] += usage.get("total_tokens", 0)
+                    llm_call_count += 1
+
+                continue
+
+            # --- NODE-LEVEL UPDATES (updates mode) ---
             if "__interrupt__" in chunk:
                 interrupt_info = chunk["__interrupt__"]
                 if interrupt_info and len(interrupt_info) > 0:
@@ -985,22 +1029,13 @@ async def resume_agent(
                         "data": interrupt_data,
                     }
                     return
-            
-            # Process chunks
+
             for node_name, node_output in chunk.items():
                 if node_name == "__interrupt__":
                     continue
                 if node_name == "agent":
                     messages = node_output.get("messages", [])
                     for msg in messages:
-                        # Extract token usage from AIMessage
-                        if hasattr(msg, "usage_metadata") and msg.usage_metadata:
-                            usage = msg.usage_metadata
-                            request_token_usage["input_tokens"] += usage.get("input_tokens", 0)
-                            request_token_usage["output_tokens"] += usage.get("output_tokens", 0)
-                            request_token_usage["total_tokens"] += usage.get("total_tokens", 0)
-                            llm_call_count += 1
-
                         if hasattr(msg, "tool_calls") and msg.tool_calls:
                             has_seen_tool_result = False
                             for tool_call in msg.tool_calls:
@@ -1012,16 +1047,13 @@ async def resume_agent(
                                         "args": tool_call.get("args", {}),
                                     },
                                 }
-                        elif hasattr(msg, "content") and msg.content:
-                            has_seen_tool_result = False
-                            text_content = _extract_text_content(msg.content)
-                            if text_content:
-                                content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
-                                logger.info(f"   💬 RESPONSE: {content_preview}")
-                                yield {
-                                    "type": "response",
-                                    "data": {"content": text_content},
-                                }
+
+                    if accumulated_response_text:
+                        has_seen_tool_result = False
+                        preview = accumulated_response_text[:100] + "..." if len(accumulated_response_text) > 100 else accumulated_response_text
+                        logger.info(f"   💬 RESPONSE: {preview}")
+                        accumulated_response_text = ""
+
                 elif node_name == "tools":
                     has_seen_tool_result = True
                     messages = node_output.get("messages", [])
