@@ -14,10 +14,9 @@ from langgraph.types import Command, interrupt
 
 from src.config import get_settings
 from src.agent.prompts import get_system_prompt, get_system_prompt_messages
-from src.tools import get_all_tools, get_tools_for_categories
+from src.tools import get_all_tools
 from src.tools.base import ToolContext, parse_data_change
 from src.tools.context_var import set_tool_context
-from src.agent.intent import classify_intent
 
 logger = logging.getLogger(__name__)
 
@@ -576,12 +575,6 @@ async def stream_agent(
     """
     # Check if this is a new conversation (for greeting behavior)
     is_new = await is_first_message(conversation_id)
-    
-    # Classify intent and load only relevant tools
-    categories = classify_intent(message)
-    logger.info(
-        f"🎯 Intent: {[c.value for c in categories]}"
-    )
 
     # Create agent (reuses cached graph + LLM, injects fresh context)
     agent = await get_agent(context, is_new_conversation=is_new)
