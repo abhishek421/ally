@@ -7,16 +7,16 @@ from langchain_core.tools import tool
 
 from src.tools.context_var import get_tool_context
 from src.tools.base import (
-    ToolContext, 
-    format_company, 
-    format_person, 
+    ToolContext,
+    format_company,
+    format_person,
     format_group,
-    format_reminder,
-    format_note,
     DataChange,
     EntityType,
     ChangeAction,
 )
+from src.tools.reminder_tools import format_reminder
+from src.tools.note_tools import format_note
 from src.tools.confirmation import (
     request_create_confirmation,
 )

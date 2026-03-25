@@ -626,15 +626,17 @@ async def stream_agent(
         return
 
     try:
-        # Stream using updates mode to get step-by-step progress
-        async for chunk in agent.astream(
+        # Stream using both "messages" (token-by-token) and "updates" (structural events)
+        # "messages" yields individual tokens as they arrive so the UI can render progressively
+        # "updates" yields full node outputs used for tool calls, tool results, and interrupts
+        async for mode, data in agent.astream(
             {
                 "messages": [{"role": "user", "content": message}],
             },
             config=config,
-            stream_mode="updates",
+            stream_mode=["messages", "updates"],
         ):
-            # Check for heartbeat
+            # Check for heartbeat regardless of mode
             current_time = time.time()
             if current_time - last_heartbeat_time > heartbeat_interval:
                 status = "Analyzing results..." if has_seen_tool_result else "Thinking..."
@@ -644,84 +646,93 @@ async def stream_agent(
                 }
                 last_heartbeat_time = current_time
 
-            # Check for interrupt FIRST (confirmation request from tools)
-            if "__interrupt__" in chunk:
-                # ... interrupt handling ...
-                interrupt_info = chunk["__interrupt__"]
-                if interrupt_info and len(interrupt_info) > 0:
-                    interrupt_data = interrupt_info[0].value if hasattr(interrupt_info[0], 'value') else interrupt_info[0]
-                    logger.info(f"⏸️  CONFIRMATION REQUIRED: {interrupt_data.get('title', 'Unknown')}")
-                    yield {
-                        "type": "confirmation_required",
-                        "data": interrupt_data,
-                    }
-                    return
-            
-            # Process each update chunk
-            for node_name, node_output in chunk.items():
-                if node_name == "__interrupt__":
-                    continue
-                if node_name == "agent":
-                    messages = node_output.get("messages", [])
-                    for msg in messages:
-                        # Extract token usage from AIMessage
-                        if hasattr(msg, "usage_metadata") and msg.usage_metadata:
-                            usage = msg.usage_metadata
-                            request_token_usage["input_tokens"] += usage.get("input_tokens", 0)
-                            request_token_usage["output_tokens"] += usage.get("output_tokens", 0)
-                            request_token_usage["total_tokens"] += usage.get("total_tokens", 0)
-                            llm_call_count += 1
+            if mode == "messages":
+                # data is (AIMessageChunk, metadata) — stream individual tokens
+                message_chunk, metadata = data
+                node_name = metadata.get("langgraph_node", "")
+                if node_name == "agent" and hasattr(message_chunk, "content") and message_chunk.content:
+                    text = _extract_text_content(message_chunk.content)
+                    if text:
+                        has_seen_tool_result = False
+                        yield {
+                            "type": "response",
+                            "data": {"content": text},
+                        }
 
-                        if hasattr(msg, "tool_calls") and msg.tool_calls:
-                            # Agent decided to call tools
-                            # Reset status flag when new tool calls are made
-                            has_seen_tool_result = False
-                            for tool_call in msg.tool_calls:
-                                tool_name = tool_call.get("name")
-                                logger.info(f"   🔧 TOOL CALL: {tool_name}")
+            elif mode == "updates":
+                # data is the updates dict — handle interrupts, tool calls, tool results, usage
+                chunk = data
+
+                # Check for interrupt FIRST (confirmation request from tools)
+                if "__interrupt__" in chunk:
+                    interrupt_info = chunk["__interrupt__"]
+                    if interrupt_info and len(interrupt_info) > 0:
+                        interrupt_data = interrupt_info[0].value if hasattr(interrupt_info[0], 'value') else interrupt_info[0]
+                        logger.info(f"⏸️  CONFIRMATION REQUIRED: {interrupt_data.get('title', 'Unknown')}")
+                        yield {
+                            "type": "confirmation_required",
+                            "data": interrupt_data,
+                        }
+                        return
+
+                for node_name, node_output in chunk.items():
+                    if node_name == "__interrupt__":
+                        continue
+                    if node_name == "agent":
+                        messages = node_output.get("messages", [])
+                        for msg in messages:
+                            # Extract token usage from the final complete AIMessage
+                            if hasattr(msg, "usage_metadata") and msg.usage_metadata:
+                                usage = msg.usage_metadata
+                                request_token_usage["input_tokens"] += usage.get("input_tokens", 0)
+                                request_token_usage["output_tokens"] += usage.get("output_tokens", 0)
+                                request_token_usage["total_tokens"] += usage.get("total_tokens", 0)
+                                llm_call_count += 1
+
+                            # Tool calls (complete, from updates — not duplicated from messages mode)
+                            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                                has_seen_tool_result = False
+                                for tool_call in msg.tool_calls:
+                                    tool_name = tool_call.get("name")
+                                    logger.info(f"   🔧 TOOL CALL: {tool_name}")
+                                    yield {
+                                        "type": "tool_call",
+                                        "data": {
+                                            "name": tool_name,
+                                            "args": tool_call.get("args", {}),
+                                        },
+                                    }
+                            elif hasattr(msg, "content") and msg.content:
+                                # Log the complete response for debugging (content already streamed token-by-token)
+                                text_content = _extract_text_content(msg.content)
+                                if text_content:
+                                    content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
+                                    logger.info(f"   💬 RESPONSE complete: {content_preview}")
+
+                    elif node_name == "tools":
+                        # Tool execution results
+                        has_seen_tool_result = True
+                        messages = node_output.get("messages", [])
+                        for msg in messages:
+                            if hasattr(msg, "content"):
+                                tool_content = _extract_text_content(msg.content)
+                                cleaned_result, change_data = parse_data_change(tool_content)
+                                tool_name = getattr(msg, "name", "unknown")
+                                result_info = _get_result_summary(cleaned_result)
+                                tool_calls_summary.append(f"{tool_name} → {result_info}")
+                                logger.info(f"   ✅ TOOL RESULT: {tool_name} → {result_info}")
                                 yield {
-                                    "type": "tool_call",
+                                    "type": "tool_result",
                                     "data": {
                                         "name": tool_name,
-                                        "args": tool_call.get("args", {}),
+                                        "result": cleaned_result,
                                     },
                                 }
-                        elif hasattr(msg, "content") and msg.content:
-                            # Reset status flag when content arrives
-                            has_seen_tool_result = False
-                            text_content = _extract_text_content(msg.content)
-                            if text_content:
-                                content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
-                                logger.info(f"   💬 RESPONSE: {content_preview}")
-                                yield {
-                                    "type": "response",
-                                    "data": {"content": text_content},
-                                }
-                elif node_name == "tools":
-                    # Tool execution results
-                    # Mark that we have seen tool results
-                    has_seen_tool_result = True
-                    messages = node_output.get("messages", [])
-                    for msg in messages:
-                        if hasattr(msg, "content"):
-                            tool_content = _extract_text_content(msg.content)
-                            cleaned_result, change_data = parse_data_change(tool_content)
-                            tool_name = getattr(msg, "name", "unknown")
-                            result_info = _get_result_summary(cleaned_result)
-                            tool_calls_summary.append(f"{tool_name} → {result_info}")
-                            logger.info(f"   ✅ TOOL RESULT: {tool_name} → {result_info}")
-                            yield {
-                                "type": "tool_result",
-                                "data": {
-                                    "name": tool_name,
-                                    "result": cleaned_result,
-                                },
-                            }
-                            if change_data:
-                                yield {
-                                    "type": "data_changed",
-                                    "data": change_data,
-                                }
+                                if change_data:
+                                    yield {
+                                        "type": "data_changed",
+                                        "data": change_data,
+                                    }
         # Signal completion FIRST so the frontend unlocks the input immediately.
         # Metadata events (token_usage, context_window_status) follow as
         # non-blocking tail events that the frontend processes independently.
@@ -835,13 +846,13 @@ async def resume_agent(
         else:
             resume_value = confirmation_response
         
-        # Resume the agent
-        async for chunk in agent.astream(
+        # Resume the agent — same dual-mode streaming as stream_agent
+        async for mode, data in agent.astream(
             Command(resume=resume_value),
             config=config,
-            stream_mode="updates",
+            stream_mode=["messages", "updates"],
         ):
-            # Check for heartbeat
+            # Check for heartbeat regardless of mode
             current_time = time.time()
             if current_time - last_heartbeat_time > heartbeat_interval:
                 status = "Analyzing results..." if has_seen_tool_result else "Thinking..."
@@ -851,69 +862,82 @@ async def resume_agent(
                 }
                 last_heartbeat_time = current_time
 
-            # Check for another interrupt FIRST (nested confirmation)
-            if "__interrupt__" in chunk:
-                interrupt_info = chunk["__interrupt__"]
-                if interrupt_info and len(interrupt_info) > 0:
-                    interrupt_data = interrupt_info[0].value if hasattr(interrupt_info[0], 'value') else interrupt_info[0]
-                    logger.info(f"⏸️  CONFIRMATION REQUIRED: {interrupt_data.get('title', 'Unknown')}")
-                    yield {
-                        "type": "confirmation_required",
-                        "data": interrupt_data,
-                    }
-                    return
-            
-            # Process chunks
-            for node_name, node_output in chunk.items():
-                if node_name == "__interrupt__":
-                    continue
-                if node_name == "agent":
-                    messages = node_output.get("messages", [])
-                    for msg in messages:
-                        # Extract token usage from AIMessage
-                        if hasattr(msg, "usage_metadata") and msg.usage_metadata:
-                            usage = msg.usage_metadata
-                            request_token_usage["input_tokens"] += usage.get("input_tokens", 0)
-                            request_token_usage["output_tokens"] += usage.get("output_tokens", 0)
-                            request_token_usage["total_tokens"] += usage.get("total_tokens", 0)
-                            llm_call_count += 1
+            if mode == "messages":
+                # data is (AIMessageChunk, metadata) — stream individual tokens
+                message_chunk, metadata = data
+                node_name = metadata.get("langgraph_node", "")
+                if node_name == "agent" and hasattr(message_chunk, "content") and message_chunk.content:
+                    text = _extract_text_content(message_chunk.content)
+                    if text:
+                        has_seen_tool_result = False
+                        yield {
+                            "type": "response",
+                            "data": {"content": text},
+                        }
 
-                        if hasattr(msg, "tool_calls") and msg.tool_calls:
-                            has_seen_tool_result = False
-                            for tool_call in msg.tool_calls:
-                                tool_name = tool_call.get("name")
+            elif mode == "updates":
+                # data is the updates dict — handle interrupts, tool calls, tool results, usage
+                chunk = data
+
+                # Check for another interrupt FIRST (nested confirmation)
+                if "__interrupt__" in chunk:
+                    interrupt_info = chunk["__interrupt__"]
+                    if interrupt_info and len(interrupt_info) > 0:
+                        interrupt_data = interrupt_info[0].value if hasattr(interrupt_info[0], 'value') else interrupt_info[0]
+                        logger.info(f"⏸️  CONFIRMATION REQUIRED: {interrupt_data.get('title', 'Unknown')}")
+                        yield {
+                            "type": "confirmation_required",
+                            "data": interrupt_data,
+                        }
+                        return
+
+                for node_name, node_output in chunk.items():
+                    if node_name == "__interrupt__":
+                        continue
+                    if node_name == "agent":
+                        messages = node_output.get("messages", [])
+                        for msg in messages:
+                            # Extract token usage from the final complete AIMessage
+                            if hasattr(msg, "usage_metadata") and msg.usage_metadata:
+                                usage = msg.usage_metadata
+                                request_token_usage["input_tokens"] += usage.get("input_tokens", 0)
+                                request_token_usage["output_tokens"] += usage.get("output_tokens", 0)
+                                request_token_usage["total_tokens"] += usage.get("total_tokens", 0)
+                                llm_call_count += 1
+
+                            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                                has_seen_tool_result = False
+                                for tool_call in msg.tool_calls:
+                                    tool_name = tool_call.get("name")
+                                    yield {
+                                        "type": "tool_call",
+                                        "data": {
+                                            "name": tool_name,
+                                            "args": tool_call.get("args", {}),
+                                        },
+                                    }
+                            elif hasattr(msg, "content") and msg.content:
+                                # Log complete response for debugging (already streamed token-by-token)
+                                text_content = _extract_text_content(msg.content)
+                                if text_content:
+                                    content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
+                                    logger.info(f"   💬 RESPONSE complete: {content_preview}")
+
+                    elif node_name == "tools":
+                        has_seen_tool_result = True
+                        messages = node_output.get("messages", [])
+                        for msg in messages:
+                            if hasattr(msg, "content"):
+                                tool_content = _extract_text_content(msg.content)
+                                cleaned_result, _ = parse_data_change(tool_content)
+                                tool_name = getattr(msg, "name", "unknown")
                                 yield {
-                                    "type": "tool_call",
+                                    "type": "tool_result",
                                     "data": {
                                         "name": tool_name,
-                                        "args": tool_call.get("args", {}),
+                                        "result": cleaned_result,
                                     },
                                 }
-                        elif hasattr(msg, "content") and msg.content:
-                            has_seen_tool_result = False
-                            text_content = _extract_text_content(msg.content)
-                            if text_content:
-                                content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
-                                logger.info(f"   💬 RESPONSE: {content_preview}")
-                                yield {
-                                    "type": "response",
-                                    "data": {"content": text_content},
-                                }
-                elif node_name == "tools":
-                    has_seen_tool_result = True
-                    messages = node_output.get("messages", [])
-                    for msg in messages:
-                        if hasattr(msg, "content"):
-                            tool_content = _extract_text_content(msg.content)
-                            cleaned_result, _ = parse_data_change(tool_content)
-                            tool_name = getattr(msg, "name", "unknown")
-                            yield {
-                                "type": "tool_result",
-                                "data": {
-                                    "name": tool_name,
-                                    "result": cleaned_result,
-                                },
-                            }
         # Signal completion FIRST so the frontend unlocks the input immediately.
         done_time = time.time()
         logger.info(f"✅ DONE event emitted — UI unlocked")
