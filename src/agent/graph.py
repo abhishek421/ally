@@ -5,6 +5,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import trim_messages
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -416,8 +417,27 @@ def create_agent_for_context(
 
     # Build a prompt callable that prepends system messages to state messages.
     # create_react_agent accepts a Callable[[state], messages] for the prompt param.
+    # Trim history to ~40k tokens to prevent runaway token usage in long conversations
+    # (e.g. multi-confirmation flows). Uses character-length as a token proxy (4 chars ≈ 1 token).
+    # strategy="last" + start_on="human" keeps the most recent messages and always
+    # starts at a clean human turn so we never cut mid-tool-call-cycle.
+    def _count_tokens(msgs) -> int:
+        return sum(len(str(m.content)) // 4 for m in msgs)
+
     def prompt_fn(state):
-        return system_messages + state["messages"]
+        history = trim_messages(
+            state["messages"],
+            max_tokens=120_000,
+            strategy="last",
+            token_counter=_count_tokens,
+            include_system=False,
+            allow_partial=False,
+            start_on="human",
+        )
+        if len(history) < len(state["messages"]):
+            trimmed = len(state["messages"]) - len(history)
+            logger.debug(f"✂️  Trimmed {trimmed} old messages from history ({len(state['messages'])} → {len(history)})")
+        return system_messages + history
 
     # Log personalization info
     user_name = context.user_first_name or "Unknown"
@@ -922,7 +942,7 @@ async def resume_agent(
                         for msg in messages:
                             if hasattr(msg, "content"):
                                 tool_content = _extract_text_content(msg.content)
-                                cleaned_result, _ = parse_data_change(tool_content)
+                                cleaned_result, change_data = parse_data_change(tool_content)
                                 tool_name = getattr(msg, "name", "unknown")
                                 yield {
                                     "type": "tool_result",
@@ -931,6 +951,11 @@ async def resume_agent(
                                         "result": cleaned_result,
                                     },
                                 }
+                                if change_data:
+                                    yield {
+                                        "type": "data_changed",
+                                        "data": change_data,
+                                    }
         # Signal completion FIRST so the frontend unlocks the input immediately.
         done_time = time.time()
         logger.info(f"✅ DONE event emitted — UI unlocked")

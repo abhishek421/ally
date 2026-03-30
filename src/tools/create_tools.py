@@ -4,6 +4,7 @@ import logging
 from typing import Optional
 
 from langchain_core.tools import tool
+from langgraph.errors import GraphInterrupt
 
 from src.tools.context_var import get_tool_context
 from src.tools.base import (
@@ -19,6 +20,7 @@ from src.tools.reminder_tools import format_reminder
 from src.tools.note_tools import format_note
 from src.tools.confirmation import (
     request_create_confirmation,
+    request_bulk_create_confirmation,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,7 +59,7 @@ def get_create_tools() -> list:
             Confirmation message with the created company details
         """
         # Build draft data for confirmation preview
-        draft_data = {"name": name}
+        draft_data = {"name": name, "_draft_id": "draft-0"}
         if description:
             draft_data["description"] = description
         if email:
@@ -68,20 +70,39 @@ def get_create_tools() -> list:
             draft_data["website"] = website
         if group_id:
             draft_data["group_id"] = group_id
-        
-        # Request user confirmation before creating
-        confirmation = request_create_confirmation(
+
+        # Use bulk confirmation so a draft row appears in the table
+        confirmation = request_bulk_create_confirmation(
+            entities=[draft_data],
             entity_type="company",
-            draft_data=draft_data,
+            group_id=group_id,
         )
-        
+
         if not confirmation.confirmed:
-            feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
-            return f"Company creation cancelled by user.{feedback}"
-        
+            return f"Company creation cancelled by user. [CANCELLED - stop here, do not retry or reattempt]"
+
+        # Check if the single entity was accepted
+        accepted_ids = confirmation.accepted_ids
+        if accepted_ids is not None and "draft-0" not in accepted_ids:
+            return f"Company creation cancelled by user. [CANCELLED - stop here, do not retry or reattempt]"
+
+        # Apply any inline edits made during confirmation
+        final = {**draft_data}
+        final.pop("_draft_id", None)
+        final.pop("group_id", None)
+        if confirmation.edited_entities and "draft-0" in confirmation.edited_entities:
+            final.update(confirmation.edited_entities["draft-0"])
+
+        # Extract (possibly edited) values
+        name = final.get("name", name)
+        description = final.get("description", description)
+        email = final.get("email", email)
+        phone = final.get("phone", phone)
+        website = final.get("website", website)
+
         context = get_tool_context()
         client = context.get_client()
-        
+
         mutation = """
         mutation CreateCompany(
             $input: CreateCompanyInput!
@@ -98,22 +119,22 @@ def get_create_tools() -> list:
             }
         }
         """
-        
+
         # Build input object
         input_data = {
             "name": name,
             "workspaceId": context.workspace_id,
         }
-        
+
         if description:
             input_data["description"] = description
-        
+
         if email:
             input_data["emails"] = [{"value": email, "type": "work", "isPrimary": True}]
-        
+
         if phone:
             input_data["phoneNumbers"] = [{"value": phone, "type": "work", "isPrimary": True}]
-        
+
         if website:
             input_data["urls"] = [{"value": website, "label": "Website", "isPrimary": True}]
         
@@ -140,6 +161,8 @@ def get_create_tools() -> list:
             else:
                 return "Failed to create company - no data returned."
                 
+        except GraphInterrupt:
+            raise
         except Exception as e:
             logger.error(f"Error creating company: {e}")
             return f"Error creating company: {str(e)}"
@@ -174,7 +197,7 @@ def get_create_tools() -> list:
             Confirmation message with the created person details
         """
         # Build draft data for confirmation preview
-        draft_data = {"first_name": first_name}
+        draft_data = {"first_name": first_name, "_draft_id": "draft-0"}
         if last_name:
             draft_data["last_name"] = last_name
         if job_title:
@@ -187,20 +210,40 @@ def get_create_tools() -> list:
             draft_data["phone"] = phone
         if group_id:
             draft_data["group_id"] = group_id
-        
-        # Request user confirmation before creating
-        confirmation = request_create_confirmation(
+
+        # Use bulk confirmation so a draft row appears in the table
+        confirmation = request_bulk_create_confirmation(
+            entities=[draft_data],
             entity_type="person",
-            draft_data=draft_data,
+            group_id=group_id,
         )
-        
+
         if not confirmation.confirmed:
-            feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
-            return f"Person creation cancelled by user.{feedback}"
-        
+            return f"Person creation cancelled by user. [CANCELLED - stop here, do not retry or reattempt]"
+
+        # Check if the single entity was accepted
+        accepted_ids = confirmation.accepted_ids
+        if accepted_ids is not None and "draft-0" not in accepted_ids:
+            return f"Person creation cancelled by user. [CANCELLED - stop here, do not retry or reattempt]"
+
+        # Apply any inline edits made during confirmation
+        final = {**draft_data}
+        final.pop("_draft_id", None)
+        final.pop("group_id", None)
+        if confirmation.edited_entities and "draft-0" in confirmation.edited_entities:
+            final.update(confirmation.edited_entities["draft-0"])
+
+        # Extract (possibly edited) values
+        first_name = final.get("first_name", first_name)
+        last_name = final.get("last_name", last_name)
+        job_title = final.get("job_title", job_title)
+        description = final.get("description", description)
+        email = final.get("email", email)
+        phone = final.get("phone", phone)
+
         context = get_tool_context()
         client = context.get_client()
-        
+
         mutation = """
         mutation CreatePerson(
             $input: CreatePeopleInput!
@@ -218,25 +261,25 @@ def get_create_tools() -> list:
             }
         }
         """
-        
+
         # Build input object
         input_data = {
             "firstName": first_name,
             "workspaceId": context.workspace_id,
         }
-        
+
         if last_name:
             input_data["lastName"] = last_name
-        
+
         if job_title:
             input_data["jobTitle"] = job_title
-        
+
         if description:
             input_data["description"] = description
-        
+
         if email:
             input_data["emails"] = [{"value": email, "type": "work", "isPrimary": True}]
-        
+
         if phone:
             input_data["phoneNumbers"] = [{"value": phone, "type": "mobile", "isPrimary": True}]
         
@@ -263,6 +306,8 @@ def get_create_tools() -> list:
             else:
                 return "Failed to create person - no data returned."
                 
+        except GraphInterrupt:
+            raise
         except Exception as e:
             logger.error(f"Error creating person: {e}")
             return f"Error creating person: {str(e)}"
@@ -325,7 +370,7 @@ def get_create_tools() -> list:
         
         if not confirmation.confirmed:
             feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
-            return f"Group creation cancelled by user.{feedback}"
+            return f"Group creation cancelled by user.{feedback} [CANCELLED - stop here, do not retry or reattempt]"
         
         context = get_tool_context()
         client = context.get_client()
@@ -380,6 +425,8 @@ def get_create_tools() -> list:
             else:
                 return "Failed to create group - no data returned."
                 
+        except GraphInterrupt:
+            raise
         except Exception as e:
             logger.error(f"Error creating group: {e}")
             return f"Error creating group: {str(e)}"
@@ -483,6 +530,8 @@ def get_create_tools() -> list:
             else:
                 return "Failed to create view - no data returned."
                 
+        except GraphInterrupt:
+            raise
         except Exception as e:
             logger.error(f"Error creating view: {e}")
             return f"Error creating view: {str(e)}"
@@ -537,7 +586,7 @@ def get_create_tools() -> list:
         
     #     if not confirmation.confirmed:
     #         feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
-    #         return f"Reminder creation cancelled by user.{feedback}"
+    #         return f"Reminder creation cancelled by user.{feedback} [CANCELLED - stop here, do not retry or reattempt]"
         
     #     client = context.get_client()
         
@@ -665,9 +714,237 @@ def get_create_tools() -> list:
             else:
                 return "Failed to create note - no data returned."
                 
+        except GraphInterrupt:
+            raise
         except Exception as e:
             logger.error(f"Error creating note: {e}")
             return f"Error creating note: {str(e)}"
+        finally:
+            await client.close()
+
+    @tool
+    async def bulk_create_companies(
+        companies: list[dict],
+        group_id: Optional[str] = None,
+    ) -> str:
+        """Create multiple companies at once in a single confirmed action.
+
+        Use this tool instead of create_company when the user wants to create
+        2 or more companies. The user reviews all companies before any are created.
+        They can uncheck individual companies to exclude them or edit fields inline.
+
+        Args:
+            companies: List of company dicts. Each dict should have at minimum
+                       {"name": str} and optionally {"description": str,
+                       "email": str, "phone": str, "website": str}.
+            group_id: ID of the group to add all created companies to (optional).
+
+        Returns:
+            Summary of how many companies were created.
+        """
+        if not companies:
+            return "No companies provided to create."
+
+        # Assign temp draft IDs for frontend tracking
+        for i, company in enumerate(companies):
+            company["_draft_id"] = f"draft-{i}"
+
+        confirmation = request_bulk_create_confirmation(
+            entities=companies,
+            entity_type="company",
+            group_id=group_id,
+        )
+
+        if not confirmation.confirmed:
+            return "Bulk company creation cancelled. [CANCELLED - stop here, do not retry or reattempt]"
+
+        accepted_ids = confirmation.accepted_ids  # None = accept all
+        edited_entities = confirmation.edited_entities or {}
+
+        items_to_create = []
+        for company in companies:
+            draft_id = company["_draft_id"]
+            if accepted_ids is not None and draft_id not in accepted_ids:
+                continue
+            final = {**company}
+            if draft_id in edited_entities:
+                final.update(edited_entities[draft_id])
+            final.pop("_draft_id", None)
+            items_to_create.append(final)
+
+        if not items_to_create:
+            return "No companies were selected for creation."
+
+        context = get_tool_context()
+        client = context.get_client()
+
+        mutation = """
+        mutation BulkCreateCompanies($input: BulkCreateCompaniesInput!) {
+            bulkCreateCompanies(input: $input) {
+                count
+                created {
+                    id
+                    name
+                    workspaceId
+                }
+            }
+        }
+        """
+
+        input_items = []
+        for company in items_to_create:
+            item: dict = {"name": company["name"], "workspaceId": context.workspace_id}
+            if company.get("description"):
+                item["description"] = company["description"]
+            if company.get("email"):
+                item["emails"] = [{"value": company["email"], "type": "work", "isPrimary": True}]
+            if company.get("phone"):
+                item["phoneNumbers"] = [{"value": company["phone"], "type": "work", "isPrimary": True}]
+            if company.get("website"):
+                item["urls"] = [{"value": company["website"], "label": "Website", "isPrimary": True}]
+            input_items.append(item)
+
+        try:
+            result = await client.mutate(mutation, {
+                "input": {"items": input_items, "groupId": group_id},
+            })
+            bulk_result = result.get("bulkCreateCompanies", {})
+            count = bulk_result.get("count", 0)
+            created = bulk_result.get("created", [])
+
+            markers = ""
+            for company in created:
+                change = DataChange(
+                    entity_type=EntityType.COMPANY,
+                    action=ChangeAction.CREATED,
+                    entity_id=company.get("id"),
+                    group_id=group_id,
+                )
+                markers += change.to_marker()
+
+            return f"Created {count} {'company' if count == 1 else 'companies'}." + markers
+
+        except GraphInterrupt:
+            raise
+        except Exception as e:
+            logger.error(f"Error bulk creating companies: {e}")
+            return f"Error creating companies: {str(e)}"
+        finally:
+            await client.close()
+
+    @tool
+    async def bulk_create_people(
+        people: list[dict],
+        group_id: Optional[str] = None,
+    ) -> str:
+        """Create multiple people (contacts) at once in a single confirmed action.
+
+        Use this tool instead of create_person when the user wants to create
+        2 or more people. The user reviews all contacts before any are created.
+        They can uncheck individual contacts to exclude them or edit fields inline.
+
+        Args:
+            people: List of person dicts. Each dict should have at minimum
+                    {"first_name": str} and optionally {"last_name": str,
+                    "job_title": str, "email": str, "phone": str,
+                    "description": str}.
+            group_id: ID of the group to add all created contacts to (optional).
+
+        Returns:
+            Summary of how many people were created.
+        """
+        if not people:
+            return "No people provided to create."
+
+        for i, person in enumerate(people):
+            person["_draft_id"] = f"draft-{i}"
+
+        confirmation = request_bulk_create_confirmation(
+            entities=people,
+            entity_type="person",
+            group_id=group_id,
+        )
+
+        if not confirmation.confirmed:
+            return "Bulk people creation cancelled. [CANCELLED - stop here, do not retry or reattempt]"
+
+        accepted_ids = confirmation.accepted_ids
+        edited_entities = confirmation.edited_entities or {}
+
+        items_to_create = []
+        for person in people:
+            draft_id = person["_draft_id"]
+            if accepted_ids is not None and draft_id not in accepted_ids:
+                continue
+            final = {**person}
+            if draft_id in edited_entities:
+                final.update(edited_entities[draft_id])
+            final.pop("_draft_id", None)
+            items_to_create.append(final)
+
+        if not items_to_create:
+            return "No people were selected for creation."
+
+        context = get_tool_context()
+        client = context.get_client()
+
+        mutation = """
+        mutation BulkCreatePeople($input: BulkCreatePeopleInput!) {
+            bulkCreatePeople(input: $input) {
+                count
+                created {
+                    id
+                    firstName
+                    lastName
+                    workspaceId
+                }
+            }
+        }
+        """
+
+        input_items = []
+        for person in items_to_create:
+            item: dict = {
+                "firstName": person.get("first_name") or person.get("firstName", ""),
+                "workspaceId": context.workspace_id,
+            }
+            if person.get("last_name") or person.get("lastName"):
+                item["lastName"] = person.get("last_name") or person.get("lastName")
+            if person.get("job_title") or person.get("jobTitle"):
+                item["jobTitle"] = person.get("job_title") or person.get("jobTitle")
+            if person.get("description"):
+                item["description"] = person["description"]
+            if person.get("email"):
+                item["emails"] = [{"value": person["email"], "type": "work", "isPrimary": True}]
+            if person.get("phone"):
+                item["phoneNumbers"] = [{"value": person["phone"], "type": "mobile", "isPrimary": True}]
+            input_items.append(item)
+
+        try:
+            result = await client.mutate(mutation, {
+                "input": {"items": input_items, "groupId": group_id},
+            })
+            bulk_result = result.get("bulkCreatePeople", {})
+            count = bulk_result.get("count", 0)
+            created = bulk_result.get("created", [])
+
+            markers = ""
+            for person in created:
+                change = DataChange(
+                    entity_type=EntityType.PERSON,
+                    action=ChangeAction.CREATED,
+                    entity_id=person.get("id"),
+                    group_id=group_id,
+                )
+                markers += change.to_marker()
+
+            return f"Created {count} {'person' if count == 1 else 'people'}." + markers
+
+        except GraphInterrupt:
+            raise
+        except Exception as e:
+            logger.error(f"Error bulk creating people: {e}")
+            return f"Error creating people: {str(e)}"
         finally:
             await client.close()
 
@@ -677,5 +954,7 @@ def get_create_tools() -> list:
         create_group,
         create_view_in_group,
         create_note,
+        bulk_create_companies,
+        bulk_create_people,
     ]
 
