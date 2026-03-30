@@ -7,12 +7,10 @@ from langchain_core.tools import tool
 
 from src.tools.context_var import get_tool_context
 from src.tools.base import (
-    ToolContext, 
-    format_company, 
-    format_person, 
+    ToolContext,
+    format_company,
+    format_person,
     format_group,
-    format_reminder,
-    format_note,
     DataChange,
     EntityType,
     ChangeAction,

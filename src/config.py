@@ -20,12 +20,29 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # LLM Configuration
+    # LLM Configuration (single-model fallback when routing is disabled)
     llm_provider: Literal["openai", "anthropic", "gemini"] = "openai"
 openai_api_key="REDACTED"
     anthropic_api_key: str = ""
     google_api_key: str = ""
     llm_model: str = "gpt-4o"
+
+    # Multi-Model Routing
+    # Set enable_model_routing=True to route queries to different models by complexity.
+    # Set to False to use single llm_provider/llm_model for everything (original behavior).
+    enable_model_routing: bool = False
+
+    # Tier 1 — LITE: greetings, simple lookups, chitchat
+    lite_provider: Literal["openai", "anthropic", "gemini"] = "gemini"
+    lite_model: str = "gemini-2.0-flash-lite"
+
+    # Tier 2 — STANDARD: CRM operations, summaries, data questions
+    standard_provider: Literal["openai", "anthropic", "gemini"] = "openai"
+    standard_model: str = "gpt-4o-mini"
+
+    # Tier 3 — POWER: deep analysis, research, multi-step reasoning
+    power_provider: Literal["openai", "anthropic", "gemini"] = "openai"
+    power_model: str = "gpt-4o"
 
     # Research / Web Search
 PERPLEXITY_API_KEY=REDACTED
@@ -69,6 +86,10 @@ PERPLEXITY_API_KEY=REDACTED
         # Google Gemini
         "gemini-1.5-pro": 2000000,
         "gemini-1.5-flash": 1000000,
+        "gemini-2.0-flash": 1048576,
+        "gemini-2.0-flash-lite": 1048576,
+        "gemini-2.5-pro": 1048576,
+        "gemini-2.5-flash": 1048576,
     }
 
     @property

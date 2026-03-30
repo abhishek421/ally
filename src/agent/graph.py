@@ -14,6 +14,7 @@ from langgraph.types import Command, interrupt
 
 from src.config import get_settings
 from src.agent.prompts import get_system_prompt, get_system_prompt_messages
+from src.agent.router import ModelTier, route_query
 from src.tools import get_all_tools, get_tools_for_categories
 from src.tools.base import ToolContext, parse_data_change
 from src.tools.context_var import set_tool_context
@@ -106,48 +107,93 @@ _checkpointer_context = None
 _checkpointer: AsyncPostgresSaver | MemorySaver | None = None
 _memory_saver: MemorySaver | None = None
 
-# Cached LLM singleton
-_cached_llm = None
+# Cached LLM instances — keyed by "provider:model" for multi-model routing
+_cached_llms: dict[str, Any] = {}
 
 # Cached compiled agent (graph compiled once, reused for all requests)
 _cached_agent = None
 
 
-def get_llm():
-    """Get the configured LLM instance (cached singleton).
-    Returns:
-        ChatOpenAI, ChatAnthropic, or ChatGoogleGenerativeAI instance based on configuration
-    """
-    global _cached_llm
-    if _cached_llm is not None:
-        return _cached_llm
+def _create_llm(provider: str, model: str):
+    """Create an LLM instance for the given provider and model.
 
+    Args:
+        provider: "openai", "anthropic", or "gemini"
+        model: Model name (e.g., "gpt-4o-mini", "gemini-2.0-flash-lite")
+
+    Returns:
+        LangChain chat model instance
+    """
     settings = get_settings()
-    if settings.is_openai:
-        _cached_llm = ChatOpenAI(
-            model=settings.llm_model,
+    if provider == "openai":
+        return ChatOpenAI(
+            model=model,
 openai_api_key="REDACTED"
             temperature=0.7,
             streaming=True,
         )
-    elif settings.is_gemini:
-        logger.info(f"Initializing Gemini with model={settings.llm_model}")
-        _cached_llm = ChatGoogleGenerativeAI(
-            model=settings.llm_model,
+    elif provider == "gemini":
+        return ChatGoogleGenerativeAI(
+            model=model,
             api_key=settings.google_api_key,
             temperature=0.7,
             streaming=True,
         )
-    else:
-        _cached_llm = ChatAnthropic(
-            model=settings.llm_model,
+    else:  # anthropic
+        return ChatAnthropic(
+            model=model,
             api_key=settings.anthropic_api_key,
             temperature=0.7,
             streaming=True,
         )
 
-    logger.info(f"🤖 LLM initialized: {settings.llm_model} (cached)")
-    return _cached_llm
+
+def get_llm():
+    """Get the default LLM instance (single-model mode).
+
+    Used when model routing is disabled, or as a fallback.
+
+    Returns:
+        ChatOpenAI, ChatAnthropic, or ChatGoogleGenerativeAI instance
+    """
+    settings = get_settings()
+    return _get_cached_llm(settings.llm_provider, settings.llm_model)
+
+
+def get_llm_for_tier(tier: ModelTier) -> tuple:
+    """Get an LLM instance for the given model tier.
+
+    If model routing is disabled, falls back to the single default model.
+
+    Args:
+        tier: ModelTier (LITE, STANDARD, or POWER)
+
+    Returns:
+        Tuple of (llm_instance, provider_str, model_str)
+    """
+    settings = get_settings()
+
+    if not settings.enable_model_routing:
+        return get_llm(), settings.llm_provider, settings.llm_model
+
+    # Map tier to provider + model from config
+    tier_map = {
+        ModelTier.LITE: (settings.lite_provider, settings.lite_model),
+        ModelTier.STANDARD: (settings.standard_provider, settings.standard_model),
+        ModelTier.POWER: (settings.power_provider, settings.power_model),
+    }
+    provider, model = tier_map[tier]
+    llm = _get_cached_llm(provider, model)
+    return llm, provider, model
+
+
+def _get_cached_llm(provider: str, model: str):
+    """Get or create a cached LLM instance for the given provider:model pair."""
+    cache_key = f"{provider}:{model}"
+    if cache_key not in _cached_llms:
+        _cached_llms[cache_key] = _create_llm(provider, model)
+        logger.info(f"🤖 LLM initialized: {provider}/{model} (cached as '{cache_key}')")
+    return _cached_llms[cache_key]
 async def is_first_message(conversation_id: str) -> bool:
     """Check if this is the first message in a conversation.
     
@@ -199,8 +245,9 @@ async def generate_conversation_title(user_query: str, assistant_response: str) 
     """
     title_token_usage = None
     try:
-        llm = get_llm()
-        
+        # Always use LITE tier for title generation — it's a simple task
+        llm, _, title_model = get_llm_for_tier(ModelTier.LITE)
+
         # Truncate long messages to avoid token waste
         query_truncated = user_query[:500] if len(user_query) > 500 else user_query
         response_truncated = assistant_response[:500] if len(assistant_response) > 500 else assistant_response
@@ -262,7 +309,7 @@ Title:"""
             telemetry = {
                 "event": "token_usage",
                 "request_type": "title_generation",
-                "model": getattr(llm, "model_name", "unknown"),
+                "model": title_model,
                 "tokens": title_token_usage
             }
             logger.info(f"📊 TELEMETRY: {json.dumps(telemetry)}")
@@ -382,66 +429,62 @@ def create_agent_for_context(
     context: ToolContext,
     checkpointer=None,
     is_new_conversation: bool = True,
+    tier: ModelTier | None = None,
 ):
     """Create a ReAct agent with tools configured for the given context.
-
-    Uses a cached compiled graph if available. Only the prompt and
-    per-request context (via set_tool_context) change between calls.
 
     Args:
         context: Tool context with auth and workspace info
         checkpointer: Optional checkpointer for conversation memory
         is_new_conversation: Whether this is the first message (for greeting behavior)
+        tier: Model tier to use (LITE/STANDARD/POWER). None = default model.
 
     Returns:
         Compiled LangGraph agent
     """
-    global _cached_agent
-
     # Inject per-request context so tools can access auth dynamically
     set_tool_context(context)
 
-    llm = get_llm()
+    # Select the LLM based on tier (or fall back to default)
+    if tier is not None:
+        llm, provider, model = get_llm_for_tier(tier)
+        is_anthropic = (provider == "anthropic")
+    else:
+        llm = get_llm()
+        settings = get_settings()
+        is_anthropic = settings.is_anthropic
 
     # Build system prompt as a list of messages for prompt caching.
     # Message 1 = static base prompt (cacheable by LLM providers).
     # Message 2 = dynamic context (user name, workspace/group instructions).
-    settings = get_settings()
     system_messages = get_system_prompt_messages(
         user_first_name=context.user_first_name,
         is_new_conversation=is_new_conversation,
         workspace_instructions=context.workspace_instructions,
         group_instructions=context.group_instructions,
-        is_anthropic=settings.is_anthropic,
+        is_anthropic=is_anthropic,
     )
 
     # Build a prompt callable that prepends system messages to state messages.
-    # create_react_agent accepts a Callable[[state], messages] for the prompt param.
     def prompt_fn(state):
         return system_messages + state["messages"]
 
     # Log personalization info
     user_name = context.user_first_name or "Unknown"
     conv_type = "new" if is_new_conversation else "continuing"
+    tier_label = f" [{tier.value.upper()}]" if tier else ""
     instructions_info = []
     if context.workspace_instructions:
         instructions_info.append(f"workspace ({len(context.workspace_instructions)} chars)")
     if context.group_instructions:
         instructions_info.append(f"group ({len(context.group_instructions)} chars)")
 
-    if _cached_agent is not None:
-        # Reuse the cached agent — only the prompt & context change
-        if instructions_info:
-            logger.info(f"♻️  Reusing cached agent for {user_name} ({conv_type}) WITH {', '.join(instructions_info)} instructions")
-        else:
-            logger.info(f"♻️  Reusing cached agent for {user_name} ({conv_type}) WITHOUT custom instructions")
+    if instructions_info:
+        logger.info(f"🤖 Agent for {user_name} ({conv_type}){tier_label} WITH {', '.join(instructions_info)} instructions")
+    else:
+        logger.info(f"🤖 Agent for {user_name} ({conv_type}){tier_label}")
 
-        # Update the prompt on the cached agent
-        # Since create_react_agent compiles the graph, we rebuild with updated prompt
-        # but reuse the same LLM and tools (the expensive parts)
-        pass  # The agent is rebuilt below with cached LLM + tools
-
-    # Build tools once (they use get_tool_context() internally)
+    # Build tools (they use get_tool_context() internally)
     tools = get_all_tools()
 
     # Create the agent using the prebuilt ReAct pattern
@@ -452,42 +495,45 @@ def create_agent_for_context(
         checkpointer=checkpointer,
     )
 
-    if _cached_agent is None:
-        logger.info(f"🤖 Agent compiled for first time [prompt caching ON]")
-
-    _cached_agent = agent
     return agent
 
 
-async def create_agent(context: ToolContext, is_new_conversation: bool = True):
+async def create_agent(
+    context: ToolContext,
+    is_new_conversation: bool = True,
+    tier: ModelTier | None = None,
+):
     """Create a compiled agent with checkpointer.
 
     Args:
         context: Tool context with auth and workspace info
         is_new_conversation: Whether this is the first message (for greeting behavior)
+        tier: Model tier to use (LITE/STANDARD/POWER)
 
     Returns:
         Compiled LangGraph agent with checkpointer
     """
     checkpointer = await get_checkpointer()
-    return create_agent_for_context(context, checkpointer, is_new_conversation)
+    return create_agent_for_context(context, checkpointer, is_new_conversation, tier=tier)
 
 
-async def get_agent(context: ToolContext, is_new_conversation: bool = True):
+async def get_agent(
+    context: ToolContext,
+    is_new_conversation: bool = True,
+    tier: ModelTier | None = None,
+):
     """Get an agent for the given context.
-
-    Injects per-request auth context via set_tool_context() so that
-    tools can access the correct auth token, workspace ID, etc.
 
     Args:
         context: Tool context with auth and workspace info
         is_new_conversation: Whether this is the first message (for greeting behavior)
+        tier: Model tier to use (LITE/STANDARD/POWER)
 
     Returns:
         Compiled LangGraph agent
     """
     set_tool_context(context)
-    return await create_agent(context, is_new_conversation)
+    return await create_agent(context, is_new_conversation, tier=tier)
 
 
 async def invoke_agent(
@@ -576,15 +622,19 @@ async def stream_agent(
     """
     # Check if this is a new conversation (for greeting behavior)
     is_new = await is_first_message(conversation_id)
-    
+
     # Classify intent and load only relevant tools
     categories = classify_intent(message)
     logger.info(
         f"🎯 Intent: {[c.value for c in categories]}"
     )
 
-    # Create agent (reuses cached graph + LLM, injects fresh context)
-    agent = await get_agent(context, is_new_conversation=is_new)
+    # Route query to the appropriate model tier
+    tier = route_query(message, categories)
+    _, tier_provider, tier_model = get_llm_for_tier(tier)
+
+    # Create agent with the routed model tier
+    agent = await get_agent(context, is_new_conversation=is_new, tier=tier)
     config = {
         "configurable": {
             "thread_id": conversation_id,
@@ -602,10 +652,10 @@ async def stream_agent(
     heartbeat_interval = 1.5  # seconds
     has_seen_tool_result = False
 
-    # PRE-REQUEST BUDGET CHECK
+    # PRE-REQUEST BUDGET CHECK (use the routed model for context window limit)
     settings = get_settings()
     history_usage = await get_conversation_usage(conversation_id)
-    pre_check = compute_budget_status(history_usage["total_tokens"], settings.llm_model)
+    pre_check = compute_budget_status(history_usage["total_tokens"], tier_model)
     
     if pre_check["status"] == "blocked":
         logger.warning(
@@ -739,12 +789,12 @@ async def stream_agent(
             )
 
             # Log structured telemetry
-            settings = get_settings()
             telemetry = {
                 "event": "token_usage",
                 "request_type": "chat",
                 "conversation_id": conversation_id,
-                "model": settings.llm_model,
+                "model": tier_model,
+                "model_tier": tier.value,
                 "tokens": request_token_usage,
                 "llm_calls": llm_call_count
             }
@@ -755,13 +805,15 @@ async def stream_agent(
                 "data": {
                     **request_token_usage,
                     "llm_calls": llm_call_count,
+                    "model_tier": tier.value,
+                    "model_name": tier_model,
                 },
             }
 
             # Emit Context Window Status
             post_history = await get_conversation_usage(conversation_id)
             cumulative_total = post_history["total_tokens"] + request_token_usage["total_tokens"]
-            budget_status = compute_budget_status(cumulative_total, settings.llm_model)
+            budget_status = compute_budget_status(cumulative_total, tier_model)
 
             yield {
                 "type": "context_window_status",
@@ -796,7 +848,10 @@ async def resume_agent(
         Event dictionaries with type and data (same as stream_agent)
     """
     # Resume is always a continuing conversation (not new)
-    agent = await get_agent(context, is_new_conversation=False)
+    # Use STANDARD tier for resume — confirmations are mid-complexity operations
+    resume_tier = ModelTier.STANDARD
+    _, _, resume_model = get_llm_for_tier(resume_tier)
+    agent = await get_agent(context, is_new_conversation=False, tier=resume_tier)
     config = {
         "configurable": {
             "thread_id": conversation_id,
@@ -929,12 +984,12 @@ async def resume_agent(
             )
 
             # Log structured telemetry
-            settings = get_settings()
             telemetry = {
                 "event": "token_usage",
                 "request_type": "chat_resume",
                 "conversation_id": conversation_id,
-                "model": settings.llm_model,
+                "model": resume_model,
+                "model_tier": resume_tier.value,
                 "tokens": request_token_usage,
                 "llm_calls": llm_call_count
             }
@@ -945,13 +1000,15 @@ async def resume_agent(
                 "data": {
                     **request_token_usage,
                     "llm_calls": llm_call_count,
+                    "model_tier": resume_tier.value,
+                    "model_name": resume_model,
                 },
             }
 
             # Emit Context Window Status
             post_history = await get_conversation_usage(conversation_id)
             cumulative_total = post_history["total_tokens"] + request_token_usage["total_tokens"]
-            budget_status = compute_budget_status(cumulative_total, settings.llm_model)
+            budget_status = compute_budget_status(cumulative_total, resume_model)
 
             yield {
                 "type": "context_window_status",
