@@ -286,6 +286,45 @@ def request_delete_confirmation(
     ))
 
 
+def request_bulk_create_confirmation(
+    entities: list[dict],
+    entity_type: str,
+    group_id: Optional[str] = None,
+    message: Optional[str] = None,
+) -> ConfirmationResponse:
+    """Request confirmation before bulk creating multiple entities.
+
+    Args:
+        entities: List of entity data dictionaries to be created
+        entity_type: Type of entity ("person", "company")
+        group_id: Optional group ID context
+        message: Optional custom message
+
+    Returns:
+        ConfirmationResponse with confirmed=True if user approved
+    """
+    entity_label = entity_type.replace("_", " ").title()
+    count = len(entities)
+    label_plural = f"{entity_label}s" if count != 1 else entity_label
+
+    draft_data: dict = {
+        "entities": entities,
+        "count": count,
+        "_is_bulk_create": True,
+    }
+    if group_id:
+        draft_data["group_id"] = group_id
+
+    return request_confirmation(ConfirmationRequest(
+        type=ConfirmationType.CONFIRM_ACTION,
+        title=f"Create {count} {label_plural}",
+        message=message or f"I'll create the following {count} {label_plural.lower()}:",
+        draft_data=draft_data,
+        entity_type=entity_type,
+        action_label=f"Create {count} {label_plural}",
+    ))
+
+
 def request_column_update_confirmation(
     entity_type: str,
     entity_name: str,
