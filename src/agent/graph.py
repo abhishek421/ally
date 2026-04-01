@@ -4,6 +4,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from langchain_core.messages import SystemMessage
 from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
@@ -13,9 +14,9 @@ from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command, interrupt
 
 from src.config import get_settings
-from src.agent.prompts import get_system_prompt, get_system_prompt_messages
-from src.agent.router import ModelTier, route_query
-from src.tools import get_all_tools, get_tools_for_categories
+from src.agent.prompts import get_system_prompt, get_system_prompt_messages, get_chitchat_prompt
+from src.agent.router import ModelTier, route_query, is_greeting
+from src.tools import get_all_tools, get_tools_for_categories, ToolCategory
 from src.tools.base import ToolContext, parse_data_change
 from src.tools.context_var import set_tool_context
 from src.agent.intent import classify_intent
@@ -430,6 +431,7 @@ def create_agent_for_context(
     checkpointer=None,
     is_new_conversation: bool = True,
     tier: ModelTier | None = None,
+    categories: list[ToolCategory] | None = None,
 ):
     """Create a ReAct agent with tools configured for the given context.
 
@@ -438,6 +440,9 @@ def create_agent_for_context(
         checkpointer: Optional checkpointer for conversation memory
         is_new_conversation: Whether this is the first message (for greeting behavior)
         tier: Model tier to use (LITE/STANDARD/POWER). None = default model.
+        categories: Intent categories from classify_intent(). When provided,
+            only tools relevant to these categories are loaded (plus ALWAYS_INCLUDE),
+            reducing token usage. When None, all tools are loaded.
 
     Returns:
         Compiled LangGraph agent
@@ -454,38 +459,56 @@ def create_agent_for_context(
         settings = get_settings()
         is_anthropic = settings.is_anthropic
 
-    # Build system prompt as a list of messages for prompt caching.
-    # Message 1 = static base prompt (cacheable by LLM providers).
-    # Message 2 = dynamic context (user name, workspace/group instructions).
-    system_messages = get_system_prompt_messages(
-        user_first_name=context.user_first_name,
-        is_new_conversation=is_new_conversation,
-        workspace_instructions=context.workspace_instructions,
-        group_instructions=context.group_instructions,
-        is_anthropic=is_anthropic,
-    )
-
-    # Build a prompt callable that prepends system messages to state messages.
-    def prompt_fn(state):
-        return system_messages + state["messages"]
-
-    # Log personalization info
     user_name = context.user_first_name or "Unknown"
     conv_type = "new" if is_new_conversation else "continuing"
     tier_label = f" [{tier.value.upper()}]" if tier else ""
-    instructions_info = []
-    if context.workspace_instructions:
-        instructions_info.append(f"workspace ({len(context.workspace_instructions)} chars)")
-    if context.group_instructions:
-        instructions_info.append(f"group ({len(context.group_instructions)} chars)")
 
-    if instructions_info:
-        logger.info(f"🤖 Agent for {user_name} ({conv_type}){tier_label} WITH {', '.join(instructions_info)} instructions")
+    # Build tools first — this determines which prompt path we take.
+    # categories=[] is the greeting fast-path: zero tools, minimal prompt.
+    # categories=None means all tools (resume / fallback path).
+    if categories is not None:
+        tools = get_tools_for_categories(categories)
     else:
-        logger.info(f"🤖 Agent for {user_name} ({conv_type}){tier_label}")
+        tools = get_all_tools()
 
-    # Build tools (they use get_tool_context() internally)
-    tools = get_all_tools()
+    if not tools:
+        # ── Greeting / chitchat fast-path ──────────────────────────────────
+        # Skip the 226-line system prompt entirely. Use a short (~150 token)
+        # chitchat prompt instead. Combined with zero tool schemas this saves
+        # ~5,000–7,000 input tokens per greeting turn.
+        chitchat_content = get_chitchat_prompt(context.user_first_name)
+        chitchat_msg = SystemMessage(content=chitchat_content)
+
+        def prompt_fn(state):
+            return [chitchat_msg] + state["messages"]
+
+        logger.info(f"💬 Chitchat fast-path for {user_name} ({conv_type}){tier_label}: minimal prompt, 0 tools")
+    else:
+        # ── Normal CRM path ────────────────────────────────────────────────
+        # Build full system prompt as two messages for prompt caching.
+        # Message 1 = static base prompt (cacheable prefix).
+        # Message 2 = dynamic context (user name, workspace/group instructions).
+        system_messages = get_system_prompt_messages(
+            user_first_name=context.user_first_name,
+            is_new_conversation=is_new_conversation,
+            workspace_instructions=context.workspace_instructions,
+            group_instructions=context.group_instructions,
+            is_anthropic=is_anthropic,
+        )
+
+        def prompt_fn(state):
+            return system_messages + state["messages"]
+
+        instructions_info = []
+        if context.workspace_instructions:
+            instructions_info.append(f"workspace ({len(context.workspace_instructions)} chars)")
+        if context.group_instructions:
+            instructions_info.append(f"group ({len(context.group_instructions)} chars)")
+
+        if instructions_info:
+            logger.info(f"🤖 Agent for {user_name} ({conv_type}){tier_label} WITH {', '.join(instructions_info)} instructions")
+        else:
+            logger.info(f"🤖 Agent for {user_name} ({conv_type}){tier_label}")
 
     # Create the agent using the prebuilt ReAct pattern
     agent = create_react_agent(
@@ -502,6 +525,7 @@ async def create_agent(
     context: ToolContext,
     is_new_conversation: bool = True,
     tier: ModelTier | None = None,
+    categories: list[ToolCategory] | None = None,
 ):
     """Create a compiled agent with checkpointer.
 
@@ -509,18 +533,20 @@ async def create_agent(
         context: Tool context with auth and workspace info
         is_new_conversation: Whether this is the first message (for greeting behavior)
         tier: Model tier to use (LITE/STANDARD/POWER)
+        categories: Intent categories for dynamic tool selection. None = all tools.
 
     Returns:
         Compiled LangGraph agent with checkpointer
     """
     checkpointer = await get_checkpointer()
-    return create_agent_for_context(context, checkpointer, is_new_conversation, tier=tier)
+    return create_agent_for_context(context, checkpointer, is_new_conversation, tier=tier, categories=categories)
 
 
 async def get_agent(
     context: ToolContext,
     is_new_conversation: bool = True,
     tier: ModelTier | None = None,
+    categories: list[ToolCategory] | None = None,
 ):
     """Get an agent for the given context.
 
@@ -528,12 +554,13 @@ async def get_agent(
         context: Tool context with auth and workspace info
         is_new_conversation: Whether this is the first message (for greeting behavior)
         tier: Model tier to use (LITE/STANDARD/POWER)
+        categories: Intent categories for dynamic tool selection. None = all tools.
 
     Returns:
         Compiled LangGraph agent
     """
     set_tool_context(context)
-    return await create_agent(context, is_new_conversation, tier=tier)
+    return await create_agent(context, is_new_conversation, tier=tier, categories=categories)
 
 
 async def invoke_agent(
@@ -623,18 +650,25 @@ async def stream_agent(
     # Check if this is a new conversation (for greeting behavior)
     is_new = await is_first_message(conversation_id)
 
-    # Classify intent and load only relevant tools
-    categories = classify_intent(message)
-    logger.info(
-        f"🎯 Intent: {[c.value for c in categories]}"
-    )
+    # Fast-path: detect greetings before doing full intent classification.
+    # Greetings get zero tools and a short system prompt (~200 tokens vs ~7,000).
+    if is_greeting(message):
+        categories = []   # signals "no tools" to create_agent_for_context
+        tier = ModelTier.LITE
+        _, tier_provider, tier_model = get_llm_for_tier(tier)
+        logger.info("💬 Greeting detected → LITE + 0 tools")
+    else:
+        # Classify intent and load only relevant tools
+        categories = classify_intent(message)
+        logger.info(f"🎯 Intent: {[c.value for c in categories]}")
 
-    # Route query to the appropriate model tier
-    tier = route_query(message, categories)
-    _, tier_provider, tier_model = get_llm_for_tier(tier)
+        # Route query to the appropriate model tier
+        tier = route_query(message, categories)
+        _, tier_provider, tier_model = get_llm_for_tier(tier)
 
-    # Create agent with the routed model tier
-    agent = await get_agent(context, is_new_conversation=is_new, tier=tier)
+    # Create agent with the routed model tier AND filtered tool set.
+    # categories drives both model selection AND which tool schemas are sent to the LLM.
+    agent = await get_agent(context, is_new_conversation=is_new, tier=tier, categories=categories)
     config = {
         "configurable": {
             "thread_id": conversation_id,

@@ -74,13 +74,20 @@ MULTI_ENTITY_PATTERN = r"\b(and|vs\.?|versus|compared?\s+to|between)\b"
 # Classification functions
 # ---------------------------------------------------------------------------
 
-def _is_greeting(message: str) -> bool:
-    """Check if the message is a simple greeting or acknowledgement."""
+def is_greeting(message: str) -> bool:
+    """Check if the message is a simple greeting or acknowledgement.
+
+    Public — used by stream_agent to skip tool loading entirely for chitchat.
+    Short messages (under 8 words) that match greeting patterns.
+    """
     msg = message.lower().strip()
-    # Short messages (under 8 words) that match greeting patterns
     if len(msg.split()) > 8:
         return False
     return any(re.match(p, msg) for p in GREETING_PATTERNS)
+
+
+# Keep private alias so internal router code keeps working
+_is_greeting = is_greeting
 
 
 def _count_power_signals(message: str) -> int:

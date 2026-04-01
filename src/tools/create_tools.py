@@ -38,22 +38,7 @@ def get_create_tools() -> list:
         website: Optional[str] = None,
         group_id: Optional[str] = None,
     ) -> str:
-        """Create a new company in the workspace.
-        
-        This tool will ask for user confirmation before creating the company,
-        showing a preview of the data to be created.
-        
-        Args:
-            name: Company name (required)
-            description: Company description (optional)
-            email: Primary email address (optional)
-            phone: Primary phone number (optional)
-            website: Company website URL (optional)
-            group_id: ID of a group to add the company to (optional)
-            
-        Returns:
-            Confirmation message with the created company details
-        """
+        """Create a new company. Shows confirmation preview. Use defaults for unspecified optional fields."""
         # Build draft data for confirmation preview
         draft_data = {"name": name}
         if description:
@@ -83,10 +68,9 @@ def get_create_tools() -> list:
         mutation = """
         mutation CreateCompany(
             $input: CreateCompanyInput!
-            $userId: ID!
             $groupId: ID
         ) {
-            createCompany(input: $input, userId: $userId, groupId: $groupId) {
+            createCompany(input: $input, groupId: $groupId) {
                 id
                 name
                 description
@@ -118,10 +102,9 @@ def get_create_tools() -> list:
         try:
             result = await client.mutate(mutation, {
                 "input": input_data,
-                "userId": context.user_id,
                 "groupId": group_id,
             })
-            
+
             company = result.get("createCompany")
             
             if company:
@@ -154,23 +137,7 @@ def get_create_tools() -> list:
         phone: Optional[str] = None,
         group_id: Optional[str] = None,
     ) -> str:
-        """Create a new person (contact) in the workspace.
-        
-        This tool will ask for user confirmation before creating the person,
-        showing a preview of the data to be created.
-        
-        Args:
-            first_name: First name (required)
-            last_name: Last name (optional)
-            job_title: Job title (optional)
-            description: Description or notes (optional)
-            email: Primary email address (optional)
-            phone: Primary phone number (optional)
-            group_id: ID of a group to add the person to (optional)
-            
-        Returns:
-            Confirmation message with the created person details
-        """
+        """Create a new contact/person. Shows confirmation preview. Use defaults for unspecified optional fields."""
         # Build draft data for confirmation preview
         draft_data = {"first_name": first_name}
         if last_name:
@@ -202,10 +169,9 @@ def get_create_tools() -> list:
         mutation = """
         mutation CreatePerson(
             $input: CreatePeopleInput!
-            $userId: ID!
             $groupId: ID
         ) {
-            createPerson(input: $input, userId: $userId, groupId: $groupId) {
+            createPerson(input: $input, groupId: $groupId) {
                 id
                 firstName
                 lastName
@@ -241,10 +207,9 @@ def get_create_tools() -> list:
         try:
             result = await client.mutate(mutation, {
                 "input": input_data,
-                "userId": context.user_id,
                 "groupId": group_id,
             })
-            
+
             person = result.get("createPerson")
             
             if person:
@@ -275,31 +240,7 @@ def get_create_tools() -> list:
         emoji: str = "📁",
         is_private: bool = True,
     ) -> str:
-        """Create a new group in the workspace.
-
-        This tool will ask for user confirmation before creating the group,
-        showing a preview of the data to be created.
-
-        IMPORTANT: Always provide a relevant emoji that matches the group's purpose or name.
-        For example:
-        - "Sales Leads" -> 💰 or 🎯
-        - "Engineering Team" -> 👨‍💻 or ⚙️
-        - "Investors" -> 💵 or 📈
-        - "Partners" -> 🤝
-        - "Customers" -> 👥 or 🛒
-        - "Marketing" -> 📣 or 🎨
-        - "Support" -> 🎧 or 💬
-
-        Args:
-            name: Group name (required)
-            group_type: Type of group - "PEOPLE" or "COMPANY" (default: PEOPLE)
-            description: Group description (optional)
-            emoji: Emoji icon for the group - choose one that matches the group's purpose (default: 📁)
-            is_private: Whether the group is private (default: True)
-
-        Returns:
-            Confirmation message with the created group details
-        """
+        """Create a new group. Shows confirmation preview. Defaults: type=PEOPLE, is_private=true."""
         # Validate group type
         valid_types = ["PEOPLE", "COMPANY"]
         if group_type.upper() not in valid_types:
@@ -391,17 +332,7 @@ def get_create_tools() -> list:
         view_type: str = "TABLE",
         target_entity: Optional[str] = None,
     ) -> str:
-        """Create a new view in an existing group.
-        
-        Args:
-            group_id: ID of the group to create the view in (required)
-            name: Name of the view (required)
-            view_type: Type of view - "TABLE" or "PIPELINE" (default: TABLE)
-            target_entity: Entity type - "PEOPLE", "COMPANY", or "DEAL" (optional, inferred from group)
-            
-        Returns:
-            Confirmation message with the created view details
-        """
+        """Create a new view inside a group."""
         context = get_tool_context()
         client = context.get_client()
         
@@ -602,17 +533,7 @@ def get_create_tools() -> list:
         content: str,
         is_private: bool = False,
     ) -> str:
-        """Create a new note for a person (contact) or company.
-        
-        Args:
-            entity_id: ID of the person or company (required)
-            entity_type: Type of entity - "PEOPLE" or "COMPANY" (required)
-            content: Content of the note (required)
-            is_private: Whether the note is private (default: False)
-            
-        Returns:
-            Success message with note details
-        """
+        """Create a note attached to an entity."""
         # Validate entity type
         valid_types = ["PEOPLE", "COMPANY"]
         if entity_type.upper() not in valid_types:

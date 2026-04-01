@@ -38,15 +38,7 @@ def get_update_tools() -> list:
 
     @tool
     async def add_company_to_group(company_id: str, group_id: str) -> str:
-        """Add a company to a group.
-        
-        Args:
-            company_id: ID of the company to add
-            group_id: ID of the group to add the company to
-            
-        Returns:
-            Confirmation message
-        """
+        """Add a company to a group."""
         context = get_tool_context()
         client = context.get_client()
         
@@ -96,20 +88,7 @@ def get_update_tools() -> list:
         company_name: str,
         group_name: str,
     ) -> str:
-        """Remove a company from a group.
-        
-        This tool will ask for user confirmation before removing the company
-        from the group.
-        
-        Args:
-            company_id: ID of the company to remove
-            group_id: ID of the group to remove the company from
-            company_name: Name of the company (for display)
-            group_name: Name of the group (for display)
-            
-        Returns:
-            Confirmation message
-        """
+        """Remove a company from a group (asks for confirmation)."""
         # Request user confirmation for this destructive action
         confirmation = request_delete_confirmation(
             entity_type="company",
@@ -162,15 +141,7 @@ def get_update_tools() -> list:
 
     @tool
     async def add_person_to_group(person_id: str, group_id: str) -> str:
-        """Add a person to a group.
-        
-        Args:
-            person_id: ID of the person to add
-            group_id: ID of the group to add the person to
-            
-        Returns:
-            Confirmation message
-        """
+        """Add a person to a group."""
         context = get_tool_context()
         client = context.get_client()
         
@@ -220,20 +191,7 @@ def get_update_tools() -> list:
         person_name: str,
         group_name: str,
     ) -> str:
-        """Remove a person from a group.
-        
-        This tool will ask for user confirmation before removing the person
-        from the group.
-        
-        Args:
-            person_id: ID of the person to remove
-            group_id: ID of the group to remove the person from
-            person_name: Name of the person (for display)
-            group_name: Name of the group (for display)
-            
-        Returns:
-            Confirmation message
-        """
+        """Remove a person from a group (asks for confirmation)."""
         # Request user confirmation for this destructive action
         confirmation = request_delete_confirmation(
             entity_type="person",
@@ -286,18 +244,7 @@ def get_update_tools() -> list:
 
     @tool
     async def add_person_to_company(person_id: str, company_id: str) -> str:
-        """Add a person to a company (associate/link them).
-        
-        This creates a relationship between a person and a company,
-        useful for tracking which contacts work at which companies.
-        
-        Args:
-            person_id: ID of the person to add
-            company_id: ID of the company to add the person to
-            
-        Returns:
-            Confirmation message
-        """
+        """Link a person to a company."""
         context = get_tool_context()
         client = context.get_client()
         
@@ -335,17 +282,7 @@ def get_update_tools() -> list:
 
     @tool
     async def remove_person_from_company(person_id: str, company_id: str) -> str:
-        """Remove a person from a company (unlink them).
-        
-        This removes the relationship between a person and a company.
-        
-        Args:
-            person_id: ID of the person to remove
-            company_id: ID of the company to remove the person from
-            
-        Returns:
-            Confirmation message
-        """
+        """Unlink a person from a company."""
         context = get_tool_context()
         client = context.get_client()
         
@@ -388,20 +325,7 @@ def get_update_tools() -> list:
         name: Optional[str] = None,
         description: Optional[str] = None,
     ) -> str:
-        """Update a company's information.
-        
-        This tool will ask for user confirmation before applying the updates,
-        showing a preview of the changes.
-        
-        Args:
-            company_id: ID of the company to update (required)
-            company_name: Current name of the company (for display purposes)
-            name: New company name (optional)
-            description: New company description (optional)
-            
-        Returns:
-            Confirmation message with updated company details
-        """
+        """Update a company's name or description (asks for confirmation)."""
         # Build changes dict for confirmation preview
         changes = {}
         if name is not None:
@@ -479,22 +403,7 @@ def get_update_tools() -> list:
         job_title: Optional[str] = None,
         description: Optional[str] = None,
     ) -> str:
-        """Update a person's information.
-        
-        This tool will ask for user confirmation before applying the updates,
-        showing a preview of the changes.
-        
-        Args:
-            person_id: ID of the person to update (required)
-            person_name: Current name of the person (for display purposes)
-            first_name: New first name (optional)
-            last_name: New last name (optional)
-            job_title: New job title (optional)
-            description: New description (optional)
-            
-        Returns:
-            Confirmation message with updated person details
-        """
+        """Update a person's name, job title, or description (asks for confirmation)."""
         # Build changes dict for confirmation preview
         changes = {}
         if first_name is not None:
@@ -583,18 +492,7 @@ def get_update_tools() -> list:
         emoji: Optional[str] = None,
         is_private: Optional[bool] = None,
     ) -> str:
-        """Update a group's information.
-        
-        Args:
-            group_id: ID of the group to update (required)
-            name: New group name (optional)
-            description: New group description (optional)
-            emoji: New emoji icon (optional)
-            is_private: Whether the group should be private (optional)
-            
-        Returns:
-            Confirmation message with updated group details
-        """
+        """Update a group's name, description, emoji, or privacy setting."""
         context = get_tool_context()
         client = context.get_client()
         
@@ -738,36 +636,22 @@ def get_update_tools() -> list:
         group_name: Optional[str] = None,
         new_value_color: Optional[str] = None,
     ) -> str:
-        """Update a company's column value within a group.
-        
-        This tool will ask for user confirmation before applying the update,
-        showing a preview of the change (old value → new value).
-        
-        Use this tool to update group-specific fields like Status, Priority, etc.
-        For SELECT/MULTISELECT columns, use select_option_id.
-        For TEXT/NUMBER columns, use value.
-        
-        Example: "Move company Acme Corp to Followup status in Leads group" would require:
-        1. First resolve the company name to get company_id
-        2. Resolve the group name to get group_id  
-        3. Get group columns to find the Status column_id
-        4. Get column options to find the Followup option's select_option_id
-        5. Call this tool with all the IDs AND the display names for confirmation
-        
+        """Update a company's column value (Status, Priority, etc.) within a group.
+
+        Requires: resolve entity/group names first, then get_group_columns → get_column_options.
+        Pass all IDs + display names so the confirmation UI shows "Old → New".
+
         Args:
-            company_id: ID of the company to update (required)
-            group_id: ID of the group context for the update (required)
-            column_id: ID of the column to update (required)
-            company_name: Display name of the company (required for confirmation UI)
-            column_name: Display name of the column, e.g. "Status" (required for confirmation UI)
-            new_value_label: Display label of the new value, e.g. "Lead" (required for confirmation UI)
-            value: New value for TEXT/NUMBER columns (optional)
-            select_option_id: ID of the select option for SELECT/MULTISELECT columns (optional)
-            group_name: Display name of the group (optional, for confirmation UI)
-            new_value_color: Color of new value badge (optional)
-            
-        Returns:
-            Confirmation message
+            company_id: Company ID
+            group_id: Group ID
+            column_id: Column ID
+            company_name: Company display name (for confirmation UI)
+            column_name: Column display name e.g. "Status"
+            new_value_label: New value label e.g. "Lead"
+            value: New value for TEXT/NUMBER columns
+            select_option_id: Option ID for SELECT/MULTISELECT columns
+            group_name: Group display name (for confirmation UI)
+            new_value_color: Color of new value badge
         """
         if not value and not select_option_id:
             return "Please provide either 'value' (for TEXT/NUMBER columns) or 'select_option_id' (for SELECT/MULTISELECT columns)."
@@ -887,36 +771,22 @@ def get_update_tools() -> list:
         group_name: Optional[str] = None,
         new_value_color: Optional[str] = None,
     ) -> str:
-        """Update a person's column value within a group.
-        
-        This tool will ask for user confirmation before applying the update,
-        showing a preview of the change (old value → new value).
-        
-        Use this tool to update group-specific fields like Status, Priority, etc.
-        For SELECT/MULTISELECT columns, use select_option_id.
-        For TEXT/NUMBER columns, use value.
-        
-        Example: "Move person John Smith to Qualified status in Contacts group" would require:
-        1. First resolve the person name to get person_id
-        2. Resolve the group name to get group_id
-        3. Get group columns to find the Status column_id
-        4. Get column options to find the Qualified option's select_option_id
-        5. Call this tool with all the IDs AND the display names for confirmation
-        
+        """Update a person's column value (Status, Priority, etc.) within a group.
+
+        Requires: resolve entity/group names first, then get_group_columns → get_column_options.
+        Pass all IDs + display names so the confirmation UI shows "Old → New".
+
         Args:
-            person_id: ID of the person to update (required)
-            group_id: ID of the group context for the update (required)
-            column_id: ID of the column to update (required)
-            person_name: Display name of the person (required for confirmation UI)
-            column_name: Display name of the column, e.g. "Status" (required for confirmation UI)
-            new_value_label: Display label of the new value, e.g. "Qualified" (required for confirmation UI)
-            value: New value for TEXT/NUMBER columns (optional)
-            select_option_id: ID of the select option for SELECT/MULTISELECT columns (optional)
-            group_name: Display name of the group (optional, for confirmation UI)
-            new_value_color: Color of new value badge (optional)
-            
-        Returns:
-            Confirmation message
+            person_id: Person ID
+            group_id: Group ID
+            column_id: Column ID
+            person_name: Person display name (for confirmation UI)
+            column_name: Column display name e.g. "Status"
+            new_value_label: New value label e.g. "Qualified"
+            value: New value for TEXT/NUMBER columns
+            select_option_id: Option ID for SELECT/MULTISELECT columns
+            group_name: Group display name (for confirmation UI)
+            new_value_color: Color of new value badge
         """
         if not value and not select_option_id:
             return "Please provide either 'value' (for TEXT/NUMBER columns) or 'select_option_id' (for SELECT/MULTISELECT columns)."
@@ -1029,28 +899,7 @@ def get_update_tools() -> list:
         group_name: str,
         new_status: str,
     ) -> str:
-        """Update a person's status in a group - simplified tool for status changes.
-
-        This is a convenience tool that handles the entire status update flow:
-        1. Finds the person by name
-        2. Finds the group by name
-        3. Finds the Status column and matches the new status value
-        4. Asks for confirmation
-        5. Applies the update
-
-        Use this tool when the user wants to change someone's status, like:
-        - "Move John to Lead status in Recruiters"
-        - "Change Sarah's status to Qualified in Sales Pipeline"
-        - "Update Chen Reddy to Closed-Won in Deals"
-
-        Args:
-            person_name: Name of the person (handles typos and partial matches)
-            group_name: Name of the group (handles typos and partial matches)
-            new_status: The new status value (e.g., "Lead", "Qualified", "Closed")
-
-        Returns:
-            Success message or error
-        """
+        """Update a person's status column in a group (handles name resolution and confirmation)."""
         from src.tools.base import fuzzy_match_entities
 
         context = get_tool_context()
@@ -1250,28 +1099,7 @@ def get_update_tools() -> list:
         group_name: str,
         new_status: str,
     ) -> str:
-        """Update a company's status in a group - simplified tool for status changes.
-
-        This is a convenience tool that handles the entire status update flow:
-        1. Finds the company by name
-        2. Finds the group by name
-        3. Finds the Status column and matches the new status value
-        4. Asks for confirmation
-        5. Applies the update
-
-        Use this tool when the user wants to change a company's status, like:
-        - "Move Acme Corp to Lead status in Sales Pipeline"
-        - "Change Google's status to Qualified in Prospects"
-        - "Update Microsoft to Partner in Companies"
-
-        Args:
-            company_name: Name of the company (handles typos and partial matches)
-            group_name: Name of the group (handles typos and partial matches)
-            new_status: The new status value (e.g., "Lead", "Qualified", "Closed")
-
-        Returns:
-            Success message or error
-        """
+        """Update a company's status column in a group (handles name resolution and confirmation)."""
         from src.tools.base import fuzzy_match_entities
 
         context = get_tool_context()
