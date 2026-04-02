@@ -4,7 +4,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, RemoveMessage
 from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
@@ -629,6 +629,48 @@ def _get_result_summary(result: str) -> str:
     return result[:30] + "..." if len(result) > 30 else result
 
 
+async def _sanitize_conversation_history(agent, conversation_id: str) -> None:
+    """Remove orphaned tool calls from conversation history using RemoveMessage."""
+    config = {"configurable": {"thread_id": conversation_id}}
+    try:
+        state = await agent.aget_state(config)
+        if not state or not state.values:
+            return
+        messages = state.values.get("messages", [])
+        if not messages:
+            return
+
+        # Build set of tool_call IDs that have a corresponding ToolMessage
+        responded_ids: set[str] = set()
+        for msg in messages:
+            if hasattr(msg, "type") and msg.type == "tool":
+                responded_ids.add(msg.tool_call_id)
+
+        # Find AIMessages with orphaned tool_calls
+        msgs_to_remove = []
+        for msg in messages:
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                if not all(tc.get("id") in responded_ids for tc in msg.tool_calls):
+                    msgs_to_remove.append(msg)
+                    logger.warning(
+                        f"🧹 Removing orphaned AIMessage (id={msg.id}) "
+                        f"with {len(msg.tool_calls)} tool call(s) from {conversation_id}"
+                    )
+
+        if not msgs_to_remove:
+            return
+
+        # Use RemoveMessage — LangGraph's official way to delete messages from state
+        await agent.aupdate_state(
+            config,
+            {"messages": [RemoveMessage(id=msg.id) for msg in msgs_to_remove]},
+        )
+        logger.info(f"🧹 Removed {len(msgs_to_remove)} orphaned message(s) from {conversation_id}")
+
+    except Exception as e:
+        logger.warning(f"Could not sanitize conversation history: {e}")
+
+
 async def stream_agent(
     context: ToolContext,
     message: str,
@@ -669,10 +711,15 @@ async def stream_agent(
     # Create agent with the routed model tier AND filtered tool set.
     # categories drives both model selection AND which tool schemas are sent to the LLM.
     agent = await get_agent(context, is_new_conversation=is_new, tier=tier, categories=categories)
+
+    # Clean up orphaned tool calls left by any previously interrupted/failed request
+    await _sanitize_conversation_history(agent, conversation_id)
+
     config = {
         "configurable": {
             "thread_id": conversation_id,
-        }
+        },
+        "recursion_limit": 25,  # max agent steps per request — prevents infinite loops
     }
     # Track tool calls for summary logging
     tool_calls_summary = []

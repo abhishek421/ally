@@ -2148,13 +2148,12 @@ def get_read_tools() -> list:
     @tool
     async def get_current_page() -> str:
         """Get the CRM page the user is currently viewing (company, person, group, or dashboard)."""
-        active_url = context.active_url
-        
-        if not active_url:
-            return "I don't have information about which page you're currently viewing. The page context wasn't provided."
-        
         context = get_tool_context()
         client = context.get_client()
+        active_url = context.active_url
+
+        if not active_url:
+            return "I don't have information about which page you're currently viewing. The page context wasn't provided."
         
         try:
             # Parse the URL to understand the page structure
