@@ -46,6 +46,40 @@ PERPLEXITY_API_KEY=REDACTED
     aws_cognito_user_pool_id: str = ""
     aws_cognito_client_id: str = ""
 
+    # GraphQL Client Configuration
+    graphql_connect_timeout: float = 10.0   # seconds to establish TCP connection
+    graphql_request_timeout: float = 30.0   # seconds per query/mutation
+
+    # Model Routing
+    enable_model_routing: bool = True
+    lite_provider: str = "openai"
+    lite_model: str = "gpt-4o-mini"
+    standard_provider: str = "openai"
+    standard_model: str = "gpt-4o"
+    power_provider: str = "openai"
+    power_model: str = "gpt-4o"
+
+    # Token / Context Configuration
+    default_context_window: int = 128000
+    context_warning_threshold: float = 0.7   # 70% — emit warning
+    context_limit_threshold: float = 0.8     # 80% — block further requests
+    model_context_windows: dict[str, int] = {
+        # OpenAI
+        "gpt-4o": 128000,
+        "gpt-4o-mini": 128000,
+        "gpt-4-turbo": 128000,
+        "gpt-4": 8192,
+        "gpt-3.5-turbo": 16385,
+        # Anthropic
+        "claude-3-5-sonnet": 200000,
+        "claude-3-opus": 200000,
+        "claude-3-sonnet": 200000,
+        "claude-3-haiku": 200000,
+        # Google Gemini
+        "gemini-1.5-pro": 2000000,
+        "gemini-1.5-flash": 1000000,
+    }
+
     @property
     def is_openai(self) -> bool:
         """Check if using OpenAI provider."""

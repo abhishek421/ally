@@ -5,11 +5,16 @@ from typing import Optional
 
 from langchain_core.tools import tool
 
+from src.tools.context_var import get_tool_context
 from src.tools.base import (
     ToolContext,
+    LIST_MAX_RESULTS,
     format_company,
+    format_company_compact,
     format_person,
+    format_person_compact,
     format_group,
+    format_group_compact,
     format_email,
     fuzzy_match_entities,
     get_best_match,
@@ -26,12 +31,9 @@ from src.tools.confirmation import (
 logger = logging.getLogger(__name__)
 
 
-def get_read_tools(context: ToolContext) -> list:
-    """Get all READ tools configured with the given context.
-    
-    Args:
-        context: Tool context with auth and workspace info
-        
+def get_read_tools() -> list:
+    """Get all READ tools.
+
     Returns:
         List of tool functions
     """
@@ -42,18 +44,10 @@ def get_read_tools(context: ToolContext) -> list:
         limit: int = 10,
         search: Optional[str] = None,
     ) -> str:
-        """List companies in the current workspace.
-        
-        Args:
-            page: Page number (default: 1)
-            limit: Number of results per page (default: 10, max: 50)
-            search: Optional search term to filter companies by name
-            
-        Returns:
-            Formatted list of companies
-        """
+        """List companies in the workspace (compact). Use get_company_by_id for full details."""
+        context = get_tool_context()
         client = context.get_client()
-        
+
         query = """
         query GetWorkspaceCompany(
             $workspaceId: ID!
@@ -71,8 +65,7 @@ def get_read_tools(context: ToolContext) -> list:
                     id
                     name
                     description
-                    emails { value type isPrimary }
-                    phoneNumbers { value type isPrimary }
+                    emails { value isPrimary }
                 }
                 meta { total page limit hasNextPage }
             }
@@ -83,27 +76,28 @@ def get_read_tools(context: ToolContext) -> list:
             result = await client.query(query, {
                 "workspaceId": context.workspace_id,
                 "page": page,
-                "limit": min(limit, 50),
+                "limit": min(limit, LIST_MAX_RESULTS),
                 "search": search,
             })
-            
+
             data = result.get("getWorkspaceCompany", {})
             companies = data.get("data", [])
             meta = data.get("meta", {})
-            
+
             if not companies:
                 return "No companies found in this workspace."
-            
-            lines = [f"Found {meta.get('total', len(companies))} companies (page {meta.get('page', 1)}):\n"]
+
+            total = meta.get("total", len(companies))
+            current_page = meta.get("page", 1)
+            lines = [f"Found {total} companies (showing page {current_page}):"]
             for company in companies:
-                lines.append(format_company(company))
-                lines.append("")
-            
+                lines.append(format_company_compact(company))
+
             if meta.get("hasNextPage"):
-                lines.append(f"\n(More results available - use page={meta.get('page', 1) + 1})")
-            
+                lines.append(f"(More available — use page={current_page + 1} or search to narrow down)")
+
             return "\n".join(lines)
-            
+
         except Exception as e:
             logger.error(f"Error listing companies: {e}")
             return f"Error listing companies: {str(e)}"
@@ -116,18 +110,10 @@ def get_read_tools(context: ToolContext) -> list:
         limit: int = 10,
         search: Optional[str] = None,
     ) -> str:
-        """List people (contacts) in the current workspace.
-        
-        Args:
-            page: Page number (default: 1)
-            limit: Number of results per page (default: 10, max: 50)
-            search: Optional search term to filter people by name
-            
-        Returns:
-            Formatted list of people
-        """
+        """List people/contacts in the workspace (compact). Use get_person_by_id for full details."""
+        context = get_tool_context()
         client = context.get_client()
-        
+
         query = """
         query GetWorkspacePeople(
             $workspaceId: ID!
@@ -146,11 +132,9 @@ def get_read_tools(context: ToolContext) -> list:
                     firstName
                     lastName
                     jobTitle
-                    description
-                    emails { value type isPrimary }
-                    phoneNumbers { value type isPrimary }
+                    emails { value isPrimary }
                     companyMetaData {
-                        company { id name }
+                        company { name }
                     }
                 }
                 meta { total page limit hasNextPage }
@@ -162,27 +146,28 @@ def get_read_tools(context: ToolContext) -> list:
             result = await client.query(query, {
                 "workspaceId": context.workspace_id,
                 "page": page,
-                "limit": min(limit, 50),
+                "limit": min(limit, LIST_MAX_RESULTS),
                 "search": search,
             })
-            
+
             data = result.get("getWorkspacePeople", {})
             people = data.get("data", [])
             meta = data.get("meta", {})
-            
+
             if not people:
                 return "No people found in this workspace."
-            
-            lines = [f"Found {meta.get('total', len(people))} people (page {meta.get('page', 1)}):\n"]
+
+            total = meta.get("total", len(people))
+            current_page = meta.get("page", 1)
+            lines = [f"Found {total} people (showing page {current_page}):"]
             for person in people:
-                lines.append(format_person(person))
-                lines.append("")
-            
+                lines.append(format_person_compact(person))
+
             if meta.get("hasNextPage"):
-                lines.append(f"\n(More results available - use page={meta.get('page', 1) + 1})")
-            
+                lines.append(f"(More available — use page={current_page + 1} or search to narrow down)")
+
             return "\n".join(lines)
-            
+
         except Exception as e:
             logger.error(f"Error listing people: {e}")
             return f"Error listing people: {str(e)}"
@@ -191,49 +176,42 @@ def get_read_tools(context: ToolContext) -> list:
 
     @tool
     async def list_groups_in_workspace() -> str:
-        """List all groups in the current workspace.
-        
-        Returns:
-            Formatted list of groups
-        """
+        """List all groups in the workspace (compact). Use get_group_by_id for full details."""
+        context = get_tool_context()
         client = context.get_client()
-        
+
         query = """
         query GetGroups($workspaceId: String!) {
             getGroups(workspaceId: $workspaceId) {
                 id
                 name
                 type
-                description
                 emoji
-                isPrivate
-                isFavourite
-                views {
-                    id
-                    name
-                    type
-                }
             }
         }
         """
-        
+
         try:
             result = await client.query(query, {
                 "workspaceId": context.workspace_id,
             })
-            
+
             groups = result.get("getGroups", [])
-            
+
             if not groups:
                 return "No groups found in this workspace."
-            
-            lines = [f"Found {len(groups)} groups:\n"]
-            for group in groups:
-                lines.append(format_group(group))
-                lines.append("")
-            
+
+            total = len(groups)
+            shown = groups[:LIST_MAX_RESULTS]
+            lines = [f"Found {total} groups:"]
+            for group in shown:
+                lines.append(format_group_compact(group))
+
+            if total > LIST_MAX_RESULTS:
+                lines.append(f"(Showing first {LIST_MAX_RESULTS} of {total} — use resolve_group_name to find a specific group)")
+
             return "\n".join(lines)
-            
+
         except Exception as e:
             logger.error(f"Error listing groups: {e}")
             return f"Error listing groups: {str(e)}"
@@ -247,19 +225,10 @@ def get_read_tools(context: ToolContext) -> list:
         limit: int = 10,
         search: Optional[str] = None,
     ) -> str:
-        """List companies in a specific group.
-        
-        Args:
-            group_id: The ID of the group
-            page: Page number (default: 1)
-            limit: Number of results per page (default: 10, max: 50)
-            search: Optional search term to filter companies
-            
-        Returns:
-            Formatted list of companies in the group
-        """
+        """List companies in a specific group (compact). Use get_company_by_id for full details."""
+        context = get_tool_context()
         client = context.get_client()
-        
+
         query = """
         query GetCompaniesByGroup(
             $groupId: ID!
@@ -277,39 +246,39 @@ def get_read_tools(context: ToolContext) -> list:
                     id
                     name
                     description
-                    emails { value type isPrimary }
-                    phoneNumbers { value type isPrimary }
+                    emails { value isPrimary }
                 }
                 meta { total page limit hasNextPage }
             }
         }
         """
-        
+
         try:
             result = await client.query(query, {
                 "groupId": group_id,
                 "page": page,
-                "limit": min(limit, 50),
+                "limit": min(limit, LIST_MAX_RESULTS),
                 "search": search,
             })
-            
+
             data = result.get("getCompaniesByGroup", {})
             companies = data.get("data", [])
             meta = data.get("meta", {})
-            
+
             if not companies:
                 return "No companies found in this group."
-            
-            lines = [f"Found {meta.get('total', len(companies))} companies in group (page {meta.get('page', 1)}):\n"]
+
+            total = meta.get("total", len(companies))
+            current_page = meta.get("page", 1)
+            lines = [f"Found {total} companies in group (showing page {current_page}):"]
             for company in companies:
-                lines.append(format_company(company))
-                lines.append("")
-            
+                lines.append(format_company_compact(company))
+
             if meta.get("hasNextPage"):
-                lines.append(f"\n(More results available - use page={meta.get('page', 1) + 1})")
-            
+                lines.append(f"(More available — use page={current_page + 1} or search to narrow down)")
+
             return "\n".join(lines)
-            
+
         except Exception as e:
             logger.error(f"Error listing companies in group: {e}")
             return f"Error listing companies in group: {str(e)}"
@@ -323,19 +292,10 @@ def get_read_tools(context: ToolContext) -> list:
         limit: int = 10,
         search: Optional[str] = None,
     ) -> str:
-        """List people in a specific group.
-        
-        Args:
-            group_id: The ID of the group
-            page: Page number (default: 1)
-            limit: Number of results per page (default: 10, max: 50)
-            search: Optional search term to filter people
-            
-        Returns:
-            Formatted list of people in the group
-        """
+        """List people in a specific group (compact). Use get_person_by_id for full details."""
+        context = get_tool_context()
         client = context.get_client()
-        
+
         query = """
         query GetPeopleByGroup(
             $groupId: ID!
@@ -354,43 +314,42 @@ def get_read_tools(context: ToolContext) -> list:
                     firstName
                     lastName
                     jobTitle
-                    description
-                    emails { value type isPrimary }
-                    phoneNumbers { value type isPrimary }
+                    emails { value isPrimary }
                     companyMetaData {
-                        company { id name }
+                        company { name }
                     }
                 }
                 meta { total page limit hasNextPage }
             }
         }
         """
-        
+
         try:
             result = await client.query(query, {
                 "groupId": group_id,
                 "page": page,
-                "limit": min(limit, 50),
+                "limit": min(limit, LIST_MAX_RESULTS),
                 "search": search,
             })
-            
+
             data = result.get("getPeopleByGroup", {})
             people = data.get("data", [])
             meta = data.get("meta", {})
-            
+
             if not people:
                 return "No people found in this group."
-            
-            lines = [f"Found {meta.get('total', len(people))} people in group (page {meta.get('page', 1)}):\n"]
+
+            total = meta.get("total", len(people))
+            current_page = meta.get("page", 1)
+            lines = [f"Found {total} people in group (showing page {current_page}):"]
             for person in people:
-                lines.append(format_person(person))
-                lines.append("")
-            
+                lines.append(format_person_compact(person))
+
             if meta.get("hasNextPage"):
-                lines.append(f"\n(More results available - use page={meta.get('page', 1) + 1})")
-            
+                lines.append(f"(More available — use page={current_page + 1} or search to narrow down)")
+
             return "\n".join(lines)
-            
+
         except Exception as e:
             logger.error(f"Error listing people in group: {e}")
             return f"Error listing people in group: {str(e)}"
@@ -399,14 +358,8 @@ def get_read_tools(context: ToolContext) -> list:
 
     @tool
     async def get_company_by_id(company_id: str) -> str:
-        """Get detailed information about a specific company.
-        
-        Args:
-            company_id: The ID of the company
-            
-        Returns:
-            Detailed company information
-        """
+        """Get full details for a company by ID (emails, phones, addresses, groups, people)."""
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -488,14 +441,8 @@ def get_read_tools(context: ToolContext) -> list:
 
     @tool
     async def get_person_by_id(person_id: str) -> str:
-        """Get detailed information about a specific person.
-        
-        Args:
-            person_id: The ID of the person
-            
-        Returns:
-            Detailed person information
-        """
+        """Get full details for a person by ID (emails, phones, addresses, groups, companies)."""
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -570,15 +517,8 @@ def get_read_tools(context: ToolContext) -> list:
 
     @tool
     async def search_company_by_name(query: str, limit: int = 10) -> str:
-        """Search for companies by name using fuzzy matching.
-        
-        Args:
-            query: Search query (company name or partial name)
-            limit: Maximum number of results (default: 10)
-            
-        Returns:
-            Formatted list of matching companies
-        """
+        """Search companies by name using fuzzy matching. Returns list of matches with IDs."""
+        context = get_tool_context()
         client = context.get_client()
         
         gql_query = """
@@ -668,15 +608,8 @@ def get_read_tools(context: ToolContext) -> list:
 
     @tool
     async def search_person_by_name(query: str, limit: int = 10) -> str:
-        """Search for people by name using fuzzy matching.
-        
-        Args:
-            query: Search query (person name or partial name)
-            limit: Maximum number of results (default: 10)
-            
-        Returns:
-            Formatted list of matching people
-        """
+        """Search people by name using fuzzy matching. Returns list of matches with IDs."""
+        context = get_tool_context()
         client = context.get_client()
         
         gql_query = """
@@ -768,14 +701,8 @@ def get_read_tools(context: ToolContext) -> list:
 
     @tool
     async def get_group_by_id(group_id: str) -> str:
-        """Get detailed information about a specific group.
-        
-        Args:
-            group_id: The ID of the group
-            
-        Returns:
-            Detailed group information
-        """
+        """Get full details for a group by ID."""
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -819,17 +746,8 @@ def get_read_tools(context: ToolContext) -> list:
 
     @tool
     async def search_group_by_name(query: str) -> str:
-        """Search for groups by name with smart fuzzy matching.
-        
-        This tool handles typos, partial names, and misspellings automatically.
-        For example, "Prospeccts" will match "Prospects", "cstomers" will match "Customers".
-        
-        Args:
-            query: Search query (group name, partial name, or even with typos)
-            
-        Returns:
-            Formatted list of matching groups with their IDs
-        """
+        """Search groups by name with fuzzy matching. Returns list of matches with IDs."""
+        context = get_tool_context()
         client = context.get_client()
         
         gql_query = """
@@ -885,24 +803,8 @@ def get_read_tools(context: ToolContext) -> list:
 
     @tool
     async def resolve_company_name(name: str) -> str:
-        """Resolve a company name (even with typos) to get its ID for use in other operations.
-
-        USE THIS TOOL FIRST when user mentions a company by name before performing any
-        operations that require a company ID. This tool handles:
-        - Typos (e.g., "Gogle" → "Google")
-        - Partial names (e.g., "Acme" → "Acme Corporation")
-        - Case differences (e.g., "APPLE" → "Apple Inc.")
-        - Multi-word names (e.g., "Acme Corp" searches both parts if full name fails)
-
-        When multiple matches are found with similar confidence, the user will be asked
-        to select the correct company.
-
-        Args:
-            name: The company name (can include typos or be partial)
-
-        Returns:
-            The company ID and details, or asks user to select if ambiguous
-        """
+        """Resolve company name to ID (handles typos, partial names, case). Call before any company operation."""
+        context = get_tool_context()
         client = context.get_client()
 
         # Use getWorkspaceCompany with search parameter (same as frontend)
@@ -1000,24 +902,8 @@ def get_read_tools(context: ToolContext) -> list:
 
     @tool
     async def resolve_person_name(name: str) -> str:
-        """Resolve a person's name (even with typos) to get their ID for use in other operations.
-
-        USE THIS TOOL FIRST when user mentions a person by name before performing any
-        operations that require a person ID. This tool handles:
-        - Typos (e.g., "Jonh" → "John")
-        - Partial names (e.g., "John" → "John Smith")
-        - Name reordering (e.g., "Smith John" → "John Smith")
-        - Full name searches (e.g., "Chen Reddy" searches both parts if full name fails)
-
-        When multiple matches are found with similar confidence, the user will be asked
-        to select the correct person.
-
-        Args:
-            name: The person's name (can include typos, be partial, or in different order)
-
-        Returns:
-            The person ID and details, or asks user to select if ambiguous
-        """
+        """Resolve person name to ID (handles typos, partial names, reordering). Call before any person operation."""
+        context = get_tool_context()
         client = context.get_client()
 
         # Use getWorkspacePeople with search parameter (same as frontend)
@@ -1123,23 +1009,8 @@ def get_read_tools(context: ToolContext) -> list:
 
     @tool
     async def resolve_group_name(name: str) -> str:
-        """Resolve a group name (even with typos) to get its ID for use in other operations.
-        
-        USE THIS TOOL FIRST when user mentions a group by name before performing any 
-        operations that require a group ID. This tool handles:
-        - Typos (e.g., "Prospeccts" → "Prospects")
-        - Partial names (e.g., "Custom" → "Customers")
-        - Case differences (e.g., "LEADS" → "Leads")
-        
-        When multiple matches are found with similar confidence, the user will be asked
-        to select the correct group.
-        
-        Args:
-            name: The group name (can include typos or be partial)
-            
-        Returns:
-            The group ID and details, or asks user to select if ambiguous
-        """
+        """Resolve group name to ID (handles typos, partial names). Call before any group operation."""
+        context = get_tool_context()
         client = context.get_client()
         
         gql_query = """
@@ -1217,18 +1088,8 @@ def get_read_tools(context: ToolContext) -> list:
         person_id: str,
         limit: int = 10,
     ) -> str:
-        """Get email interactions for a specific person.
-        
-        This retrieves emails and other interactions (calls, meetings, notes)
-        associated with a person.
-        
-        Args:
-            person_id: The ID of the person to get emails for
-            limit: Maximum number of emails to return (default: 10, max: 50)
-            
-        Returns:
-            Formatted list of email interactions for the person
-        """
+        """Get recent email interactions for a person."""
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -1297,18 +1158,8 @@ def get_read_tools(context: ToolContext) -> list:
         company_id: str,
         limit: int = 10,
     ) -> str:
-        """Get email interactions for a specific company.
-        
-        This retrieves emails and other interactions (calls, meetings, notes)
-        associated with a company and its contacts.
-        
-        Args:
-            company_id: The ID of the company to get emails for
-            limit: Maximum number of emails to return (default: 10, max: 50)
-            
-        Returns:
-            Formatted list of email interactions for the company
-        """
+        """Get recent email interactions for a company."""
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -1379,24 +1230,11 @@ def get_read_tools(context: ToolContext) -> list:
         company_id: Optional[str] = None,
         limit: int = 50,
     ) -> str:
-        """Get the full conversation history for a specific email thread.
-        
-        Use this tool when you need to see the context of a conversation.
-        You must provide either a person_id OR a company_id to scope the search,
-        along with the thread_id found in a previous email listing.
-        
-        Args:
-            thread_id: The unique ID of the thread to retrieve
-            person_id: (Optional) The ID of the person associated with this thread
-            company_id: (Optional) The ID of the company associated with this thread
-            limit: How many recent emails to fetch for searching (default: 50)
-            
-        Returns:
-            Formatted chronological list of all emails in the thread
-        """
+        """Get full conversation history for an email thread. Provide person_id OR company_id."""
         if not person_id and not company_id:
             return "Error: You must provide either a person_id OR a company_id to fetch a thread."
 
+        context = get_tool_context()
         client = context.get_client()
         
         try:
@@ -1507,15 +1345,8 @@ def get_read_tools(context: ToolContext) -> list:
         page: int = 1,
         limit: int = 20,
     ) -> str:
-        """List available email templates in the current workspace.
-        
-        Args:
-            page: Page number (default: 1)
-            limit: Number of results per page (default: 20)
-            
-        Returns:
-            Formatted list of templates with IDs and descriptions
-        """
+        """List available email templates in the workspace."""
+        context = get_tool_context()
         client = context.get_client()
         query = """
         query GetEmailTemplates($workspaceId: String!, $limit: Int, $nextToken: String) {
@@ -1561,15 +1392,8 @@ def get_read_tools(context: ToolContext) -> list:
         keyword: str,
         limit: int = 10,
     ) -> str:
-        """Search for email templates by keyword in name or description.
-        
-        Args:
-            keyword: Search keyword
-            limit: Maximum results (default: 10)
-            
-        Returns:
-            Formatted list of matching templates
-        """
+        """Search email templates by keyword."""
+        context = get_tool_context()
         client = context.get_client()
         query = """
         query SearchEmailTemplates($workspaceId: String!, $searchKeyword: String, $limit: Int) {
@@ -1618,24 +1442,7 @@ def get_read_tools(context: ToolContext) -> list:
         cc: Optional[list[str]] = None,
         bcc: Optional[list[str]] = None,
     ) -> str:
-        """Propose an email draft to the user for review and optional editing.
-        
-        Use this tool when you have summarized the context and are ready to 
-        propose a specific response. The user will be able to edit the subject 
-        and body before the draft is saved to the backend.
-        
-        Args:
-            to: List of recipient email addresses
-            subject: The proposed subject line
-            body: The proposed message body (plain text or HTML)
-            thread_id: (Optional) The ID of the thread to respond to
-            group_id: (Optional) ID of the group this draft belongs to
-            cc: (Optional) List of CC recipients
-            bcc: (Optional) List of BCC recipients
-            
-        Returns:
-            Status of the draft creation including the draft ID
-        """
+        """Propose an email draft for user review before saving."""
         # 1. Request confirmation with edit
         req = ConfirmationRequest(
             type=ConfirmationType.CONFIRM_WITH_EDIT,
@@ -1659,6 +1466,7 @@ def get_read_tools(context: ToolContext) -> list:
         final_subject = final_data.get("subject", subject)
         final_body = final_data.get("body", body)
         
+        context = get_tool_context()
         client = context.get_client()
         try:
             # 2. Resolve group_id if not provided
@@ -1719,22 +1527,7 @@ def get_read_tools(context: ToolContext) -> list:
         cc: Optional[list[str]] = None,
         bcc: Optional[list[str]] = None,
     ) -> str:
-        """Directly send an email to one or more recipients.
-        
-        Ally will use this tool when the user says "Ally, send an email to...".
-        The user will be asked to confirm before the email is sent.
-        
-        Args:
-            to: List of recipient email addresses
-            subject: Email subject
-            body: Email body content
-            group_id: (Optional) ID of the group this email belongs to
-            cc: (Optional) List of CC recipients
-            bcc: (Optional) List of BCC recipients
-            
-        Returns:
-            Confirmation that the email was sent
-        """
+        """Send an email to recipients (asks for confirmation)."""
         # 1. Human-in-the-loop: Request confirmation before sending
         req = ConfirmationRequest(
             type=ConfirmationType.CONFIRM_WITH_EDIT,
@@ -1757,6 +1550,7 @@ def get_read_tools(context: ToolContext) -> list:
         final_subject = final_data.get("subject", subject)
         final_body = final_data.get("body", body)
         
+        context = get_tool_context()
         client = context.get_client()
         try:
             # 2. Resolve group_id
@@ -1827,19 +1621,8 @@ def get_read_tools(context: ToolContext) -> list:
         group_id: str,
         entity_type: str = "company",
     ) -> str:
-        """Get all columns defined for a group.
-        
-        This returns the custom columns (like Status, Priority, etc.) that are
-        available for entities in the specified group. Use this to find column IDs
-        needed for updating column values.
-        
-        Args:
-            group_id: The ID of the group
-            entity_type: Type of entity - "company" or "people" (default: "company")
-            
-        Returns:
-            List of columns with their IDs, names, and data types
-        """
+        """Get custom columns (Status, Priority, etc.) for a group. Returns column IDs for updates."""
+        context = get_tool_context()
         client = context.get_client()
         
         # Use the group resolver to get columns based on entity type
@@ -1911,17 +1694,8 @@ def get_read_tools(context: ToolContext) -> list:
 
     @tool
     async def get_column_options(column_id: str) -> str:
-        """Get all select options for a SELECT or MULTISELECT column.
-        
-        Use this tool after get_group_columns to find available options for
-        status-type columns. Returns the option IDs needed for updating values.
-        
-        Args:
-            column_id: The ID of the column (must be a SELECT or MULTISELECT type)
-            
-        Returns:
-            List of available options with their IDs and values
-        """
+        """Get available select options for a SELECT/MULTISELECT column."""
+        context = get_tool_context()
         client = context.get_client()
         
         query = """
@@ -2041,23 +1815,8 @@ def get_read_tools(context: ToolContext) -> list:
         group_name: Optional[str] = None,
         entity_type: str = "people",
     ) -> str:
-        """Get available status options for a pipeline/group.
-        
-        Use this when user asks:
-        - "What are the status options here?"
-        - "What statuses can I set?"
-        - "Show me the pipeline stages"
-        - "What are the statuses in [group name]?"
-        
-        If group_name is not provided, attempts to detect from the current page URL.
-        
-        Args:
-            group_name: Name of the group/pipeline (optional - will use current page if not provided)
-            entity_type: "people" or "company" (default: "people")
-            
-        Returns:
-            List of available status options with their values and colors
-        """
+        """Get available status options for a group/pipeline."""
+        context = get_tool_context()
         client = context.get_client()
         
         try:
@@ -2143,23 +1902,8 @@ def get_read_tools(context: ToolContext) -> list:
         entity_type: str = "people",
         limit: int = 20,
     ) -> str:
-        """Get all entities (people or companies) with a specific status in a group.
-        
-        Use this when user asks:
-        - "Get all leads from Leads group"
-        - "Show me qualified prospects"
-        - "Who is in follow-up status in Sales Pipeline?"
-        - "Send me the lead values from Leads group"
-        
-        Args:
-            group_name: Name of the group/pipeline (handles typos)
-            status_value: The status to filter by (e.g., "Lead", "Qualified", "Follow-up")
-            entity_type: "people" or "company" (default: "people")
-            limit: Maximum number of results (default: 20, max: 50)
-            
-        Returns:
-            List of entities matching the status
-        """
+        """Get people or companies with a specific status in a group."""
+        context = get_tool_context()
         client = context.get_client()
         
         try:
@@ -2318,19 +2062,8 @@ def get_read_tools(context: ToolContext) -> list:
         column_name: str,
         entity_type: str = "company",
     ) -> str:
-        """Resolve a column name (even with typos) to get its ID for use in other operations.
-        
-        USE THIS TOOL when you need to find a column by name within a group before
-        updating column values. This tool handles typos and partial matches.
-        
-        Args:
-            group_id: The ID of the group containing the column
-            column_name: The column name to search for (can include typos)
-            entity_type: Type of entity - "company" or "people" (default: "company")
-            
-        Returns:
-            The column ID and details, or suggestions if multiple matches found
-        """
+        """Resolve a column name (handles typos) to get its ID for update operations."""
+        context = get_tool_context()
         client = context.get_client()
         
         # Use the group resolver to get columns based on entity type
@@ -2414,27 +2147,13 @@ def get_read_tools(context: ToolContext) -> list:
 
     @tool
     async def get_current_page() -> str:
-        """Get information about the page the user is currently viewing.
-        
-        Use this tool when the user asks questions like:
-        - "Where am I?"
-        - "Which page am I on?"
-        - "What am I looking at?"
-        - "What page is this?"
-        - "Which page is open?"
-        
-        This tool analyzes the current URL and fetches relevant details about
-        the entity or page being viewed (company name, person name, group name, etc.).
-        
-        Returns:
-            A description of the current page and any entity details
-        """
+        """Get the CRM page the user is currently viewing (company, person, group, or dashboard)."""
+        context = get_tool_context()
+        client = context.get_client()
         active_url = context.active_url
-        
+
         if not active_url:
             return "I don't have information about which page you're currently viewing. The page context wasn't provided."
-        
-        client = context.get_client()
         
         try:
             # Parse the URL to understand the page structure
@@ -2609,4 +2328,92 @@ def get_read_tools(context: ToolContext) -> list:
         get_group_columns,
         get_column_options,
     ]
+
+
+# ---------------------------------------------------------------------------
+# Entity-specific sub-getters
+# These filter the full READ tool list so each request only receives the
+# schemas it actually needs. Adding a tool to get_read_tools() above
+# automatically makes it available here — just add its name to the right set.
+# ---------------------------------------------------------------------------
+
+_RESOLVER_NAMES = {
+    "resolve_company_name",
+    "resolve_person_name",
+    "resolve_group_name",
+    "get_current_page",
+}
+
+_COMPANY_NAMES = {
+    "list_companies_in_workspace",
+    "list_companies_in_group",
+    "get_company_by_id",
+    "search_company_by_name",
+}
+
+_PEOPLE_NAMES = {
+    "list_people_in_workspace",
+    "list_people_in_group",
+    "get_person_by_id",
+    "search_person_by_name",
+}
+
+_GROUP_NAMES = {
+    "list_groups_in_workspace",
+    "get_group_by_id",
+    "search_group_by_name",
+}
+
+_EMAIL_NAMES = {
+    "listEmailsFromPerson",
+    "listEmailsFromCompany",
+    "get_email_thread",
+    "list_email_templates",
+    "search_email_templates",
+    "draft_email",
+    "send_email",
+}
+
+_COLUMN_NAMES = {
+    "get_group_columns",
+    "get_column_options",
+    "get_pipeline_status_options",
+    "get_entities_by_status",
+    "resolve_column_by_name",
+}
+
+
+def _filter_read_tools(names: set) -> list:
+    """Return only the tools from get_read_tools() whose name is in the set."""
+    return [t for t in get_read_tools() if t.name in names]
+
+
+def get_resolver_tools() -> list:
+    """Core resolver + navigation tools — always loaded on every request."""
+    return _filter_read_tools(_RESOLVER_NAMES)
+
+
+def get_company_read_tools() -> list:
+    """Tools for listing, fetching, and searching companies."""
+    return _filter_read_tools(_COMPANY_NAMES)
+
+
+def get_people_read_tools() -> list:
+    """Tools for listing, fetching, and searching people/contacts."""
+    return _filter_read_tools(_PEOPLE_NAMES)
+
+
+def get_group_read_tools() -> list:
+    """Tools for listing, fetching, and searching groups."""
+    return _filter_read_tools(_GROUP_NAMES)
+
+
+def get_email_tools() -> list:
+    """Email reading, drafting, and sending tools."""
+    return _filter_read_tools(_EMAIL_NAMES)
+
+
+def get_column_tools() -> list:
+    """Column/pipeline/status tools — loaded with UPDATE operations."""
+    return _filter_read_tools(_COLUMN_NAMES)
 
