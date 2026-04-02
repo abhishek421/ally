@@ -286,6 +286,85 @@ class BaseTool:
         await self.client.close()
 
 
+# ---------------------------------------------------------------------------
+# List-view limits — single constant controls all list tools.
+# Lowering this number reduces tool-result tokens on every listing call.
+# Detail views (get_company_by_id, etc.) are unaffected.
+# ---------------------------------------------------------------------------
+LIST_MAX_RESULTS = 25
+
+
+def format_company_compact(company: dict) -> str:
+    """Single-line company summary for list views (tokens-friendly).
+
+    Example: "Acme Corp — acme@example.com"
+    Full detail is available via get_company_by_id.
+    """
+    name = company.get("name", "Unknown")
+    parts = [name]
+
+    emails = company.get("emails", [])
+    primary_email = next(
+        (e.get("value") for e in emails if e.get("isPrimary") and e.get("value")),
+        next((e.get("value") for e in emails if e.get("value")), None),
+    )
+    if primary_email:
+        parts.append(primary_email)
+
+    desc = company.get("description", "")
+    if desc:
+        # Truncate long descriptions so they don't bloat list output
+        parts.append(desc[:60] + "…" if len(desc) > 60 else desc)
+
+    return "- " + " — ".join(parts)
+
+
+def format_person_compact(person: dict) -> str:
+    """Single-line person summary for list views (tokens-friendly).
+
+    Example: "John Smith, Engineer — john@example.com"
+    Full detail is available via get_person_by_id.
+    """
+    name = f"{person.get('firstName', '')} {person.get('lastName', '')}".strip() or "Unknown"
+    parts = [name]
+
+    job = person.get("jobTitle", "")
+    if job:
+        parts[0] = f"{name}, {job}"
+
+    emails = person.get("emails", [])
+    primary_email = next(
+        (e.get("value") for e in emails if e.get("isPrimary") and e.get("value")),
+        next((e.get("value") for e in emails if e.get("value")), None),
+    )
+    if primary_email:
+        parts.append(primary_email)
+
+    companies = person.get("companyMetaData", [])
+    if companies:
+        company_names = [
+            c.get("company", {}).get("name", "")
+            for c in companies
+            if c.get("company", {}).get("name")
+        ]
+        if company_names:
+            parts.append(f"@ {', '.join(company_names[:2])}")
+
+    return "- " + " — ".join(parts)
+
+
+def format_group_compact(group: dict) -> str:
+    """Single-line group summary for list views (tokens-friendly).
+
+    Example: "📁 Prospects (COMPANIES)"
+    """
+    emoji = group.get("emoji", "")
+    name = group.get("name", "Unknown")
+    group_type = group.get("type", "")
+    label = f"{emoji} {name}".strip() if emoji else name
+    return f"- {label} ({group_type})" if group_type else f"- {label}"
+
+
 def format_company(company: dict) -> str:
     """Format a company dict for display.
     
