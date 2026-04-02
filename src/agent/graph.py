@@ -4,8 +4,8 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from langchain_core.messages import SystemMessage
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import trim_messages
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -14,10 +14,12 @@ from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command, interrupt
 
 from src.config import get_settings
-from src.agent.prompts import get_system_prompt, get_system_prompt_messages
-from src.tools import get_all_tools
+from src.agent.prompts import get_system_prompt, get_system_prompt_messages, get_chitchat_prompt
+from src.agent.router import ModelTier, route_query, is_greeting
+from src.tools import get_all_tools, get_tools_for_categories, ToolCategory
 from src.tools.base import ToolContext, parse_data_change
 from src.tools.context_var import set_tool_context
+from src.agent.intent import classify_intent
 
 logger = logging.getLogger(__name__)
 
@@ -106,48 +108,93 @@ _checkpointer_context = None
 _checkpointer: AsyncPostgresSaver | MemorySaver | None = None
 _memory_saver: MemorySaver | None = None
 
-# Cached LLM singleton
-_cached_llm = None
+# Cached LLM instances — keyed by "provider:model" for multi-model routing
+_cached_llms: dict[str, Any] = {}
 
 # Cached compiled agent (graph compiled once, reused for all requests)
 _cached_agent = None
 
 
-def get_llm():
-    """Get the configured LLM instance (cached singleton).
-    Returns:
-        ChatOpenAI, ChatAnthropic, or ChatGoogleGenerativeAI instance based on configuration
-    """
-    global _cached_llm
-    if _cached_llm is not None:
-        return _cached_llm
+def _create_llm(provider: str, model: str):
+    """Create an LLM instance for the given provider and model.
 
+    Args:
+        provider: "openai", "anthropic", or "gemini"
+        model: Model name (e.g., "gpt-4o-mini", "gemini-2.0-flash-lite")
+
+    Returns:
+        LangChain chat model instance
+    """
     settings = get_settings()
-    if settings.is_openai:
-        _cached_llm = ChatOpenAI(
-            model=settings.llm_model,
+    if provider == "openai":
+        return ChatOpenAI(
+            model=model,
 openai_api_key="REDACTED"
             temperature=0.7,
             streaming=True,
         )
-    elif settings.is_gemini:
-        logger.info(f"Initializing Gemini with model={settings.llm_model}")
-        _cached_llm = ChatGoogleGenerativeAI(
-            model=settings.llm_model,
+    elif provider == "gemini":
+        return ChatGoogleGenerativeAI(
+            model=model,
             api_key=settings.google_api_key,
             temperature=0.7,
             streaming=True,
         )
-    else:
-        _cached_llm = ChatAnthropic(
-            model=settings.llm_model,
+    else:  # anthropic
+        return ChatAnthropic(
+            model=model,
             api_key=settings.anthropic_api_key,
             temperature=0.7,
             streaming=True,
         )
 
-    logger.info(f"🤖 LLM initialized: {settings.llm_model} (cached)")
-    return _cached_llm
+
+def get_llm():
+    """Get the default LLM instance (single-model mode).
+
+    Used when model routing is disabled, or as a fallback.
+
+    Returns:
+        ChatOpenAI, ChatAnthropic, or ChatGoogleGenerativeAI instance
+    """
+    settings = get_settings()
+    return _get_cached_llm(settings.llm_provider, settings.llm_model)
+
+
+def get_llm_for_tier(tier: ModelTier) -> tuple:
+    """Get an LLM instance for the given model tier.
+
+    If model routing is disabled, falls back to the single default model.
+
+    Args:
+        tier: ModelTier (LITE, STANDARD, or POWER)
+
+    Returns:
+        Tuple of (llm_instance, provider_str, model_str)
+    """
+    settings = get_settings()
+
+    if not settings.enable_model_routing:
+        return get_llm(), settings.llm_provider, settings.llm_model
+
+    # Map tier to provider + model from config
+    tier_map = {
+        ModelTier.LITE: (settings.lite_provider, settings.lite_model),
+        ModelTier.STANDARD: (settings.standard_provider, settings.standard_model),
+        ModelTier.POWER: (settings.power_provider, settings.power_model),
+    }
+    provider, model = tier_map[tier]
+    llm = _get_cached_llm(provider, model)
+    return llm, provider, model
+
+
+def _get_cached_llm(provider: str, model: str):
+    """Get or create a cached LLM instance for the given provider:model pair."""
+    cache_key = f"{provider}:{model}"
+    if cache_key not in _cached_llms:
+        _cached_llms[cache_key] = _create_llm(provider, model)
+        logger.info(f"🤖 LLM initialized: {provider}/{model} (cached as '{cache_key}')")
+    return _cached_llms[cache_key]
 async def is_first_message(conversation_id: str) -> bool:
     """Check if this is the first message in a conversation.
     
@@ -199,8 +246,9 @@ async def generate_conversation_title(user_query: str, assistant_response: str) 
     """
     title_token_usage = None
     try:
-        llm = get_llm()
-        
+        # Always use LITE tier for title generation — it's a simple task
+        llm, _, title_model = get_llm_for_tier(ModelTier.LITE)
+
         # Truncate long messages to avoid token waste
         query_truncated = user_query[:500] if len(user_query) > 500 else user_query
         response_truncated = assistant_response[:500] if len(assistant_response) > 500 else assistant_response
@@ -262,7 +310,7 @@ Title:"""
             telemetry = {
                 "event": "token_usage",
                 "request_type": "title_generation",
-                "model": getattr(llm, "model_name", "unknown"),
+                "model": title_model,
                 "tokens": title_token_usage
             }
             logger.info(f"📊 TELEMETRY: {json.dumps(telemetry)}")
@@ -382,86 +430,85 @@ def create_agent_for_context(
     context: ToolContext,
     checkpointer=None,
     is_new_conversation: bool = True,
+    tier: ModelTier | None = None,
+    categories: list[ToolCategory] | None = None,
 ):
     """Create a ReAct agent with tools configured for the given context.
-
-    Uses a cached compiled graph if available. Only the prompt and
-    per-request context (via set_tool_context) change between calls.
 
     Args:
         context: Tool context with auth and workspace info
         checkpointer: Optional checkpointer for conversation memory
         is_new_conversation: Whether this is the first message (for greeting behavior)
+        tier: Model tier to use (LITE/STANDARD/POWER). None = default model.
+        categories: Intent categories from classify_intent(). When provided,
+            only tools relevant to these categories are loaded (plus ALWAYS_INCLUDE),
+            reducing token usage. When None, all tools are loaded.
 
     Returns:
         Compiled LangGraph agent
     """
-    global _cached_agent
-
     # Inject per-request context so tools can access auth dynamically
     set_tool_context(context)
 
-    llm = get_llm()
+    # Select the LLM based on tier (or fall back to default)
+    if tier is not None:
+        llm, provider, model = get_llm_for_tier(tier)
+        is_anthropic = (provider == "anthropic")
+    else:
+        llm = get_llm()
+        settings = get_settings()
+        is_anthropic = settings.is_anthropic
 
-    # Build system prompt as a list of messages for prompt caching.
-    # Message 1 = static base prompt (cacheable by LLM providers).
-    # Message 2 = dynamic context (user name, workspace/group instructions).
-    settings = get_settings()
-    system_messages = get_system_prompt_messages(
-        user_first_name=context.user_first_name,
-        is_new_conversation=is_new_conversation,
-        workspace_instructions=context.workspace_instructions,
-        group_instructions=context.group_instructions,
-        is_anthropic=settings.is_anthropic,
-    )
-
-    # Build a prompt callable that prepends system messages to state messages.
-    # create_react_agent accepts a Callable[[state], messages] for the prompt param.
-    # Trim history to ~40k tokens to prevent runaway token usage in long conversations
-    # (e.g. multi-confirmation flows). Uses character-length as a token proxy (4 chars ≈ 1 token).
-    # strategy="last" + start_on="human" keeps the most recent messages and always
-    # starts at a clean human turn so we never cut mid-tool-call-cycle.
-    def _count_tokens(msgs) -> int:
-        return sum(len(str(m.content)) // 4 for m in msgs)
-
-    def prompt_fn(state):
-        history = trim_messages(
-            state["messages"],
-            max_tokens=120_000,
-            strategy="last",
-            token_counter=_count_tokens,
-            include_system=False,
-            allow_partial=False,
-            start_on="human",
-        )
-        if len(history) < len(state["messages"]):
-            trimmed = len(state["messages"]) - len(history)
-            logger.debug(f"✂️  Trimmed {trimmed} old messages from history ({len(state['messages'])} → {len(history)})")
-        return system_messages + history
-
-    # Log personalization info
     user_name = context.user_first_name or "Unknown"
     conv_type = "new" if is_new_conversation else "continuing"
-    instructions_info = []
-    if context.workspace_instructions:
-        instructions_info.append(f"workspace ({len(context.workspace_instructions)} chars)")
-    if context.group_instructions:
-        instructions_info.append(f"group ({len(context.group_instructions)} chars)")
+    tier_label = f" [{tier.value.upper()}]" if tier else ""
 
-    if _cached_agent is not None:
-        # Reuse the cached agent — only the prompt & context change
+    # Build tools first — this determines which prompt path we take.
+    # categories=[] is the greeting fast-path: zero tools, minimal prompt.
+    # categories=None means all tools (resume / fallback path).
+    if categories is not None:
+        tools = get_tools_for_categories(categories)
+    else:
+        tools = get_all_tools()
+
+    if not tools:
+        # ── Greeting / chitchat fast-path ──────────────────────────────────
+        # Skip the 226-line system prompt entirely. Use a short (~150 token)
+        # chitchat prompt instead. Combined with zero tool schemas this saves
+        # ~5,000–7,000 input tokens per greeting turn.
+        chitchat_content = get_chitchat_prompt(context.user_first_name)
+        chitchat_msg = SystemMessage(content=chitchat_content)
+
+        def prompt_fn(state):
+            return [chitchat_msg] + state["messages"]
+
+        logger.info(f"💬 Chitchat fast-path for {user_name} ({conv_type}){tier_label}: minimal prompt, 0 tools")
+    else:
+        # ── Normal CRM path ────────────────────────────────────────────────
+        # Build full system prompt as two messages for prompt caching.
+        # Message 1 = static base prompt (cacheable prefix).
+        # Message 2 = dynamic context (user name, workspace/group instructions).
+        system_messages = get_system_prompt_messages(
+            user_first_name=context.user_first_name,
+            is_new_conversation=is_new_conversation,
+            workspace_instructions=context.workspace_instructions,
+            group_instructions=context.group_instructions,
+            is_anthropic=is_anthropic,
+        )
+
+        def prompt_fn(state):
+            return system_messages + state["messages"]
+
+        instructions_info = []
+        if context.workspace_instructions:
+            instructions_info.append(f"workspace ({len(context.workspace_instructions)} chars)")
+        if context.group_instructions:
+            instructions_info.append(f"group ({len(context.group_instructions)} chars)")
+
         if instructions_info:
-            logger.info(f"♻️  Reusing cached agent for {user_name} ({conv_type}) WITH {', '.join(instructions_info)} instructions")
+            logger.info(f"🤖 Agent for {user_name} ({conv_type}){tier_label} WITH {', '.join(instructions_info)} instructions")
         else:
-            logger.info(f"♻️  Reusing cached agent for {user_name} ({conv_type}) WITHOUT custom instructions")
-
-        # Update the prompt on the cached agent
-        # Since create_react_agent compiles the graph, we rebuild with updated prompt
-        # but reuse the same LLM and tools (the expensive parts)
-        pass  # The agent is rebuilt below with cached LLM + tools
-
-    # Build tools once (they use get_tool_context() internally)
-    tools = get_all_tools()
+            logger.info(f"🤖 Agent for {user_name} ({conv_type}){tier_label}")
 
     # Create the agent using the prebuilt ReAct pattern
     agent = create_react_agent(
@@ -471,42 +518,49 @@ def create_agent_for_context(
         checkpointer=checkpointer,
     )
 
-    if _cached_agent is None:
-        logger.info(f"🤖 Agent compiled for first time [prompt caching ON]")
-
-    _cached_agent = agent
     return agent
 
 
-async def create_agent(context: ToolContext, is_new_conversation: bool = True):
+async def create_agent(
+    context: ToolContext,
+    is_new_conversation: bool = True,
+    tier: ModelTier | None = None,
+    categories: list[ToolCategory] | None = None,
+):
     """Create a compiled agent with checkpointer.
 
     Args:
         context: Tool context with auth and workspace info
         is_new_conversation: Whether this is the first message (for greeting behavior)
+        tier: Model tier to use (LITE/STANDARD/POWER)
+        categories: Intent categories for dynamic tool selection. None = all tools.
 
     Returns:
         Compiled LangGraph agent with checkpointer
     """
     checkpointer = await get_checkpointer()
-    return create_agent_for_context(context, checkpointer, is_new_conversation)
+    return create_agent_for_context(context, checkpointer, is_new_conversation, tier=tier, categories=categories)
 
 
-async def get_agent(context: ToolContext, is_new_conversation: bool = True):
+async def get_agent(
+    context: ToolContext,
+    is_new_conversation: bool = True,
+    tier: ModelTier | None = None,
+    categories: list[ToolCategory] | None = None,
+):
     """Get an agent for the given context.
-
-    Injects per-request auth context via set_tool_context() so that
-    tools can access the correct auth token, workspace ID, etc.
 
     Args:
         context: Tool context with auth and workspace info
         is_new_conversation: Whether this is the first message (for greeting behavior)
+        tier: Model tier to use (LITE/STANDARD/POWER)
+        categories: Intent categories for dynamic tool selection. None = all tools.
 
     Returns:
         Compiled LangGraph agent
     """
     set_tool_context(context)
-    return await create_agent(context, is_new_conversation)
+    return await create_agent(context, is_new_conversation, tier=tier, categories=categories)
 
 
 async def invoke_agent(
@@ -596,8 +650,25 @@ async def stream_agent(
     # Check if this is a new conversation (for greeting behavior)
     is_new = await is_first_message(conversation_id)
 
-    # Create agent (reuses cached graph + LLM, injects fresh context)
-    agent = await get_agent(context, is_new_conversation=is_new)
+    # Fast-path: detect greetings before doing full intent classification.
+    # Greetings get zero tools and a short system prompt (~200 tokens vs ~7,000).
+    if is_greeting(message):
+        categories = []   # signals "no tools" to create_agent_for_context
+        tier = ModelTier.LITE
+        _, tier_provider, tier_model = get_llm_for_tier(tier)
+        logger.info("💬 Greeting detected → LITE + 0 tools")
+    else:
+        # Classify intent and load only relevant tools
+        categories = classify_intent(message)
+        logger.info(f"🎯 Intent: {[c.value for c in categories]}")
+
+        # Route query to the appropriate model tier
+        tier = route_query(message, categories)
+        _, tier_provider, tier_model = get_llm_for_tier(tier)
+
+    # Create agent with the routed model tier AND filtered tool set.
+    # categories drives both model selection AND which tool schemas are sent to the LLM.
+    agent = await get_agent(context, is_new_conversation=is_new, tier=tier, categories=categories)
     config = {
         "configurable": {
             "thread_id": conversation_id,
@@ -615,10 +686,10 @@ async def stream_agent(
     heartbeat_interval = 1.5  # seconds
     has_seen_tool_result = False
 
-    # PRE-REQUEST BUDGET CHECK
+    # PRE-REQUEST BUDGET CHECK (use the routed model for context window limit)
     settings = get_settings()
     history_usage = await get_conversation_usage(conversation_id)
-    pre_check = compute_budget_status(history_usage["total_tokens"], settings.llm_model)
+    pre_check = compute_budget_status(history_usage["total_tokens"], tier_model)
     
     if pre_check["status"] == "blocked":
         logger.warning(
@@ -639,17 +710,15 @@ async def stream_agent(
         return
 
     try:
-        # Stream using both "messages" (token-by-token) and "updates" (structural events)
-        # "messages" yields individual tokens as they arrive so the UI can render progressively
-        # "updates" yields full node outputs used for tool calls, tool results, and interrupts
-        async for mode, data in agent.astream(
+        # Stream using updates mode to get step-by-step progress
+        async for chunk in agent.astream(
             {
                 "messages": [{"role": "user", "content": message}],
             },
             config=config,
-            stream_mode=["messages", "updates"],
+            stream_mode="updates",
         ):
-            # Check for heartbeat regardless of mode
+            # Check for heartbeat
             current_time = time.time()
             if current_time - last_heartbeat_time > heartbeat_interval:
                 status = "Analyzing results..." if has_seen_tool_result else "Thinking..."
@@ -659,93 +728,84 @@ async def stream_agent(
                 }
                 last_heartbeat_time = current_time
 
-            if mode == "messages":
-                # data is (AIMessageChunk, metadata) — stream individual tokens
-                message_chunk, metadata = data
-                node_name = metadata.get("langgraph_node", "")
-                if node_name == "agent" and hasattr(message_chunk, "content") and message_chunk.content:
-                    text = _extract_text_content(message_chunk.content)
-                    if text:
-                        has_seen_tool_result = False
-                        yield {
-                            "type": "response",
-                            "data": {"content": text},
-                        }
+            # Check for interrupt FIRST (confirmation request from tools)
+            if "__interrupt__" in chunk:
+                # ... interrupt handling ...
+                interrupt_info = chunk["__interrupt__"]
+                if interrupt_info and len(interrupt_info) > 0:
+                    interrupt_data = interrupt_info[0].value if hasattr(interrupt_info[0], 'value') else interrupt_info[0]
+                    logger.info(f"⏸️  CONFIRMATION REQUIRED: {interrupt_data.get('title', 'Unknown')}")
+                    yield {
+                        "type": "confirmation_required",
+                        "data": interrupt_data,
+                    }
+                    return
+            
+            # Process each update chunk
+            for node_name, node_output in chunk.items():
+                if node_name == "__interrupt__":
+                    continue
+                if node_name == "agent":
+                    messages = node_output.get("messages", [])
+                    for msg in messages:
+                        # Extract token usage from AIMessage
+                        if hasattr(msg, "usage_metadata") and msg.usage_metadata:
+                            usage = msg.usage_metadata
+                            request_token_usage["input_tokens"] += usage.get("input_tokens", 0)
+                            request_token_usage["output_tokens"] += usage.get("output_tokens", 0)
+                            request_token_usage["total_tokens"] += usage.get("total_tokens", 0)
+                            llm_call_count += 1
 
-            elif mode == "updates":
-                # data is the updates dict — handle interrupts, tool calls, tool results, usage
-                chunk = data
-
-                # Check for interrupt FIRST (confirmation request from tools)
-                if "__interrupt__" in chunk:
-                    interrupt_info = chunk["__interrupt__"]
-                    if interrupt_info and len(interrupt_info) > 0:
-                        interrupt_data = interrupt_info[0].value if hasattr(interrupt_info[0], 'value') else interrupt_info[0]
-                        logger.info(f"⏸️  CONFIRMATION REQUIRED: {interrupt_data.get('title', 'Unknown')}")
-                        yield {
-                            "type": "confirmation_required",
-                            "data": interrupt_data,
-                        }
-                        return
-
-                for node_name, node_output in chunk.items():
-                    if node_name == "__interrupt__":
-                        continue
-                    if node_name == "agent":
-                        messages = node_output.get("messages", [])
-                        for msg in messages:
-                            # Extract token usage from the final complete AIMessage
-                            if hasattr(msg, "usage_metadata") and msg.usage_metadata:
-                                usage = msg.usage_metadata
-                                request_token_usage["input_tokens"] += usage.get("input_tokens", 0)
-                                request_token_usage["output_tokens"] += usage.get("output_tokens", 0)
-                                request_token_usage["total_tokens"] += usage.get("total_tokens", 0)
-                                llm_call_count += 1
-
-                            # Tool calls (complete, from updates — not duplicated from messages mode)
-                            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                                has_seen_tool_result = False
-                                for tool_call in msg.tool_calls:
-                                    tool_name = tool_call.get("name")
-                                    logger.info(f"   🔧 TOOL CALL: {tool_name}")
-                                    yield {
-                                        "type": "tool_call",
-                                        "data": {
-                                            "name": tool_name,
-                                            "args": tool_call.get("args", {}),
-                                        },
-                                    }
-                            elif hasattr(msg, "content") and msg.content:
-                                # Log the complete response for debugging (content already streamed token-by-token)
-                                text_content = _extract_text_content(msg.content)
-                                if text_content:
-                                    content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
-                                    logger.info(f"   💬 RESPONSE complete: {content_preview}")
-
-                    elif node_name == "tools":
-                        # Tool execution results
-                        has_seen_tool_result = True
-                        messages = node_output.get("messages", [])
-                        for msg in messages:
-                            if hasattr(msg, "content"):
-                                tool_content = _extract_text_content(msg.content)
-                                cleaned_result, change_data = parse_data_change(tool_content)
-                                tool_name = getattr(msg, "name", "unknown")
-                                result_info = _get_result_summary(cleaned_result)
-                                tool_calls_summary.append(f"{tool_name} → {result_info}")
-                                logger.info(f"   ✅ TOOL RESULT: {tool_name} → {result_info}")
+                        if hasattr(msg, "tool_calls") and msg.tool_calls:
+                            # Agent decided to call tools
+                            # Reset status flag when new tool calls are made
+                            has_seen_tool_result = False
+                            for tool_call in msg.tool_calls:
+                                tool_name = tool_call.get("name")
+                                logger.info(f"   🔧 TOOL CALL: {tool_name}")
                                 yield {
-                                    "type": "tool_result",
+                                    "type": "tool_call",
                                     "data": {
                                         "name": tool_name,
-                                        "result": cleaned_result,
+                                        "args": tool_call.get("args", {}),
                                     },
                                 }
-                                if change_data:
-                                    yield {
-                                        "type": "data_changed",
-                                        "data": change_data,
-                                    }
+                        elif hasattr(msg, "content") and msg.content:
+                            # Reset status flag when content arrives
+                            has_seen_tool_result = False
+                            text_content = _extract_text_content(msg.content)
+                            if text_content:
+                                content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
+                                logger.info(f"   💬 RESPONSE: {content_preview}")
+                                yield {
+                                    "type": "response",
+                                    "data": {"content": text_content},
+                                }
+                elif node_name == "tools":
+                    # Tool execution results
+                    # Mark that we have seen tool results
+                    has_seen_tool_result = True
+                    messages = node_output.get("messages", [])
+                    for msg in messages:
+                        if hasattr(msg, "content"):
+                            tool_content = _extract_text_content(msg.content)
+                            cleaned_result, change_data = parse_data_change(tool_content)
+                            tool_name = getattr(msg, "name", "unknown")
+                            result_info = _get_result_summary(cleaned_result)
+                            tool_calls_summary.append(f"{tool_name} → {result_info}")
+                            logger.info(f"   ✅ TOOL RESULT: {tool_name} → {result_info}")
+                            yield {
+                                "type": "tool_result",
+                                "data": {
+                                    "name": tool_name,
+                                    "result": cleaned_result,
+                                },
+                            }
+                            if change_data:
+                                yield {
+                                    "type": "data_changed",
+                                    "data": change_data,
+                                }
         # Signal completion FIRST so the frontend unlocks the input immediately.
         # Metadata events (token_usage, context_window_status) follow as
         # non-blocking tail events that the frontend processes independently.
@@ -763,12 +823,12 @@ async def stream_agent(
             )
 
             # Log structured telemetry
-            settings = get_settings()
             telemetry = {
                 "event": "token_usage",
                 "request_type": "chat",
                 "conversation_id": conversation_id,
-                "model": settings.llm_model,
+                "model": tier_model,
+                "model_tier": tier.value,
                 "tokens": request_token_usage,
                 "llm_calls": llm_call_count
             }
@@ -779,13 +839,15 @@ async def stream_agent(
                 "data": {
                     **request_token_usage,
                     "llm_calls": llm_call_count,
+                    "model_tier": tier.value,
+                    "model_name": tier_model,
                 },
             }
 
             # Emit Context Window Status
             post_history = await get_conversation_usage(conversation_id)
             cumulative_total = post_history["total_tokens"] + request_token_usage["total_tokens"]
-            budget_status = compute_budget_status(cumulative_total, settings.llm_model)
+            budget_status = compute_budget_status(cumulative_total, tier_model)
 
             yield {
                 "type": "context_window_status",
@@ -820,7 +882,10 @@ async def resume_agent(
         Event dictionaries with type and data (same as stream_agent)
     """
     # Resume is always a continuing conversation (not new)
-    agent = await get_agent(context, is_new_conversation=False)
+    # Use STANDARD tier for resume — confirmations are mid-complexity operations
+    resume_tier = ModelTier.STANDARD
+    _, _, resume_model = get_llm_for_tier(resume_tier)
+    agent = await get_agent(context, is_new_conversation=False, tier=resume_tier)
     config = {
         "configurable": {
             "thread_id": conversation_id,
@@ -859,13 +924,13 @@ async def resume_agent(
         else:
             resume_value = confirmation_response
         
-        # Resume the agent — same dual-mode streaming as stream_agent
-        async for mode, data in agent.astream(
+        # Resume the agent
+        async for chunk in agent.astream(
             Command(resume=resume_value),
             config=config,
-            stream_mode=["messages", "updates"],
+            stream_mode="updates",
         ):
-            # Check for heartbeat regardless of mode
+            # Check for heartbeat
             current_time = time.time()
             if current_time - last_heartbeat_time > heartbeat_interval:
                 status = "Analyzing results..." if has_seen_tool_result else "Thinking..."
@@ -875,87 +940,69 @@ async def resume_agent(
                 }
                 last_heartbeat_time = current_time
 
-            if mode == "messages":
-                # data is (AIMessageChunk, metadata) — stream individual tokens
-                message_chunk, metadata = data
-                node_name = metadata.get("langgraph_node", "")
-                if node_name == "agent" and hasattr(message_chunk, "content") and message_chunk.content:
-                    text = _extract_text_content(message_chunk.content)
-                    if text:
-                        has_seen_tool_result = False
-                        yield {
-                            "type": "response",
-                            "data": {"content": text},
-                        }
+            # Check for another interrupt FIRST (nested confirmation)
+            if "__interrupt__" in chunk:
+                interrupt_info = chunk["__interrupt__"]
+                if interrupt_info and len(interrupt_info) > 0:
+                    interrupt_data = interrupt_info[0].value if hasattr(interrupt_info[0], 'value') else interrupt_info[0]
+                    logger.info(f"⏸️  CONFIRMATION REQUIRED: {interrupt_data.get('title', 'Unknown')}")
+                    yield {
+                        "type": "confirmation_required",
+                        "data": interrupt_data,
+                    }
+                    return
+            
+            # Process chunks
+            for node_name, node_output in chunk.items():
+                if node_name == "__interrupt__":
+                    continue
+                if node_name == "agent":
+                    messages = node_output.get("messages", [])
+                    for msg in messages:
+                        # Extract token usage from AIMessage
+                        if hasattr(msg, "usage_metadata") and msg.usage_metadata:
+                            usage = msg.usage_metadata
+                            request_token_usage["input_tokens"] += usage.get("input_tokens", 0)
+                            request_token_usage["output_tokens"] += usage.get("output_tokens", 0)
+                            request_token_usage["total_tokens"] += usage.get("total_tokens", 0)
+                            llm_call_count += 1
 
-            elif mode == "updates":
-                # data is the updates dict — handle interrupts, tool calls, tool results, usage
-                chunk = data
-
-                # Check for another interrupt FIRST (nested confirmation)
-                if "__interrupt__" in chunk:
-                    interrupt_info = chunk["__interrupt__"]
-                    if interrupt_info and len(interrupt_info) > 0:
-                        interrupt_data = interrupt_info[0].value if hasattr(interrupt_info[0], 'value') else interrupt_info[0]
-                        logger.info(f"⏸️  CONFIRMATION REQUIRED: {interrupt_data.get('title', 'Unknown')}")
-                        yield {
-                            "type": "confirmation_required",
-                            "data": interrupt_data,
-                        }
-                        return
-
-                for node_name, node_output in chunk.items():
-                    if node_name == "__interrupt__":
-                        continue
-                    if node_name == "agent":
-                        messages = node_output.get("messages", [])
-                        for msg in messages:
-                            # Extract token usage from the final complete AIMessage
-                            if hasattr(msg, "usage_metadata") and msg.usage_metadata:
-                                usage = msg.usage_metadata
-                                request_token_usage["input_tokens"] += usage.get("input_tokens", 0)
-                                request_token_usage["output_tokens"] += usage.get("output_tokens", 0)
-                                request_token_usage["total_tokens"] += usage.get("total_tokens", 0)
-                                llm_call_count += 1
-
-                            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                                has_seen_tool_result = False
-                                for tool_call in msg.tool_calls:
-                                    tool_name = tool_call.get("name")
-                                    yield {
-                                        "type": "tool_call",
-                                        "data": {
-                                            "name": tool_name,
-                                            "args": tool_call.get("args", {}),
-                                        },
-                                    }
-                            elif hasattr(msg, "content") and msg.content:
-                                # Log complete response for debugging (already streamed token-by-token)
-                                text_content = _extract_text_content(msg.content)
-                                if text_content:
-                                    content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
-                                    logger.info(f"   💬 RESPONSE complete: {content_preview}")
-
-                    elif node_name == "tools":
-                        has_seen_tool_result = True
-                        messages = node_output.get("messages", [])
-                        for msg in messages:
-                            if hasattr(msg, "content"):
-                                tool_content = _extract_text_content(msg.content)
-                                cleaned_result, change_data = parse_data_change(tool_content)
-                                tool_name = getattr(msg, "name", "unknown")
+                        if hasattr(msg, "tool_calls") and msg.tool_calls:
+                            has_seen_tool_result = False
+                            for tool_call in msg.tool_calls:
+                                tool_name = tool_call.get("name")
                                 yield {
-                                    "type": "tool_result",
+                                    "type": "tool_call",
                                     "data": {
                                         "name": tool_name,
-                                        "result": cleaned_result,
+                                        "args": tool_call.get("args", {}),
                                     },
                                 }
-                                if change_data:
-                                    yield {
-                                        "type": "data_changed",
-                                        "data": change_data,
-                                    }
+                        elif hasattr(msg, "content") and msg.content:
+                            has_seen_tool_result = False
+                            text_content = _extract_text_content(msg.content)
+                            if text_content:
+                                content_preview = text_content[:100] + "..." if len(text_content) > 100 else text_content
+                                logger.info(f"   💬 RESPONSE: {content_preview}")
+                                yield {
+                                    "type": "response",
+                                    "data": {"content": text_content},
+                                }
+                elif node_name == "tools":
+                    has_seen_tool_result = True
+                    messages = node_output.get("messages", [])
+                    for msg in messages:
+                        if hasattr(msg, "content"):
+                            tool_content = _extract_text_content(msg.content)
+                            cleaned_result, _ = parse_data_change(tool_content)
+                            tool_name = getattr(msg, "name", "unknown")
+                            yield {
+                                "type": "tool_result",
+                                "data": {
+                                    "name": tool_name,
+                                    "result": cleaned_result,
+                                },
+                            }
         # Signal completion FIRST so the frontend unlocks the input immediately.
         done_time = time.time()
         logger.info(f"✅ DONE event emitted — UI unlocked")
@@ -971,12 +1018,12 @@ async def resume_agent(
             )
 
             # Log structured telemetry
-            settings = get_settings()
             telemetry = {
                 "event": "token_usage",
                 "request_type": "chat_resume",
                 "conversation_id": conversation_id,
-                "model": settings.llm_model,
+                "model": resume_model,
+                "model_tier": resume_tier.value,
                 "tokens": request_token_usage,
                 "llm_calls": llm_call_count
             }
@@ -987,13 +1034,15 @@ async def resume_agent(
                 "data": {
                     **request_token_usage,
                     "llm_calls": llm_call_count,
+                    "model_tier": resume_tier.value,
+                    "model_name": resume_model,
                 },
             }
 
             # Emit Context Window Status
             post_history = await get_conversation_usage(conversation_id)
             cumulative_total = post_history["total_tokens"] + request_token_usage["total_tokens"]
-            budget_status = compute_budget_status(cumulative_total, settings.llm_model)
+            budget_status = compute_budget_status(cumulative_total, resume_model)
 
             yield {
                 "type": "context_window_status",
