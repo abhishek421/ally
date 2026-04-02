@@ -11,7 +11,7 @@ jobs:
     env:
       AWS_REGION: eu-north-1
       ECR_REPOSITORY: ally_prod
-      DISCORD_WEBHOOK_URL_ALERT: ${{ secrets.DISCORD_WEBHOOK_URL_ALERT }}
+      MS_TEAMS_WEBHOOK_URL_ALERT: ${{ secrets.MS_TEAMS_WEBHOOK_URL_ALERT }}
     permissions:
       id-token: write
       contents: read
@@ -24,15 +24,31 @@ jobs:
         name: Capture start time
         run: echo "ts=$(date -u +%s)" >> "$GITHUB_OUTPUT"
         
-      - name: Notify Discord (started)
-        if: ${{ env.DISCORD_WEBHOOK_URL_ALERT != '' }}
+      - name: Notify Teams (started)
+        if: ${{ env.MS_TEAMS_WEBHOOK_URL_ALERT != '' }}
         run: |
-          CONTENT="🚀 **${{ github.workflow }}** started on \`${{ github.ref_name }}\` by **${{ github.actor }}**
-          Repo: \`${{ github.repository }}\` • Run: #${{ github.run_number }}
-          Service: \`${ECR_REPOSITORY}\`
-          🔗 ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          printf '%s' "$CONTENT" | jq -Rs '{content:.}' > body.json
-          curl -sS -H "Content-Type: application/json" -d @body.json "$DISCORD_WEBHOOK_URL_ALERT"
+          MESSAGE=$(cat <<EOF
+          🚀 **${{ github.workflow }}** started on \`${{ github.ref_name }}\` by **${{ github.actor }}**
+          
+          **Repo:** \`${{ github.repository }}\` • **Run:** #${{ github.run_number }}
+          **Service:** \`${ECR_REPOSITORY}\`
+          
+          🔗 [View Workflow Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          EOF
+          )
+          
+          echo "$MESSAGE" | jq -Rs '{
+            "type": "AdaptiveCard",
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "version": "1.4",
+            "body": [
+              {
+                "type": "TextBlock",
+                "text": .,
+                "wrap": true
+              }
+            ]
+          }' | curl -sS -H "Content-Type: application/json" -d @- "$MS_TEAMS_WEBHOOK_URL_ALERT"
 
       - name: Checkout source code
         uses: actions/checkout@v4
@@ -94,25 +110,25 @@ jobs:
           echo "✅ Successfully pushed ${ECR_IMAGE}:${IMAGE_TAG} and ${ECR_IMAGE}:latest"
 
   notify_prod:
-    name: Notify Discord (completed)
+    name: Notify Teams (completed)
     runs-on: ubuntu-latest
     needs: build_and_push
     if: always()
     env:
-      DISCORD_WEBHOOK_URL_ALERT: ${{ secrets.DISCORD_WEBHOOK_URL_ALERT }}
+      MS_TEAMS_WEBHOOK_URL_ALERT: ${{ secrets.MS_TEAMS_WEBHOOK_URL_ALERT }}
     steps:
-      - name: Send completion embed
-        if: ${{ env.DISCORD_WEBHOOK_URL_ALERT != '' }}
+      - name: Send completion alert
+        if: ${{ env.MS_TEAMS_WEBHOOK_URL_ALERT != '' }}
         run: |
           RESULT="${{ needs.build_and_push.result }}"  # success | failure | cancelled
           if [ "$RESULT" = "success" ]; then
-            EMOJI="✅"; COLOR=3066993
+            EMOJI="✅"
           elif [ "$RESULT" = "failure" ]; then
-            EMOJI="❌"; COLOR=15158332
+            EMOJI="❌"
           elif [ "$RESULT" = "cancelled" ]; then
-            EMOJI="🚫"; COLOR=10038562
+            EMOJI="🚫"
           else
-            EMOJI="ℹ️"; COLOR=3447003
+            EMOJI="ℹ️"
           fi
 
           START_TS="${{ needs.build_and_push.outputs.start_ts }}"
@@ -120,43 +136,30 @@ jobs:
           DUR=$(( END_TS - START_TS ))
           printf -v DUR_HMS '%02d:%02d:%02d' $((DUR/3600)) $(((DUR%3600)/60)) $((DUR%60))
 
-          TITLE="$EMOJI ${{ github.workflow }} • $RESULT"
-          URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          REPO="${{ github.repository }}"
-          BRANCH="${{ github.ref_name }}"
-          ACTOR="${{ github.actor }}"
-          RUNNUM="#${{ github.run_number }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          TIMESTAMP=$(date -u +%FT%TZ)
-          jq -n \
-            --arg title "$TITLE" \
-            --arg url "$URL" \
-            --arg repo "$REPO" \
-            --arg branch "$BRANCH" \
-            --arg actor "$ACTOR" \
-            --arg runnum "$RUNNUM" \
-            --arg result "$RESULT" \
-            --arg duration "$DUR_HMS" \
-            --arg timestamp "$TIMESTAMP" \
-            --argjson color $COLOR '
-            {
-              embeds: [
-                {
-                  title: $title,
-                  url: $url,
-                  color: $color,
-                  fields: [
-                    { "name": "Repository", "value": $repo,   "inline": true },
-                    { "name": "Branch",     "value": $branch, "inline": true },
-                    { "name": "Run",        "value": $runnum, "inline": true },
-                    { "name": "By",         "value": $actor,  "inline": true },
-                    { "name": "Result",     "value": $result, "inline": true },
-                    { "name": "Duration",   "value": $duration, "inline": true }
-                  ],
-                  timestamp: $timestamp
-                }
-              ]
-            }' > body.json
+          MESSAGE=$(cat <<EOF
+          $EMOJI **${{ github.workflow }} • $RESULT**
 
-          curl -sS -H "Content-Type: application/json" -d @body.json "$DISCORD_WEBHOOK_URL_ALERT"
+          **Repository:** ${{ github.repository }}
+          **Branch:** ${{ github.ref_name }}
+          **Run:** #${{ github.run_number }}
+          **By:** ${{ github.actor }}
+          **Duration:** $DUR_HMS
 
+          🔗 [View Logs]($RUN_URL)
+          EOF
+          )
+
+          echo "$MESSAGE" | jq -Rs '{
+            "type": "AdaptiveCard",
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "version": "1.4",
+            "body": [
+              {
+                "type": "TextBlock",
+                "text": .,
+                "wrap": true
+              }
+            ]
+          }' | curl -sS -H "Content-Type: application/json" -d @- "$MS_TEAMS_WEBHOOK_URL_ALERT"
