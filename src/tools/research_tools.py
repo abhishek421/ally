@@ -8,7 +8,6 @@ import httpx
 from langchain_core.tools import tool
 
 from src.config import get_settings
-from src.tools.base import ToolContext
 
 logger = logging.getLogger(__name__)
 
@@ -124,11 +123,8 @@ def format_search_results(response: SearchResponse) -> str:
     return "\n".join(lines)
 
 
-def get_research_tools(context: ToolContext) -> list:
-    """Get all research tools configured with the given context.
-
-    Args:
-        context: Tool context with auth and workspace info
+def get_research_tools() -> list:
+    """Get all research tools.
 
     Returns:
         List of tool functions

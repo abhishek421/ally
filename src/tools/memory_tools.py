@@ -6,6 +6,7 @@ from typing import Optional
 from langchain_core.tools import tool
 
 from src.tools.base import ToolContext
+from src.tools.context_var import get_tool_context
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +32,8 @@ def format_memory(memory: dict) -> str:
     return "\n".join(lines)
 
 
-def get_memory_tools(context: ToolContext) -> list:
-    """Get all Object Memory tools configured with the given context.
-
-    Args:
-        context: Tool context with auth and workspace info
+def get_memory_tools() -> list:
+    """Get all Object Memory tools.
 
     Returns:
         List of tool functions
@@ -49,25 +47,7 @@ def get_memory_tools(context: ToolContext) -> list:
         category: str = "CONTEXT",
         object_definition_id: Optional[str] = None,
     ) -> str:
-        """Save a long-term memory about a CRM entity (person, company, or custom object).
-
-        Use this to remember preferences, behavioral notes, context facts, and interaction
-        patterns about entities across conversations. No confirmation needed — this is
-        low-stakes and reversible.
-
-        IMPORTANT: Before saving, always call get_object_memories first to check for
-        duplicates or conflicting memories.
-
-        Args:
-            entity_id: The UUID of the entity (person, company, or object record)
-            entity_type: Type of entity — "PERSON", "COMPANY", or "OBJECT"
-            memory_text: The fact, preference, or note to remember (keep concise)
-            category: Category — "PREFERENCE", "CONTEXT", "INTERACTION", or "BEHAVIORAL". Default: "CONTEXT"
-            object_definition_id: Required only for OBJECT entity type — the object definition UUID
-
-        Returns:
-            Success message with the saved memory, or error message
-        """
+        """Save a preference, fact, or behavioral note about an entity for future reference. Check get_object_memories first to avoid duplicates."""
         entity_type_upper = entity_type.upper()
         if entity_type_upper not in ("PERSON", "COMPANY", "OBJECT"):
             return f"Invalid entity type '{entity_type}'. Must be 'PERSON', 'COMPANY', or 'OBJECT'."
@@ -79,6 +59,7 @@ def get_memory_tools(context: ToolContext) -> list:
         if entity_type_upper == "OBJECT" and not object_definition_id:
             return "object_definition_id is required when entity_type is 'OBJECT'."
 
+        context = get_tool_context()
         client = context.get_client()
 
         try:
@@ -132,22 +113,12 @@ def get_memory_tools(context: ToolContext) -> list:
         entity_id: str,
         entity_type: str,
     ) -> str:
-        """Retrieve all saved memories for a CRM entity.
-
-        Call this BEFORE acting on an entity (drafting emails, making recommendations,
-        saving new memories) to recall saved preferences, context, and behavioral notes.
-
-        Args:
-            entity_id: The UUID of the entity (person, company, or object record)
-            entity_type: Type of entity — "PERSON", "COMPANY", or "OBJECT"
-
-        Returns:
-            Formatted list of memories, or "No memories found"
-        """
+        """Recall saved memories about an entity (preferences, context, past interactions). Call before acting on any entity."""
         entity_type_upper = entity_type.upper()
         if entity_type_upper not in ("PERSON", "COMPANY", "OBJECT"):
             return f"Invalid entity type '{entity_type}'. Must be 'PERSON', 'COMPANY', or 'OBJECT'."
 
+        context = get_tool_context()
         client = context.get_client()
 
         try:

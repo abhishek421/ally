@@ -88,19 +88,23 @@ class ConfirmationRequest:
 @dataclass
 class ConfirmationResponse:
     """Response from user after confirmation request.
-    
+
     Attributes:
         confirmed: Whether the user confirmed the action
         selected_id: Selected option ID for SELECT_ONE
         selected_ids: Selected option IDs for SELECT_MANY
         feedback: Optional feedback message from user (on cancel)
         modified_data: Modified data for CONFIRM_WITH_EDIT
+        accepted_ids: Draft IDs accepted in bulk create (e.g. ["draft-0"])
+        edited_entities: Per-draft edits in bulk create (e.g. {"draft-0": {...}})
     """
     confirmed: bool = False
     selected_id: Optional[str] = None
     selected_ids: Optional[list[str]] = None
     feedback: Optional[str] = None
     modified_data: Optional[dict] = None
+    accepted_ids: Optional[list[str]] = None
+    edited_entities: Optional[dict] = None
 
 
 def request_confirmation(request: ConfirmationRequest) -> ConfirmationResponse:
@@ -142,6 +146,8 @@ def request_confirmation(request: ConfirmationRequest) -> ConfirmationResponse:
             selected_ids=response_data.get("selected_ids"),
             feedback=response_data.get("feedback"),
             modified_data=response_data.get("modified_data"),
+            accepted_ids=response_data.get("accepted_ids"),
+            edited_entities=response_data.get("edited_entities"),
         )
     
     # If response is not a dict, treat as cancellation
@@ -283,6 +289,45 @@ def request_delete_confirmation(
         entity_type=entity_type,
         action_label="Remove",
         allow_cancel_feedback=True,
+    ))
+
+
+def request_bulk_create_confirmation(
+    entities: list[dict],
+    entity_type: str,
+    group_id: Optional[str] = None,
+    message: Optional[str] = None,
+) -> ConfirmationResponse:
+    """Request confirmation before bulk creating multiple entities.
+
+    Args:
+        entities: List of entity data dictionaries to be created
+        entity_type: Type of entity ("person", "company")
+        group_id: Optional group ID context
+        message: Optional custom message
+
+    Returns:
+        ConfirmationResponse with confirmed=True if user approved
+    """
+    entity_label = entity_type.replace("_", " ").title()
+    count = len(entities)
+    label_plural = f"{entity_label}s" if count != 1 else entity_label
+
+    draft_data: dict = {
+        "entities": entities,
+        "count": count,
+        "_is_bulk_create": True,
+    }
+    if group_id:
+        draft_data["group_id"] = group_id
+
+    return request_confirmation(ConfirmationRequest(
+        type=ConfirmationType.CONFIRM_ACTION,
+        title=f"Create {count} {label_plural}",
+        message=message or f"I'll create the following {count} {label_plural.lower()}:",
+        draft_data=draft_data,
+        entity_type=entity_type,
+        action_label=f"Create {count} {label_plural}",
     ))
 
 

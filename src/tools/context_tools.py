@@ -6,15 +6,13 @@ from typing import Optional
 from langchain_core.tools import tool
 
 from src.tools.base import ToolContext
+from src.tools.context_var import get_tool_context
 
 logger = logging.getLogger(__name__)
 
 
-def get_context_tools(context: ToolContext) -> list:
-    """Get context tools configured with the given context.
-
-    Args:
-        context: Tool context with auth and workspace info
+def get_context_tools() -> list:
+    """Get context tools.
 
     Returns:
         List of tool functions
@@ -39,6 +37,7 @@ def get_context_tools(context: ToolContext) -> list:
         Returns:
             The custom instructions text, or a message indicating no instructions are set.
         """
+        context = get_tool_context()
         client = context.get_client()
 
         # If it's a custom object, we need to resolve the object definition ID first

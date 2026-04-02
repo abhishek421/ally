@@ -9,7 +9,15 @@ from enum import Enum
 from typing import Callable
 
 from src.tools.base import BaseTool, ToolContext
-from src.tools.read_tools import get_read_tools
+from src.tools.read_tools import (
+    get_read_tools,
+    get_resolver_tools,
+    get_company_read_tools,
+    get_people_read_tools,
+    get_group_read_tools,
+    get_email_tools,
+    get_column_tools,
+)
 from src.tools.create_tools import get_create_tools
 from src.tools.update_tools import get_update_tools
 from src.tools.research_tools import get_research_tools
@@ -38,52 +46,84 @@ logger = logging.getLogger(__name__)
 
 class ToolCategory(str, Enum):
     """Categories for grouping tools by user intent."""
-    READ = "read"
+    # Core — always loaded (resolvers + memory)
+    READ = "read"           # resolve_company/person/group, get_current_page (4 tools)
+    MEMORY = "memory"       # get/save object memories (2 tools)
+    # Entity read sub-categories — loaded based on which entity the query mentions
+    COMPANIES = "companies" # list/get/search company tools (4 tools)
+    PEOPLE = "people"       # list/get/search people tools (4 tools)
+    GROUPS = "groups"       # list/get/search group tools (3 tools)
+    EMAIL = "email"         # email read/draft/send tools (7 tools)
+    COLUMNS = "columns"     # column/pipeline/status tools (5 tools)
+    # Write categories
     CREATE = "create"
     UPDATE = "update"
-    RESEARCH = "research"
-    CONTEXT = "context"
     NOTES = "notes"
     REMINDERS = "reminders"
+    # Utility
+    RESEARCH = "research"
+    CONTEXT = "context"
 
 
-# Registry mapping categories to their tool getter functions
+# Registry mapping categories to their tool getter functions.
+# Every tool getter MUST be registered here — this is the single source of truth
+# for dynamic tool selection. Adding a new category = add it here + intent.py.
 TOOL_REGISTRY: dict[ToolCategory, Callable] = {
-    ToolCategory.READ: get_read_tools,
+    # Core (always included)
+    ToolCategory.READ: get_resolver_tools,      # just 4 resolver tools
+    ToolCategory.MEMORY: get_memory_tools,
+    # Entity read sub-categories
+    ToolCategory.COMPANIES: get_company_read_tools,
+    ToolCategory.PEOPLE: get_people_read_tools,
+    ToolCategory.GROUPS: get_group_read_tools,
+    ToolCategory.EMAIL: get_email_tools,
+    ToolCategory.COLUMNS: get_column_tools,
+    # Write categories
     ToolCategory.CREATE: get_create_tools,
     ToolCategory.UPDATE: get_update_tools,
-    ToolCategory.RESEARCH: get_research_tools,
-    ToolCategory.CONTEXT: get_context_tools,
     ToolCategory.NOTES: get_note_tools,
     ToolCategory.REMINDERS: get_reminder_tools,
+    # Utility
+    ToolCategory.RESEARCH: get_research_tools,
+    ToolCategory.CONTEXT: get_context_tools,
 }
 
-# Tools that should ALWAYS be included (resolvers are needed for almost everything)
-ALWAYS_INCLUDE = {ToolCategory.READ}
+# Categories that are always loaded regardless of intent classification.
+# READ: the 4 core resolver tools (resolve_company/person/group, get_current_page).
+# MEMORY: entity memory recall is consulted before acting on any entity.
+ALWAYS_INCLUDE = {ToolCategory.READ, ToolCategory.MEMORY}
 
 
 def get_tools_for_categories(
-    context: ToolContext,
     categories: list[ToolCategory],
 ) -> list:
     """Load only the tools for the specified categories.
 
-    Always includes the ALWAYS_INCLUDE categories (READ) in addition
-    to whatever categories the intent classifier returns.
+    Passing a non-empty list merges categories with ALWAYS_INCLUDE so
+    resolvers and memory tools are always available for CRM operations.
+
+    Passing an empty list (`[]`) is a special case — it means "no tools at all"
+    and bypasses ALWAYS_INCLUDE. Used for pure chitchat/greeting turns where
+    loading tool schemas would waste thousands of input tokens.
 
     Args:
-        context: Tool context with auth and workspace info
-        categories: List of ToolCategory values from intent classification
+        categories: List of ToolCategory values from intent classification.
+            Pass [] to load zero tools (greeting/chitchat optimisation).
 
     Returns:
         List of tool functions for the selected categories
     """
+    # Empty list = explicit "no tools" (greeting fast-path, bypasses ALWAYS_INCLUDE)
+    if not categories:
+        logger.info("🔧 No tools loaded (chitchat/greeting fast-path)")
+        return []
+
     all_categories = set(categories) | ALWAYS_INCLUDE
 
     tools = []
     for category in all_categories:
         getter = TOOL_REGISTRY[category]
-        cat_tools = getter(context)
+        cat_tools = getter()
         tools.extend(cat_tools)
         logger.info(f"   📦 {category.value}: {len(cat_tools)} tools loaded")
 
@@ -94,24 +134,18 @@ def get_tools_for_categories(
     return tools
 
 
-def get_all_tools(context: ToolContext) -> list:
+def get_all_tools() -> list:
     """Get all available tools for the agent.
 
-    Args:
-        context: Tool context with auth and workspace info
+    Derived from TOOL_REGISTRY so it stays in sync automatically
+    when new categories are added.
 
     Returns:
         List of all tool functions
     """
     tools = []
-    tools.extend(get_read_tools(context))
-    tools.extend(get_create_tools(context))
-    tools.extend(get_update_tools(context))
-    tools.extend(get_research_tools(context))
-    tools.extend(get_context_tools(context))
-    tools.extend(get_reminder_tools(context))
-    tools.extend(get_note_tools(context))
-    tools.extend(get_memory_tools(context))
+    for getter in TOOL_REGISTRY.values():
+        tools.extend(getter())
     return tools
 
 
