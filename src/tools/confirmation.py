@@ -88,19 +88,23 @@ class ConfirmationRequest:
 @dataclass
 class ConfirmationResponse:
     """Response from user after confirmation request.
-    
+
     Attributes:
         confirmed: Whether the user confirmed the action
         selected_id: Selected option ID for SELECT_ONE
         selected_ids: Selected option IDs for SELECT_MANY
         feedback: Optional feedback message from user (on cancel)
         modified_data: Modified data for CONFIRM_WITH_EDIT
+        accepted_ids: Draft IDs accepted in bulk create (e.g. ["draft-0"])
+        edited_entities: Per-draft edits in bulk create (e.g. {"draft-0": {...}})
     """
     confirmed: bool = False
     selected_id: Optional[str] = None
     selected_ids: Optional[list[str]] = None
     feedback: Optional[str] = None
     modified_data: Optional[dict] = None
+    accepted_ids: Optional[list[str]] = None
+    edited_entities: Optional[dict] = None
 
 
 def request_confirmation(request: ConfirmationRequest) -> ConfirmationResponse:
@@ -142,6 +146,8 @@ def request_confirmation(request: ConfirmationRequest) -> ConfirmationResponse:
             selected_ids=response_data.get("selected_ids"),
             feedback=response_data.get("feedback"),
             modified_data=response_data.get("modified_data"),
+            accepted_ids=response_data.get("accepted_ids"),
+            edited_entities=response_data.get("edited_entities"),
         )
     
     # If response is not a dict, treat as cancellation

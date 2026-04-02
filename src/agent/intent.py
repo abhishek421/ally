@@ -120,10 +120,13 @@ INTENT_PATTERNS: dict[ToolCategory, list[str]] = {
     ],
     ToolCategory.RESEARCH: [
         r"\bresearch\b",
-        r"\bsearch\s+(?:the\s+)?(?:web|internet|online)\b",
+        r"\bsearch\s+(?:the\s+|on\s+|)?(?:web|internet|online)\b",
+        r"\bsearch\s+online\b",
         r"\bfind\s+(?:out|info|information)\b",
         r"\blook\s*up\b",
         r"\bwhat\s+(?:is|are|does)\b.*\b(?:industry|market|funding|revenue)\b",
+        r"\bweb\s+search\b",
+        r"\bsearch\s+for\b",
     ],
     ToolCategory.CONTEXT: [
         r"\binstructions?\b",
