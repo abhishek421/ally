@@ -50,6 +50,15 @@ PERPLEXITY_API_KEY=REDACTED
     graphql_connect_timeout: float = 10.0   # seconds to establish TCP connection
     graphql_request_timeout: float = 30.0   # seconds per query/mutation
 
+    # Model Routing
+    enable_model_routing: bool = True
+    lite_provider: str = "openai"
+    lite_model: str = "gpt-4o-mini"
+    standard_provider: str = "openai"
+    standard_model: str = "gpt-4o"
+    power_provider: str = "openai"
+    power_model: str = "gpt-4o"
+
     # Token / Context Configuration
     default_context_window: int = 128000
     context_warning_threshold: float = 0.7   # 70% — emit warning
