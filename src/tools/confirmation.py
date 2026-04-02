@@ -13,10 +13,11 @@ logger = logging.getLogger(__name__)
 
 class ConfirmationType(str, Enum):
     """Types of confirmation requests."""
-    CONFIRM_ACTION = "confirm_action"      # Simple yes/no confirmation
-    SELECT_ONE = "select_one"              # Radio buttons - select one option
-    SELECT_MANY = "select_many"            # Checkboxes - select multiple options
-    CONFIRM_WITH_EDIT = "confirm_with_edit"  # Confirm with optional modifications
+    CONFIRM_ACTION = "confirm_action"              # Simple yes/no confirmation
+    BULK_CONFIRM_CREATE = "bulk_confirm_create"    # Bulk entity creation with draft rows
+    SELECT_ONE = "select_one"                      # Radio buttons - select one option
+    SELECT_MANY = "select_many"                    # Checkboxes - select multiple options
+    CONFIRM_WITH_EDIT = "confirm_with_edit"        # Confirm with optional modifications
 
 
 @dataclass
@@ -73,9 +74,14 @@ class ConfirmationRequest:
                 for opt in self.options
             ]
         
-        if self.draft_data:
+        if self.type == ConfirmationType.BULK_CONFIRM_CREATE and self.draft_data:
+            # Expose bulk_entities and group_id at top level for frontend draft row handling
+            result["bulk_entities"] = self.draft_data.get("entities", [])
+            if self.draft_data.get("group_id"):
+                result["group_id"] = self.draft_data["group_id"]
+        elif self.draft_data:
             result["draft_data"] = self.draft_data
-        
+
         if self.entity_type:
             result["entity_type"] = self.entity_type
         
@@ -322,7 +328,7 @@ def request_bulk_create_confirmation(
         draft_data["group_id"] = group_id
 
     return request_confirmation(ConfirmationRequest(
-        type=ConfirmationType.CONFIRM_ACTION,
+        type=ConfirmationType.BULK_CONFIRM_CREATE,
         title=f"Create {count} {label_plural}",
         message=message or f"I'll create the following {count} {label_plural.lower()}:",
         draft_data=draft_data,
