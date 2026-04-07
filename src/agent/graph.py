@@ -244,6 +244,10 @@ async def generate_conversation_title(user_query: str, assistant_response: str) 
     Returns:
         Tuple of (title string, token usage dict or None)
     """
+    # Don't generate title for very short messages (follow-up replies like "1", "yes", "ok")
+    if len(user_query.strip()) < 10:
+        return None, None
+
     title_token_usage = None
     try:
         # Always use LITE tier for title generation — it's a simple task
@@ -719,7 +723,7 @@ async def stream_agent(
         "configurable": {
             "thread_id": conversation_id,
         },
-        "recursion_limit": 25,  # max agent steps per request — prevents infinite loops
+        "recursion_limit": 50,  # max agent steps per request — prevents infinite loops
     }
     # Track tool calls for summary logging
     tool_calls_summary = []
@@ -904,8 +908,17 @@ async def stream_agent(
             logger.info(f"📊 Post-done metadata completed in {post_done_ms:.0f}ms (invisible to user)")
 
     except Exception as e:
+        error_str = str(e)
         logger.error(f"Error in stream_agent: {e}")
-        yield {"type": "error", "data": {"message": str(e)}}
+        if "recursion" in error_str.lower() or "recursion_limit" in error_str.lower():
+            yield {
+                "type": "response",
+                "data": {
+                    "content": "I ran out of capacity to complete all the requested steps in one go. Here's what I managed to do — feel free to ask me to continue with the remaining tasks."
+                },
+            }
+        else:
+            yield {"type": "error", "data": {"message": error_str}}
         yield {"type": "done", "data": {}}
 
 
@@ -929,14 +942,15 @@ async def resume_agent(
         Event dictionaries with type and data (same as stream_agent)
     """
     # Resume is always a continuing conversation (not new)
-    # Use STANDARD tier for resume — confirmations are mid-complexity operations
-    resume_tier = ModelTier.STANDARD
+    # Use POWER tier for resume — ensures all tools from the original query are available
+    resume_tier = ModelTier.POWER
     _, _, resume_model = get_llm_for_tier(resume_tier)
     agent = await get_agent(context, is_new_conversation=False, tier=resume_tier)
     config = {
         "configurable": {
             "thread_id": conversation_id,
-        }
+        },
+        "recursion_limit": 50,
     }
     confirmed = confirmation_response.get("confirmed", False)
     logger.info(f"▶️  RESUME: confirmed={confirmed}")
@@ -1041,7 +1055,7 @@ async def resume_agent(
                     for msg in messages:
                         if hasattr(msg, "content"):
                             tool_content = _extract_text_content(msg.content)
-                            cleaned_result, _ = parse_data_change(tool_content)
+                            cleaned_result, change_data = parse_data_change(tool_content)
                             tool_name = getattr(msg, "name", "unknown")
                             yield {
                                 "type": "tool_result",
@@ -1050,6 +1064,11 @@ async def resume_agent(
                                     "result": cleaned_result,
                                 },
                             }
+                            if change_data:
+                                yield {
+                                    "type": "data_changed",
+                                    "data": change_data,
+                                }
         # Signal completion FIRST so the frontend unlocks the input immediately.
         done_time = time.time()
         logger.info(f"✅ DONE event emitted — UI unlocked")
@@ -1099,6 +1118,15 @@ async def resume_agent(
             logger.info(f"📊 Post-done metadata completed in {post_done_ms:.0f}ms (invisible to user)")
 
     except Exception as e:
+        error_str = str(e)
         logger.error(f"Error resuming agent: {e}")
-        yield {"type": "error", "data": {"message": str(e)}}
+        if "recursion" in error_str.lower() or "recursion_limit" in error_str.lower():
+            yield {
+                "type": "response",
+                "data": {
+                    "content": "I ran out of capacity to complete all the requested steps in one go. Here's what I managed to do — feel free to ask me to continue with the remaining tasks."
+                },
+            }
+        else:
+            yield {"type": "error", "data": {"message": error_str}}
         yield {"type": "done", "data": {}}

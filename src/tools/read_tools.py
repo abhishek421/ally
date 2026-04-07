@@ -28,6 +28,11 @@ from src.tools.confirmation import (
     request_confirmation,
 )
 
+try:
+    from langgraph.errors import GraphInterrupt
+except ImportError:
+    GraphInterrupt = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -81,8 +86,8 @@ def get_read_tools() -> list:
             })
 
             data = result.get("getWorkspaceCompany", {})
-            companies = data.get("data", [])
-            meta = data.get("meta", {})
+            companies = data.get("data") or []
+            meta = data.get("meta") or {}
 
             if not companies:
                 return "No companies found in this workspace."
@@ -151,8 +156,8 @@ def get_read_tools() -> list:
             })
 
             data = result.get("getWorkspacePeople", {})
-            people = data.get("data", [])
-            meta = data.get("meta", {})
+            people = data.get("data") or []
+            meta = data.get("meta") or {}
 
             if not people:
                 return "No people found in this workspace."
@@ -196,7 +201,7 @@ def get_read_tools() -> list:
                 "workspaceId": context.workspace_id,
             })
 
-            groups = result.get("getGroups", [])
+            groups = result.get("getGroups") or []
 
             if not groups:
                 return "No groups found in this workspace."
@@ -261,9 +266,9 @@ def get_read_tools() -> list:
                 "search": search,
             })
 
-            data = result.get("getCompaniesByGroup", {})
-            companies = data.get("data", [])
-            meta = data.get("meta", {})
+            data = result.get("getCompaniesByGroup") or {}
+            companies = data.get("data") or []
+            meta = data.get("meta") or {}
 
             if not companies:
                 return "No companies found in this group."
@@ -293,6 +298,8 @@ def get_read_tools() -> list:
         search: Optional[str] = None,
     ) -> str:
         """List people in a specific group (compact). Use get_person_by_id for full details."""
+        if not group_id:
+            return "Error: group_id is required to list people in a group."
         context = get_tool_context()
         client = context.get_client()
 
@@ -332,9 +339,9 @@ def get_read_tools() -> list:
                 "search": search,
             })
 
-            data = result.get("getPeopleByGroup", {})
-            people = data.get("data", [])
-            meta = data.get("meta", {})
+            data = result.get("getPeopleByGroup") or {}
+            people = data.get("data") or []
+            meta = data.get("meta") or {}
 
             if not people:
                 return "No people found in this group."
@@ -351,7 +358,10 @@ def get_read_tools() -> list:
             return "\n".join(lines)
 
         except Exception as e:
-            logger.error(f"Error listing people in group: {e}")
+            import traceback
+            logger.error(f"Error listing people in group: {e}\n{traceback.format_exc()}")
+            logger.error(f"DEBUG raw result keys: {list(result.keys()) if 'result' in dir() else 'result not set'}")
+            logger.error(f"DEBUG getPeopleByGroup value: {result.get('getPeopleByGroup') if 'result' in dir() else 'N/A'}")
             return f"Error listing people in group: {str(e)}"
         finally:
             await client.close()
@@ -380,7 +390,7 @@ def get_read_tools() -> list:
                 peopleMetaData {
                     people { id firstName lastName jobTitle }
                 }
-                groupCompanies {
+                groupCompany {
                     group { id name emoji }
                 }
             }
@@ -421,7 +431,7 @@ def get_read_tools() -> list:
                     lines.append(f"  Associated People: {', '.join(people_names)}")
             
             # Add groups
-            groups = company.get("groupCompanies", [])
+            groups = company.get("groupCompany", [])
             if groups:
                 group_names = [
                     f"{g['group'].get('emoji', '')} {g['group']['name']}".strip()
@@ -554,7 +564,7 @@ def get_read_tools() -> list:
             autocomplete_results = result.get("autocomplete", [])
         except Exception as e:
             # Autocomplete may fail (e.g., Elasticsearch index not found), continue to fallback
-            logger.warning(f"Autocomplete failed, falling back to direct query: {e}")
+            logger.debug(f"Autocomplete not available, using direct query: {e}")
         
         try:
             if autocomplete_results:
@@ -589,7 +599,7 @@ def get_read_tools() -> list:
                 "search": query,
             })
             
-            companies = result.get("getWorkspaceCompany", {}).get("data", [])
+            companies = (result.get("getWorkspaceCompany") or {}).get("data") or []
             
             if not companies:
                 return f"No companies found matching '{query}'."
@@ -645,7 +655,7 @@ def get_read_tools() -> list:
             autocomplete_results = result.get("autocomplete", [])
         except Exception as e:
             # Autocomplete may fail (e.g., Elasticsearch index not found), continue to fallback
-            logger.warning(f"Autocomplete failed, falling back to direct query: {e}")
+            logger.debug(f"Autocomplete not available, using direct query: {e}")
         
         try:
             if autocomplete_results:
@@ -681,7 +691,7 @@ def get_read_tools() -> list:
                 "search": query,
             })
             
-            people = result.get("getWorkspacePeople", {}).get("data", [])
+            people = (result.get("getWorkspacePeople") or {}).get("data") or []
             
             if not people:
                 return f"No people found matching '{query}'."
@@ -730,7 +740,7 @@ def get_read_tools() -> list:
                 "workspaceId": context.workspace_id,
             })
             
-            groups = result.get("getGroups", [])
+            groups = result.get("getGroups") or []
             group = next((g for g in groups if g.get("id") == group_id), None)
             
             if not group:
@@ -768,7 +778,7 @@ def get_read_tools() -> list:
                 "workspaceId": context.workspace_id,
             })
             
-            groups = result.get("getGroups", [])
+            groups = result.get("getGroups") or []
             
             if not groups:
                 return "No groups found in this workspace."
@@ -835,7 +845,7 @@ def get_read_tools() -> list:
                 "search": name,
             })
 
-            companies = result.get("getWorkspaceCompany", {}).get("data", [])
+            companies = (result.get("getWorkspaceCompany") or {}).get("data") or []
 
             # If full name search yields no results, try searching each name part separately
             if not companies:
@@ -852,7 +862,7 @@ def get_read_tools() -> list:
                             "limit": 20,
                             "search": part,
                         })
-                        part_hits = part_result.get("getWorkspaceCompany", {}).get("data", [])
+                        part_hits = (part_result.get("getWorkspaceCompany") or {}).get("data") or []
                         for hit in part_hits:
                             if hit.get("id") and hit["id"] not in combined_results:
                                 combined_results[hit["id"]] = hit
@@ -941,7 +951,7 @@ def get_read_tools() -> list:
                 "search": name,
             })
 
-            raw_people = result.get("getWorkspacePeople", {}).get("data", [])
+            raw_people = (result.get("getWorkspacePeople") or {}).get("data") or []
             people = [normalize_person(p) for p in raw_people]
 
             # If full name search yields no results, try searching each name part separately
@@ -959,7 +969,7 @@ def get_read_tools() -> list:
                             "limit": 20,
                             "search": part,
                         })
-                        part_hits = part_result.get("getWorkspacePeople", {}).get("data", [])
+                        part_hits = (part_result.get("getWorkspacePeople") or {}).get("data") or []
                         for hit in part_hits:
                             if hit.get("id") and hit["id"] not in combined_results:
                                 combined_results[hit["id"]] = normalize_person(hit)
@@ -1002,6 +1012,11 @@ def get_read_tools() -> list:
             return f"Could not find any person matching '{name}'. Please check the spelling or list all people to see available options."
 
         except Exception as e:
+            # Re-raise LangGraph interrupts so the confirmation UI works correctly
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error resolving person name: {e}")
             return f"Error resolving person name: {str(e)}"
         finally:
@@ -1030,18 +1045,34 @@ def get_read_tools() -> list:
                 "workspaceId": context.workspace_id,
             })
             
-            groups = result.get("getGroups", [])
-            
+            groups = result.get("getGroups") or []
+
             if not groups:
                 return "No groups found in this workspace."
-            
+
+            # URL-first resolution: if we're on a group page, auto-resolve without disambiguation
+            if context.active_url and groups:
+                import re
+                url_uuid_match = re.search(
+                    r'/apps/groups/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})',
+                    context.active_url,
+                    re.IGNORECASE,
+                )
+                if url_uuid_match:
+                    url_group_id = url_uuid_match.group(1)
+                    url_group = next((g for g in groups if g.get('id') == url_group_id), None)
+                    if url_group:
+                        emoji = url_group.get('emoji', '')
+                        logger.info(f"Auto-resolved group from active URL: {url_group['name']}")
+                        return f"RESOLVED: Group '{emoji} {url_group['name']}' (type: {url_group.get('type', 'unknown')}) has ID: {url_group['id']}"
+
             # Use fuzzy matching
             matches = fuzzy_match_entities(name, groups, name_key="name", threshold=50.0, limit=5)
-            
+
             if not matches:
                 # Even looser matching
                 matches = fuzzy_match_entities(name, groups, name_key="name", threshold=30.0, limit=3)
-            
+
             if matches:
                 # Check if we have a single unambiguous match
                 top_score = matches[0][1]
@@ -1078,6 +1109,11 @@ def get_read_tools() -> list:
             return f"Could not find a group matching '{name}'. Available groups: {', '.join(group_names)}"
             
         except Exception as e:
+            # Re-raise LangGraph interrupts so the confirmation UI works correctly
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error resolving group name: {e}")
             return f"Error resolving group name: {str(e)}"
         finally:
@@ -1477,7 +1513,7 @@ def get_read_tools() -> list:
                 }
                 """
                 g_result = await client.query(g_query, {"workspaceId": context.workspace_id})
-                groups = g_result.get("getGroups", [])
+                groups = g_result.get("getGroups") or []
                 if groups:
                     group_id = groups[0]["id"]
                 else:
@@ -1561,7 +1597,7 @@ def get_read_tools() -> list:
                 }
                 """
                 g_result = await client.query(g_query, {"workspaceId": context.workspace_id})
-                groups = g_result.get("getGroups", [])
+                groups = g_result.get("getGroups") or []
                 if groups:
                     group_id = groups[0]["id"]
                 else:
@@ -1664,7 +1700,7 @@ def get_read_tools() -> list:
                 "workspaceId": context.workspace_id,
             })
             
-            groups = result.get("getGroups", [])
+            groups = result.get("getGroups") or []
             group = next((g for g in groups if g.get("id") == group_id), None)
             
             if not group:
@@ -1712,7 +1748,7 @@ def get_read_tools() -> list:
         try:
             result = await client.query(query, {"columnId": column_id})
             
-            options = result.get("getSelectOptionsByColumnId", [])
+            options = result.get("getSelectOptionsByColumnId") or []
             
             if not options:
                 return f"No options found for column {column_id}. Make sure this is a SELECT or MULTISELECT column."
@@ -1776,13 +1812,13 @@ def get_read_tools() -> list:
             columns_key = "companyColumns"
         
         groups_result = await client.query(columns_query, {"workspaceId": workspace_id})
-        groups = groups_result.get("getGroups", [])
+        groups = groups_result.get("getGroups") or []
         group = next((g for g in groups if g.get("id") == group_id), None)
-        
+
         if not group:
             return None, []
-        
-        columns = group.get(columns_key, [])
+
+        columns = group.get(columns_key) or []
         
         # Find Status column (case-insensitive search)
         status_column = None
@@ -1806,7 +1842,7 @@ def get_read_tools() -> list:
         }
         """
         options_result = await client.query(options_query, {"columnId": status_column["id"]})
-        options = options_result.get("getSelectOptionsByColumnId", [])
+        options = options_result.get("getSelectOptionsByColumnId") or []
         
         return status_column, options
 
@@ -1837,7 +1873,7 @@ def get_read_tools() -> list:
                 }
                 """
                 groups_result = await client.query(groups_query, {"workspaceId": context.workspace_id})
-                groups = groups_result.get("getGroups", [])
+                groups = groups_result.get("getGroups") or []
                 
                 # Fuzzy match group name
                 matches = fuzzy_match_entities(group_name, groups, name_key="name", threshold=50.0, limit=1)
@@ -1861,7 +1897,7 @@ def get_read_tools() -> list:
                             }
                             """
                             groups_result = await client.query(groups_query, {"workspaceId": context.workspace_id})
-                            groups = groups_result.get("getGroups", [])
+                            groups = groups_result.get("getGroups") or []
                             group = next((g for g in groups if g.get("id") == group_id), None)
                             if group:
                                 resolved_group_name = group.get("name")
@@ -1919,7 +1955,7 @@ def get_read_tools() -> list:
             }
             """
             groups_result = await client.query(groups_query, {"workspaceId": context.workspace_id})
-            groups = groups_result.get("getGroups", [])
+            groups = groups_result.get("getGroups") or []
             
             matches = fuzzy_match_entities(group_name, groups, name_key="name", threshold=50.0, limit=1)
             if not matches:
@@ -1982,7 +2018,7 @@ def get_read_tools() -> list:
                     "groupId": group_id,
                     "limit": min(limit * 3, 100),  # Fetch more to account for filtering
                 })
-                entities = entities_result.get("getPeopleByGroup", {}).get("data", [])
+                entities = (entities_result.get("getPeopleByGroup") or {}).get("data") or []
             else:
                 entities_query = """
                 query GetCompaniesByGroup($groupId: ID!, $limit: Int) {
@@ -2006,7 +2042,7 @@ def get_read_tools() -> list:
                     "groupId": group_id,
                     "limit": min(limit * 3, 100),
                 })
-                entities = entities_result.get("getCompaniesByGroup", {}).get("data", [])
+                entities = (entities_result.get("getCompaniesByGroup") or {}).get("data") or []
             
             # Step 5: Filter entities by status
             filtered_entities = []
@@ -2105,7 +2141,7 @@ def get_read_tools() -> list:
                 "workspaceId": context.workspace_id,
             })
             
-            groups = result.get("getGroups", [])
+            groups = result.get("getGroups") or []
             group = next((g for g in groups if g.get("id") == group_id), None)
             
             if not group:
@@ -2242,7 +2278,7 @@ def get_read_tools() -> list:
                             }
                             """
                             group_result = await client.query(group_query, {"workspaceId": context.workspace_id})
-                            groups = group_result.get("getGroups", [])
+                            groups = group_result.get("getGroups") or []
                             group = next((g for g in groups if g.get("id") == group_id), None)
                             if group:
                                 emoji = group.get('emoji', '')

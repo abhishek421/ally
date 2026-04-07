@@ -45,11 +45,11 @@ The Ally Chat feature is a **3-tier AI-powered CRM assistant** with:
 
 ## Repository Structure
 
-| Repo | Tech Stack | Purpose |
-|------|------------|---------|
-| `ally` | Python, FastAPI, LangGraph | AI Agent service with tool execution |
-| `frontend` | Next.js, React, TypeScript | Chat UI components and state management |
-| `backend` | NestJS, GraphQL, Prisma | Conversation persistence, custom instructions, and CRM data |
+| Repo | Tech Stack | Purpose | Local Dev Port |
+|------|------------|---------|----------------|
+| `ally` | Python, FastAPI, LangGraph | AI Agent service with tool execution | `8000` |
+| `frontend` | Next.js, React, TypeScript | Chat UI components and state management | `3000` |
+| `backend` | NestJS, GraphQL, Prisma | Conversation persistence, custom instructions, and CRM data | `4400` |
 
 ---
 

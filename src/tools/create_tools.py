@@ -114,10 +114,10 @@ def get_create_tools() -> list:
             input_data["description"] = description
 
         if email:
-            input_data["emails"] = [{"value": email, "type": "work", "isPrimary": True}]
+            input_data["emails"] = [{"value": email, "type": "work", "isPrimary": True, "operation": "CREATE"}]
 
         if phone:
-            input_data["phoneNumbers"] = [{"value": phone, "type": "work", "isPrimary": True}]
+            input_data["phoneNumbers"] = [{"value": phone, "type": "work", "isPrimary": True, "operation": "CREATE"}]
 
         if website:
             input_data["urls"] = [{"value": website, "label": "Website", "isPrimary": True}]
@@ -244,11 +244,13 @@ def get_create_tools() -> list:
             input_data["description"] = description
 
         if email:
-            input_data["emails"] = [{"value": email, "type": "work", "isPrimary": True}]
+            input_data["emails"] = [{"value": email, "type": "work", "isPrimary": True, "operation": "CREATE"}]
 
         if phone:
-            input_data["phoneNumbers"] = [{"value": phone, "type": "mobile", "isPrimary": True}]
-        
+            input_data["phoneNumbers"] = [{"value": phone, "type": "mobile", "isPrimary": True, "operation": "CREATE"}]
+
+        logger.info(f"[create_person] input_data keys={list(input_data.keys())}, email_arg={email!r}, emails_in_input={input_data.get('emails')}")
+
         try:
             result = await client.mutate(mutation, {
                 "input": input_data,
@@ -718,9 +720,9 @@ def get_create_tools() -> list:
             if company.get("description"):
                 item["description"] = company["description"]
             if company.get("email"):
-                item["emails"] = [{"value": company["email"], "type": "work", "isPrimary": True}]
+                item["emails"] = [{"value": company["email"], "type": "work", "isPrimary": True, "operation": "CREATE"}]
             if company.get("phone"):
-                item["phoneNumbers"] = [{"value": company["phone"], "type": "work", "isPrimary": True}]
+                item["phoneNumbers"] = [{"value": company["phone"], "type": "work", "isPrimary": True, "operation": "CREATE"}]
             if company.get("website"):
                 item["urls"] = [{"value": company["website"], "label": "Website", "isPrimary": True}]
             input_items.append(item)
@@ -836,9 +838,9 @@ def get_create_tools() -> list:
             if person.get("description"):
                 item["description"] = person["description"]
             if person.get("email"):
-                item["emails"] = [{"value": person["email"], "type": "work", "isPrimary": True}]
+                item["emails"] = [{"value": person["email"], "type": "work", "isPrimary": True, "operation": "CREATE"}]
             if person.get("phone"):
-                item["phoneNumbers"] = [{"value": person["phone"], "type": "mobile", "isPrimary": True}]
+                item["phoneNumbers"] = [{"value": person["phone"], "type": "mobile", "isPrimary": True, "operation": "CREATE"}]
             input_items.append(item)
 
         try:

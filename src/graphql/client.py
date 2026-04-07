@@ -125,6 +125,29 @@ class GraphQLClient:
             logger.error(f"GraphQL query failed: {e}")
             raise
 
+    async def execute_silent(
+        self,
+        query: str,
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Execute a GraphQL query without logging errors (for optional features).
+
+        Same as execute() but swallows the error log. Use for optional features
+        where failure is expected (e.g., features backed by missing migrations).
+        """
+        if self._session is None:
+            await self.connect()
+
+        try:
+            result = await self._session.execute(
+                gql(query),
+                variable_values=variables,
+            )
+            return result
+        except Exception as e:
+            logger.debug(f"GraphQL optional query failed (expected if feature not yet migrated): {e}")
+            raise
+
     async def query(
         self,
         query: str,
@@ -266,7 +289,7 @@ class GraphQLClient:
 
         logger.info(f"📡 GraphQL: Fetching custom instructions for group {group_id}")
         try:
-            result = await self.execute(query, {"groupId": group_id})
+            result = await self.execute_silent(query, {"groupId": group_id})
             instructions_data = result.get("getGroupCustomInstructions")
             if instructions_data:
                 instructions = instructions_data.get("instructions")
@@ -275,7 +298,7 @@ class GraphQLClient:
             logger.info("📡 No group instructions data in response")
             return None
         except Exception as e:
-            logger.warning(f"📡 Failed to get group custom instructions: {e}")
+            logger.debug(f"📡 Group custom instructions not available (migration pending?): {e}")
             return None
 
 
