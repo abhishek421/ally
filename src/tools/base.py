@@ -246,6 +246,7 @@ class ToolContext:
     user_email: Optional[str] = None  # User's email for context
     workspace_instructions: Optional[str] = None  # Custom instructions for the workspace
     group_instructions: Optional[str] = None  # Custom instructions for the active group
+    web_search_enabled: bool = True  # Whether the web_search tool is available for this request
     _client: Optional[GraphQLClient] = field(default=None, init=False, repr=False)
 
     def get_client(self) -> GraphQLClient:
