@@ -702,6 +702,12 @@ async def stream_agent(
     else:
         # Classify intent and load only relevant tools
         categories = classify_intent(message)
+
+        # Strip RESEARCH tools if web search is disabled for this request
+        if not context.web_search_enabled and ToolCategory.RESEARCH in categories:
+            categories = [c for c in categories if c != ToolCategory.RESEARCH]
+            logger.info("🔒 Web search disabled — RESEARCH tools excluded")
+
         logger.info(f"🎯 Intent: {[c.value for c in categories]}")
 
         # Route query to the appropriate model tier
