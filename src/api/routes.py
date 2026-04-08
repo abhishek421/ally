@@ -144,6 +144,7 @@ class ChatRequest(BaseModel):
     conversation_id: str = Field(..., description="ID of the conversation thread")
     message: str = Field(..., min_length=1, description="User message to send")
     activeURL: str | None = Field(None, description="Current page URL the user is viewing")
+    web_search_enabled: bool = Field(True, description="Whether Ally can use web search for this request")
 
 
 class ChatResponse(BaseModel):
@@ -296,6 +297,7 @@ async def chat(
         active_url=request.activeURL,
         workspace_instructions=workspace_instructions,
         group_instructions=group_instructions,
+        web_search_enabled=request.web_search_enabled,
     )
 
     return EventSourceResponse(
