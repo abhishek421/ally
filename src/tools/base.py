@@ -304,7 +304,7 @@ def format_company_compact(company: dict) -> str:
     name = company.get("name", "Unknown")
     parts = [name]
 
-    emails = company.get("emails", [])
+    emails = company.get("emails") or []
     primary_email = next(
         (e.get("value") for e in emails if e.get("isPrimary") and e.get("value")),
         next((e.get("value") for e in emails if e.get("value")), None),
@@ -333,7 +333,7 @@ def format_person_compact(person: dict) -> str:
     if job:
         parts[0] = f"{name}, {job}"
 
-    emails = person.get("emails", [])
+    emails = person.get("emails") or []
     primary_email = next(
         (e.get("value") for e in emails if e.get("isPrimary") and e.get("value")),
         next((e.get("value") for e in emails if e.get("value")), None),
@@ -341,7 +341,7 @@ def format_person_compact(person: dict) -> str:
     if primary_email:
         parts.append(primary_email)
 
-    companies = person.get("companyMetaData", [])
+    companies = person.get("companyMetaData") or []
     if companies:
         company_names = [
             c.get("company", {}).get("name", "")

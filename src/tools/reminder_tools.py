@@ -7,6 +7,11 @@ from langchain_core.tools import tool
 from src.tools.context_var import get_tool_context
 from src.tools.base import EntityType, ChangeAction, DataChange
 
+try:
+    from langgraph.errors import GraphInterrupt
+except ImportError:
+    GraphInterrupt = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -195,6 +200,10 @@ def get_reminder_tools() -> list:
             )
             return f"✅ Reminder created successfully!\n\n{format_reminder(reminder)}{change.to_marker()}"
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error creating reminder: {type(e).__name__}: {e}")
             return f"Error creating reminder: {str(e)}"
         finally:
@@ -283,6 +292,10 @@ def get_reminder_tools() -> list:
             return "\n".join(lines)
 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error listing reminders: {type(e).__name__}: {e}")
             return f"Error listing reminders: {str(e)}"
         finally:
@@ -323,6 +336,10 @@ def get_reminder_tools() -> list:
             return format_reminder(reminder)
 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error getting reminder: {type(e).__name__}: {e}")
             return f"Error getting reminder: {str(e)}"
         finally:
@@ -410,6 +427,10 @@ def get_reminder_tools() -> list:
             return f"✅ Reminder updated successfully!\n\n{format_reminder(updated)}{change.to_marker()}"
 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error updating reminder: {type(e).__name__}: {e}")
             return f"Error updating reminder: {str(e)}"
         finally:
@@ -455,6 +476,10 @@ def get_reminder_tools() -> list:
             return f"✅ Reminder '{reminder_title}' deleted successfully.{change.to_marker()}"
 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error deleting reminder: {type(e).__name__}: {e}")
             return f"Error deleting reminder: {str(e)}"
         finally:
