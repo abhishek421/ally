@@ -26,6 +26,11 @@ from src.tools.confirmation import (
     request_confirmation,
 )
 
+try:
+    from langgraph.errors import GraphInterrupt
+except ImportError:
+    GraphInterrupt = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -76,6 +81,10 @@ def get_update_tools() -> list:
                 return "Failed to add company to group - no data returned."
                 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error adding company to group: {e}")
             return f"Error adding company to group: {str(e)}"
         finally:
@@ -134,6 +143,10 @@ def get_update_tools() -> list:
                 return "Failed to remove company from group - no data returned."
                 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error removing company from group: {e}")
             return f"Error removing company from group: {str(e)}"
         finally:
@@ -179,6 +192,10 @@ def get_update_tools() -> list:
                 return "Failed to add person to group - no data returned."
                 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error adding person to group: {e}")
             return f"Error adding person to group: {str(e)}"
         finally:
@@ -237,6 +254,10 @@ def get_update_tools() -> list:
                 return "Failed to remove person from group - no data returned."
                 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error removing person from group: {e}")
             return f"Error removing person from group: {str(e)}"
         finally:
@@ -275,6 +296,10 @@ def get_update_tools() -> list:
                 return "Failed to add person to company."
                 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error adding person to company: {e}")
             return f"Error adding person to company: {str(e)}"
         finally:
@@ -313,6 +338,10 @@ def get_update_tools() -> list:
                 return "Failed to remove person from company."
                 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error removing person from company: {e}")
             return f"Error removing person from company: {str(e)}"
         finally:
@@ -389,6 +418,10 @@ def get_update_tools() -> list:
                 return "Failed to update company - no data returned."
                 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error updating company: {e}")
             return f"Error updating company: {str(e)}"
         finally:
@@ -479,6 +512,10 @@ def get_update_tools() -> list:
                 return "Failed to update person - no data returned."
                 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error updating person: {e}")
             return f"Error updating person: {str(e)}"
         finally:
@@ -551,6 +588,10 @@ def get_update_tools() -> list:
                 return "Failed to update group - no data returned."
                 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error updating group: {e}")
             return f"Error updating group: {str(e)}"
         finally:
@@ -620,6 +661,10 @@ def get_update_tools() -> list:
             return None, None
             
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.warning(f"Could not fetch current column value: {e}")
             return None, None
 
@@ -753,6 +798,10 @@ def get_update_tools() -> list:
                     return "Failed to update column value - no data returned."
                     
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error updating company column value: {e}")
             return f"Error updating company column value: {str(e)}"
         finally:
@@ -888,6 +937,10 @@ def get_update_tools() -> list:
                     return "Failed to update column value - no data returned."
                     
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error updating person column value: {e}")
             return f"Error updating person column value: {str(e)}"
         finally:
@@ -1032,6 +1085,10 @@ def get_update_tools() -> list:
             )
 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error looking up person status data: {e}")
             await client.close()
             return f"Error looking up data: {str(e)}"
@@ -1088,6 +1145,10 @@ def get_update_tools() -> list:
                 return "Failed to update status - no data returned."
 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error updating person status: {e}")
             return f"Error updating person status: {str(e)}"
         finally:
@@ -1230,6 +1291,10 @@ def get_update_tools() -> list:
             )
 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error looking up company status data: {e}")
             await client.close()
             return f"Error looking up data: {str(e)}"
@@ -1286,6 +1351,10 @@ def get_update_tools() -> list:
                 return "Failed to update status - no data returned."
 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error updating company status: {e}")
             return f"Error updating company status: {str(e)}"
         finally:
@@ -1372,6 +1441,10 @@ def get_update_tools() -> list:
                 return "Failed to update reminder - no data returned."
                 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error updating reminder: {e}")
             return f"Error updating reminder: {str(e)}"
         finally:
@@ -1421,6 +1494,10 @@ def get_update_tools() -> list:
                 return "Failed to delete reminder."
                 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error deleting reminder: {e}")
             return f"Error deleting reminder: {str(e)}"
         finally:

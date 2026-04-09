@@ -12,7 +12,10 @@ from src.tools.base import (
     EntityType as ToolEntityType,
     ChangeAction,
 )
-from src.tools.confirmation import request_create_confirmation
+try:
+    from langgraph.errors import GraphInterrupt
+except ImportError:
+    GraphInterrupt = None
 
 logger = logging.getLogger(__name__)
 
@@ -80,17 +83,22 @@ def get_note_tools() -> list:
         tags: Optional[str] = None,
     ) -> str:
         """Create a new note for a person or company in the CRM.
-        
+
         Use this tool when the user wants to add a note, comment, or reminder
         about a person or company.
-        
+
+        IMPORTANT: Call this tool ONE AT A TIME. Never call it in parallel with
+        other create_note calls. If you need to create notes for multiple people,
+        call this tool sequentially — wait for each one to complete before calling
+        the next.
+
         Args:
             entity_name: Name of the person or company to add the note to
             entity_type: Type of entity - must be "PEOPLE" for a person or "COMPANY" for a company
             content: The note content/text to save
             is_private: Whether the note should be private (only visible to creator). Default: False
             tags: Optional comma-separated list of tags (e.g., "meeting,follow-up")
-            
+
         Returns:
             Confirmation message with the created note details
         """
@@ -105,8 +113,8 @@ def get_note_tools() -> list:
         context = get_tool_context()
         client = context.get_client()
 
+        # Step 1: Resolve entity → get entity_id
         try:
-            # Step 1: Resolve entity → get entity_id
             if entity_type_upper == "PEOPLE":
                 search_query = """
                 query GetWorkspacePeople($workspaceId: ID!, $search: String, $limit: Int) {
@@ -120,7 +128,7 @@ def get_note_tools() -> list:
                     "search": entity_name,
                     "limit": 5,
                 })
-                entities = result.get("getWorkspacePeople", {}).get("data", [])
+                entities = (result.get("getWorkspacePeople") or {}).get("data", [])
                 if not entities:
                     return f"No person found matching '{entity_name}'."
                 entity = entities[0]
@@ -139,33 +147,18 @@ def get_note_tools() -> list:
                     "search": entity_name,
                     "limit": 5,
                 })
-                entities = result.get("getWorkspaceCompany", {}).get("data", [])
+                entities = (result.get("getWorkspaceCompany") or {}).get("data", [])
                 if not entities:
                     return f"No company found matching '{entity_name}'."
                 entity = entities[0]
                 entity_id = entity["id"]
                 entity_display = entity.get("name", entity_name)
+        except Exception as e:
+            logger.error(f"Error creating note: {type(e).__name__}: {e}")
+            return f"Error creating note: {str(e)}"
 
-            # Step 2: Request confirmation (interrupt — resumes from here on confirm)
-            draft_data = {
-                "entity": entity_display,
-                "entity_type": entity_type_upper,
-                "content": content[:100] + "..." if len(content) > 100 else content,
-                "is_private": is_private,
-            }
-            if tags:
-                draft_data["tags"] = tags
-
-            confirmation = request_create_confirmation(
-                entity_type="note",
-                draft_data=draft_data,
-            )
-
-            if not confirmation.confirmed:
-                feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
-                return f"Note creation cancelled by user.{feedback}"
-
-            # Step 3: Create the note
+        # Step 2: Create the note
+        try:
             mutation = """
             mutation CreateNote($input: CreateNoteInput!, $workspaceId: String) {
                 createNote(input: $input, workspaceId: $workspaceId) {
@@ -207,8 +200,6 @@ def get_note_tools() -> list:
         except Exception as e:
             logger.error(f"Error creating note: {type(e).__name__}: {e}")
             return f"Error creating note: {str(e)}"
-        finally:
-            await client.close()
 
     @tool
     async def list_notes(
@@ -344,6 +335,10 @@ def get_note_tools() -> list:
             return "\n".join(lines)
             
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error listing notes: {e}")
             return f"Error listing notes: {str(e)}"
         finally:
@@ -454,6 +449,10 @@ def get_note_tools() -> list:
             return "\n".join(lines)
 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error getting note: {type(e).__name__}: {e}")
             return f"Error getting note: {str(e)}"
         finally:
@@ -615,6 +614,10 @@ def get_note_tools() -> list:
                 return "Failed to update note - no data returned."
 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error updating note: {type(e).__name__}: {e}")
             return f"Error updating note: {str(e)}"
         finally:
@@ -751,6 +754,10 @@ def get_note_tools() -> list:
                 return "Failed to delete note."
 
         except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
             logger.error(f"Error deleting note: {type(e).__name__}: {e}")
             return f"Error deleting note: {str(e)}"
         finally:

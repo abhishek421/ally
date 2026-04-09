@@ -58,9 +58,9 @@ services:
     restart: unless-stopped
     networks:
       - ally-network
-    # For development: mount source for hot-reload (uncomment if needed)
-    # volumes:
-    #   - ./src:/app/src:ro
+    # For development: mount source for hot-reload
+    volumes:
+      - ./src:/app/src
 
   # ----------------------------------------
   # PostgreSQL Database (LangGraph Checkpointer)
