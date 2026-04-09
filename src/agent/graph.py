@@ -707,10 +707,18 @@ async def stream_agent(
         # Classify intent and load only relevant tools
         categories = classify_intent(message)
 
-        # Strip RESEARCH tools if web search is disabled for this request
-        if not context.web_search_enabled and ToolCategory.RESEARCH in categories:
-            categories = [c for c in categories if c != ToolCategory.RESEARCH]
-            logger.info("🔒 Web search disabled — RESEARCH tools excluded")
+        # RESEARCH tools gate: always inject when web search is enabled,
+        # always strip when disabled. This ensures the agent has web_search
+        # available for external queries even if the intent classifier didn't
+        # explicitly detect a research keyword.
+        if context.web_search_enabled:
+            if ToolCategory.RESEARCH not in categories:
+                categories = categories + [ToolCategory.RESEARCH]
+                logger.info("🔓 Web search enabled — RESEARCH tools injected")
+        else:
+            if ToolCategory.RESEARCH in categories:
+                categories = [c for c in categories if c != ToolCategory.RESEARCH]
+                logger.info("🔒 Web search disabled — RESEARCH tools excluded")
 
         logger.info(f"🎯 Intent: {[c.value for c in categories]}")
 
