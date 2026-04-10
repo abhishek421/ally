@@ -159,21 +159,20 @@ def get_update_tools() -> list:
         client = context.get_client()
         
         mutation = """
-        mutation CreateGroupPeople($input: CreateGroupPeopleInput!, $userId: String!) {
-            createGroupPeople(input: $input, userId: $userId) {
+        mutation CreateGroupPeople($input: CreateGroupPeopleInput!) {
+            createGroupPeople(input: $input) {
                 groupId
                 peopleId
             }
         }
         """
-        
+
         try:
             result = await client.mutate(mutation, {
                 "input": {
                     "groupId": group_id,
                     "peopleId": person_id,
                 },
-                "userId": context.user_id,
             })
             
             data = result.get("createGroupPeople")
@@ -271,7 +270,9 @@ def get_update_tools() -> list:
         
         mutation = """
         mutation AddPersonToCompany($peopleId: ID!, $companyId: ID!) {
-            addPersonToCompany(peopleId: $peopleId, companyId: $companyId)
+            addPersonToCompany(peopleId: $peopleId, companyId: $companyId) {
+                id
+            }
         }
         """
         
@@ -313,7 +314,9 @@ def get_update_tools() -> list:
         
         mutation = """
         mutation RemovePersonFromCompany($peopleId: ID!, $companyId: ID!) {
-            removePersonFromCompany(peopleId: $peopleId, companyId: $companyId)
+            removePersonFromCompany(peopleId: $peopleId, companyId: $companyId) {
+                id
+            }
         }
         """
         
@@ -534,8 +537,8 @@ def get_update_tools() -> list:
         client = context.get_client()
         
         mutation = """
-        mutation UpdateGroup($input: UpdateGroupRequest!) {
-            updateGroup(input: $input) {
+        mutation UpdateGroup($input: UpdateGroupRequest!, $id: String!) {
+            updateGroup(input: $input, id: $id) {
                 id
                 name
                 type
@@ -551,27 +554,27 @@ def get_update_tools() -> list:
             }
         }
         """
-        
-        # Build input - only include fields that are being updated
-        input_data = {"id": group_id}
-        
+
+        # Build input - only include fields that are being updated (id is a separate arg)
+        input_data = {}
+
         if name is not None:
             input_data["name"] = name
-        
+
         if description is not None:
             input_data["description"] = description
-        
+
         if emoji is not None:
             input_data["emoji"] = emoji
-        
+
         if is_private is not None:
             input_data["isPrivate"] = is_private
-        
-        if len(input_data) == 1:
+
+        if not input_data:
             return "No updates specified. Please provide at least one field to update (name, description, emoji, is_private)."
-        
+
         try:
-            result = await client.mutate(mutation, {"input": input_data})
+            result = await client.mutate(mutation, {"input": input_data, "id": group_id})
             
             group = result.get("updateGroup")
             

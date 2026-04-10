@@ -1588,8 +1588,13 @@ def get_read_tools() -> list:
         
         context = get_tool_context()
         client = context.get_client()
+
+        sender_email = context.user_email
+        if not sender_email:
+            return "Error: Could not determine sender email address. Ensure your profile email is set."
+
         try:
-            # 2. Resolve group_id
+            # Resolve group_id if not provided
             if not group_id:
                 g_query = """
                 query GetGroups($workspaceId: String!) {
@@ -1603,48 +1608,33 @@ def get_read_tools() -> list:
                 else:
                     return "Error: Could not find any group to associate this email with."
 
-            # 3. Create a temporary draft for sending
-            create_mutation = """
-            mutation CreateEmailDraft($input: CreateEmailDraftInput!, $workspaceId: String!) {
-                createEmailDraft(input: $input, workspaceId: $workspaceId) {
-                    id
-                }
-            }
-            """
-            create_vars = {
-                "workspaceId": context.workspace_id,
-                "input": {
-                    "groupId": group_id,
-                    "to": to,
-                    "subject": final_subject,
-                    "textContent": final_body,
-                    "cc": cc or [],
-                    "bcc": bcc or [],
-                }
-            }
-            
-            create_result = await client.mutate(create_mutation, create_vars)
-            draft_id = create_result.get("createEmailDraft", {}).get("id")
-            
-            if not draft_id:
-                return "Error: Failed to create temporary email draft for sending."
-                
-            # 4. Trigger send
+            # Send email directly via createEmail
             send_mutation = """
-            mutation SendEmailDraft($id: String!, $workspaceId: String!) {
-                sendEmailDraft(id: $id, workspaceId: $workspaceId) {
+            mutation CreateEmail($input: CreateEmailInput!, $workspaceId: String) {
+                createEmail(input: $input, workspaceId: $workspaceId) {
                     id
                     status
                 }
             }
             """
-            send_result = await client.mutate(send_mutation, {
-                "id": draft_id,
-                "workspaceId": context.workspace_id
-            })
-            
-            status = send_result.get("sendEmailDraft", {}).get("status")
-            return f"Successfully sent email to {', '.join(to)} (ID: {draft_id}, Status: {status})"
+            send_vars = {
+                "workspaceId": context.workspace_id,
+                "input": {
+                    "groupId": group_id,
+                    "from": sender_email,
+                    "to": to,
+                    "subject": final_subject,
+                    "textContent": final_body,
+                    "cc": cc or [],
+                    "bcc": bcc or [],
+                },
+            }
+
+            send_result = await client.mutate(send_mutation, send_vars)
+            email = send_result.get("createEmail", {})
+            email_id = email.get("id")
+            status = email.get("status")
+            return f"Successfully sent email to {', '.join(to)} (ID: {email_id}, Status: {status})"
             
         except Exception as e:
             logger.error(f"Error in send_email flow: {e}")
