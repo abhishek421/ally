@@ -612,8 +612,8 @@ def get_update_tools() -> list:
             # Query the company/person to see which option is selected
             if company_id:
                 entity_query = """
-                query GetCompanyColumnValue($id: ID!) {
-                    getOneCompany(id: $id) {
+                query GetCompanyColumnValue($companyId: ID!) {
+                    getOneCompany(companyId: $companyId) {
                         columnValueSelectOption {
                             columnId
                             selectOptionId
@@ -626,7 +626,7 @@ def get_update_tools() -> list:
                     }
                 }
                 """
-                entity_result = await client.query(entity_query, {"id": company_id})
+                entity_result = await client.query(entity_query, {"companyId": company_id})
                 entity = entity_result.get("getOneCompany", {})
                 selected_options = entity.get("columnValueSelectOption", []) if entity else []
             elif person_id:

@@ -23,6 +23,7 @@ class EntityType(str, Enum):
     GROUP = "group"
     VIEW = "view"
     REMINDER = "reminder"
+    NOTE = "note"
 
 
 class ChangeAction(str, Enum):
