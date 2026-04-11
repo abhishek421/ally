@@ -133,6 +133,15 @@ INTENT_PATTERNS: dict[ToolCategory, list[str]] = {
         r"\bguidelines?\b",
         r"\bworkspace\s+(?:rules|settings)\b",
     ],
+    ToolCategory.OBJECTS: [
+        r"\bcustom\s+object\b",
+        r"\bobject\s+type\b",
+        r"\bobject\s+record\b",
+        r"\bcustom\s+record\b",
+        r"\bcustom\s+type\b",
+        r"\brecord\s+type\b",
+        r"\bobject\b",
+    ],
     ToolCategory.MEMORY: [
         r"\bremember\b",
         r"\bforget\b",

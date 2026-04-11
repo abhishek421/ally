@@ -1,7 +1,13 @@
 """Object Memory tools for saving and retrieving long-term entity memories."""
 
 import logging
+import re
 from typing import Optional
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 from langchain_core.tools import tool
 
@@ -58,6 +64,9 @@ def get_memory_tools() -> list:
 
         if entity_type_upper == "OBJECT" and not object_definition_id:
             return "object_definition_id is required when entity_type is 'OBJECT'."
+
+        if not _UUID_RE.match(entity_id):
+            return f"Invalid entity_id '{entity_id}' — must be a UUID from a resolved entity. Resolve the entity first before saving a memory."
 
         context = get_tool_context()
         client = context.get_client()

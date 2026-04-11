@@ -25,6 +25,7 @@ from src.tools.context_tools import get_context_tools
 from src.tools.reminder_tools import get_reminder_tools
 from src.tools.note_tools import get_note_tools
 from src.tools.memory_tools import get_memory_tools
+from src.tools.object_tools import get_object_tools
 from src.tools.confirmation import (
     ConfirmationType,
     ConfirmationRequest,
@@ -63,6 +64,7 @@ class ToolCategory(str, Enum):
     # Utility
     RESEARCH = "research"
     CONTEXT = "context"
+    OBJECTS = "objects"
 
 
 # Registry mapping categories to their tool getter functions.
@@ -86,6 +88,8 @@ TOOL_REGISTRY: dict[ToolCategory, Callable] = {
     # Utility
     ToolCategory.RESEARCH: get_research_tools,
     ToolCategory.CONTEXT: get_context_tools,
+    # Custom objects
+    ToolCategory.OBJECTS: get_object_tools,
 }
 
 # Categories that are always loaded regardless of intent classification.
@@ -165,6 +169,7 @@ __all__ = [
     "get_reminder_tools",
     "get_note_tools",
     "get_memory_tools",
+    "get_object_tools",
     # Confirmation utilities
     "ConfirmationType",
     "ConfirmationRequest",
