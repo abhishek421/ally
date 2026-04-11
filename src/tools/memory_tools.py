@@ -158,7 +158,95 @@ def get_memory_tools() -> list:
         finally:
             await client.close()
 
+    @tool
+    async def update_object_memory(
+        memory_id: str,
+        new_text: str,
+        category: Optional[str] = None,
+    ) -> str:
+        """Update an existing memory's text or category.
+
+        Call get_object_memories first to find the correct memory_id.
+
+        Args:
+            memory_id: ID of the memory to update (from get_object_memories).
+            new_text: Replacement memory text.
+            category: Optional new category — "PREFERENCE", "CONTEXT", "INTERACTION", or "BEHAVIORAL".
+        """
+        if category is not None:
+            category_upper = category.upper()
+            if category_upper not in ("PREFERENCE", "CONTEXT", "INTERACTION", "BEHAVIORAL"):
+                return f"Invalid category '{category}'. Must be 'PREFERENCE', 'CONTEXT', 'INTERACTION', or 'BEHAVIORAL'."
+        else:
+            category_upper = None
+
+        context = get_tool_context()
+        client = context.get_client()
+
+        try:
+            mutation = """
+            mutation UpdateObjectMemory($id: String!, $input: UpdateObjectMemoryInput!, $workspaceId: String!) {
+                updateObjectMemory(id: $id, input: $input, workspaceId: $workspaceId) {
+                    id
+                    memoryText
+                    category
+                    entityType
+                    entityId
+                    updatedAt
+                }
+            }
+            """
+            input_data: dict = {"memoryText": new_text}
+            if category_upper:
+                input_data["category"] = category_upper
+
+            result = await client.mutate(mutation, {
+                "id": memory_id,
+                "input": input_data,
+                "workspaceId": context.workspace_id,
+            })
+            updated = result.get("updateObjectMemory")
+            if not updated:
+                return "Failed to update memory — no data returned."
+            return f"Memory updated: [{updated.get('category')}] {updated.get('memoryText')}"
+        except Exception as e:
+            logger.error(f"Error updating object memory: {e}")
+            return f"Error updating memory: {str(e)}"
+        finally:
+            await client.close()
+
+    @tool
+    async def delete_object_memory(memory_id: str) -> str:
+        """Delete a saved memory by ID.
+
+        Call get_object_memories first to confirm the correct memory_id before deleting.
+
+        Args:
+            memory_id: ID of the memory to delete (from get_object_memories).
+        """
+        context = get_tool_context()
+        client = context.get_client()
+
+        try:
+            mutation = """
+            mutation DeleteObjectMemory($id: String!, $workspaceId: String!) {
+                deleteObjectMemory(id: $id, workspaceId: $workspaceId)
+            }
+            """
+            await client.mutate(mutation, {
+                "id": memory_id,
+                "workspaceId": context.workspace_id,
+            })
+            return f"Memory {memory_id} deleted."
+        except Exception as e:
+            logger.error(f"Error deleting object memory: {e}")
+            return f"Error deleting memory: {str(e)}"
+        finally:
+            await client.close()
+
     return [
         save_object_memory,
         get_object_memories,
+        update_object_memory,
+        delete_object_memory,
     ]

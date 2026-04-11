@@ -43,7 +43,6 @@ def get_read_tools() -> list:
         List of tool functions
     """
     
-    @tool
     async def list_companies_in_workspace(
         page: int = 1,
         limit: int = 10,
@@ -109,7 +108,6 @@ def get_read_tools() -> list:
         finally:
             await client.close()
 
-    @tool
     async def list_people_in_workspace(
         page: int = 1,
         limit: int = 10,
@@ -229,8 +227,32 @@ def get_read_tools() -> list:
         page: int = 1,
         limit: int = 10,
         search: Optional[str] = None,
+        filter_conditions: Optional[list] = None,
+        sort_by: Optional[list] = None,
     ) -> str:
-        """List companies in a specific group (compact). Use get_company_by_id for full details."""
+        """List companies in a specific group (compact). Use get_company_by_id for full details.
+
+        Supports optional server-side filtering and sorting by any column value.
+
+        filter_conditions: list of condition dicts, e.g.:
+          [{"field": "global.<column_id>", "operator": "greater_than", "value": ["1000"]}]
+          [{"field": "createdAt", "operator": "this_week"}]
+          [{"field": "name", "operator": "contains", "value": ["acme"]}]
+
+        sort_by: list of sort dicts, e.g.:
+          [{"field": "global.<column_id>", "order": "desc"}]
+          [{"field": "createdAt", "order": "asc"}]
+
+        Field format for custom columns: "global.<column_id>" (use get_group_columns or
+        resolve_column_by_name to get the column ID first).
+
+        Available operators: contains, not_contains, equals, not_equals, starts_with,
+        ends_with, is_empty, is_not_empty, is_one_of, is_not_one_of, greater_than,
+        less_than, greater_than_or_equal, less_than_or_equal, between, not_between,
+        before, after, this_week, this_month, this_year.
+
+        Multiple conditions use AND logic by default.
+        """
         context = get_tool_context()
         client = context.get_client()
 
@@ -240,23 +262,34 @@ def get_read_tools() -> list:
             $page: Int
             $limit: Int
             $search: String
+            $filter: FilterInput
         ) {
             getCompaniesByGroup(
                 groupId: $groupId
                 page: $page
                 limit: $limit
                 search: $search
+                filter: $filter
             ) {
                 data {
                     id
                     name
                     description
                     emails { value isPrimary }
+                    columnValues { columnId value }
                 }
                 meta { total page limit hasNextPage }
             }
         }
         """
+
+        filter_input = None
+        if filter_conditions or sort_by:
+            filter_input = {
+                "logicalOperator": "AND",
+                "conditions": filter_conditions or [],
+                "sortBy": sort_by or [],
+            }
 
         try:
             result = await client.query(query, {
@@ -264,6 +297,7 @@ def get_read_tools() -> list:
                 "page": page,
                 "limit": min(limit, LIST_MAX_RESULTS),
                 "search": search,
+                "filter": filter_input,
             })
 
             data = result.get("getCompaniesByGroup") or {}
@@ -275,9 +309,36 @@ def get_read_tools() -> list:
 
             total = meta.get("total", len(companies))
             current_page = meta.get("page", 1)
-            lines = [f"Found {total} companies in group (showing page {current_page}):"]
+
+            sort_note = ""
+            if sort_by:
+                sort_note = f" sorted by {sort_by[0].get('field', '')} ({sort_by[0].get('order', 'asc')})"
+            filter_note = f" matching {len(filter_conditions)} filter(s)" if filter_conditions else ""
+            lines = [f"Found {total} companies in group{filter_note}{sort_note} (showing page {current_page}):"]
+
+            # Collect active column IDs from sort/filter for inline display
+            active_col_ids = set()
+            for s in (sort_by or []):
+                field = s.get("field", "")
+                if field.startswith("global."):
+                    active_col_ids.add(field.split("global.", 1)[1])
+            for c in (filter_conditions or []):
+                field = c.get("field", "")
+                if field.startswith("global."):
+                    active_col_ids.add(field.split("global.", 1)[1])
+
             for company in companies:
-                lines.append(format_company_compact(company))
+                line = format_company_compact(company)
+                if active_col_ids:
+                    col_vals = company.get("columnValues") or []
+                    extras = [
+                        cv.get("value")
+                        for cv in col_vals
+                        if cv.get("columnId") in active_col_ids and cv.get("value")
+                    ]
+                    if extras:
+                        line += f" [{', '.join(extras)}]"
+                lines.append(line)
 
             if meta.get("hasNextPage"):
                 lines.append(f"(More available — use page={current_page + 1} or search to narrow down)")
@@ -296,8 +357,32 @@ def get_read_tools() -> list:
         page: int = 1,
         limit: int = 10,
         search: Optional[str] = None,
+        filter_conditions: Optional[list] = None,
+        sort_by: Optional[list] = None,
     ) -> str:
-        """List people in a specific group (compact). Use get_person_by_id for full details."""
+        """List people in a specific group (compact). Use get_person_by_id for full details.
+
+        Supports optional server-side filtering and sorting by any column value.
+
+        filter_conditions: list of condition dicts, e.g.:
+          [{"field": "global.<column_id>", "operator": "greater_than", "value": ["1000"]}]
+          [{"field": "createdAt", "operator": "this_week"}]
+          [{"field": "name", "operator": "contains", "value": ["john"]}]
+
+        sort_by: list of sort dicts, e.g.:
+          [{"field": "global.<column_id>", "order": "desc"}]
+          [{"field": "createdAt", "order": "asc"}]
+
+        Field format for custom columns: "global.<column_id>" (use get_group_columns or
+        resolve_column_by_name to get the column ID first).
+
+        Available operators: contains, not_contains, equals, not_equals, starts_with,
+        ends_with, is_empty, is_not_empty, is_one_of, is_not_one_of, greater_than,
+        less_than, greater_than_or_equal, less_than_or_equal, between, not_between,
+        before, after, this_week, this_month, this_year.
+
+        Multiple conditions use AND logic by default.
+        """
         if not group_id:
             return "Error: group_id is required to list people in a group."
         context = get_tool_context()
@@ -309,12 +394,14 @@ def get_read_tools() -> list:
             $page: Int
             $limit: Int
             $search: String
+            $filter: FilterInput
         ) {
             getPeopleByGroup(
                 groupId: $groupId
                 page: $page
                 limit: $limit
                 search: $search
+                filter: $filter
             ) {
                 data {
                     id
@@ -325,11 +412,20 @@ def get_read_tools() -> list:
                     companyMetaData {
                         company { name }
                     }
+                    columnValues { columnId value }
                 }
                 meta { total page limit hasNextPage }
             }
         }
         """
+
+        filter_input = None
+        if filter_conditions or sort_by:
+            filter_input = {
+                "logicalOperator": "AND",
+                "conditions": filter_conditions or [],
+                "sortBy": sort_by or [],
+            }
 
         try:
             result = await client.query(query, {
@@ -337,6 +433,7 @@ def get_read_tools() -> list:
                 "page": page,
                 "limit": min(limit, LIST_MAX_RESULTS),
                 "search": search,
+                "filter": filter_input,
             })
 
             data = result.get("getPeopleByGroup") or {}
@@ -348,9 +445,36 @@ def get_read_tools() -> list:
 
             total = meta.get("total", len(people))
             current_page = meta.get("page", 1)
-            lines = [f"Found {total} people in group (showing page {current_page}):"]
+
+            sort_note = ""
+            if sort_by:
+                sort_note = f" sorted by {sort_by[0].get('field', '')} ({sort_by[0].get('order', 'asc')})"
+            filter_note = f" matching {len(filter_conditions)} filter(s)" if filter_conditions else ""
+            lines = [f"Found {total} people in group{filter_note}{sort_note} (showing page {current_page}):"]
+
+            # Collect active column IDs from sort/filter for inline display
+            active_col_ids = set()
+            for s in (sort_by or []):
+                field = s.get("field", "")
+                if field.startswith("global."):
+                    active_col_ids.add(field.split("global.", 1)[1])
+            for c in (filter_conditions or []):
+                field = c.get("field", "")
+                if field.startswith("global."):
+                    active_col_ids.add(field.split("global.", 1)[1])
+
             for person in people:
-                lines.append(format_person_compact(person))
+                line = format_person_compact(person)
+                if active_col_ids:
+                    col_vals = person.get("columnValues") or []
+                    extras = [
+                        cv.get("value")
+                        for cv in col_vals
+                        if cv.get("columnId") in active_col_ids and cv.get("value")
+                    ]
+                    if extras:
+                        line += f" [{', '.join(extras)}]"
+                lines.append(line)
 
             if meta.get("hasNextPage"):
                 lines.append(f"(More available — use page={current_page + 1} or search to narrow down)")
@@ -358,10 +482,7 @@ def get_read_tools() -> list:
             return "\n".join(lines)
 
         except Exception as e:
-            import traceback
-            logger.error(f"Error listing people in group: {e}\n{traceback.format_exc()}")
-            logger.error(f"DEBUG raw result keys: {list(result.keys()) if 'result' in dir() else 'result not set'}")
-            logger.error(f"DEBUG getPeopleByGroup value: {result.get('getPeopleByGroup') if 'result' in dir() else 'N/A'}")
+            logger.error(f"Error listing people in group: {e}")
             return f"Error listing people in group: {str(e)}"
         finally:
             await client.close()
@@ -525,7 +646,6 @@ def get_read_tools() -> list:
         finally:
             await client.close()
 
-    @tool
     async def search_company_by_name(query: str, limit: int = 10) -> str:
         """Search companies by name using fuzzy matching. Returns list of matches with IDs."""
         context = get_tool_context()
@@ -616,7 +736,6 @@ def get_read_tools() -> list:
         finally:
             await client.close()
 
-    @tool
     async def search_person_by_name(query: str, limit: int = 10) -> str:
         """Search people by name using fuzzy matching. Returns list of matches with IDs."""
         context = get_tool_context()
@@ -811,7 +930,6 @@ def get_read_tools() -> list:
         finally:
             await client.close()
 
-    @tool
     async def resolve_company_name(name: str) -> str:
         """Resolve company name to ID (handles typos, partial names, case). Call before any company operation."""
         context = get_tool_context()
@@ -910,7 +1028,6 @@ def get_read_tools() -> list:
         finally:
             await client.close()
 
-    @tool
     async def resolve_person_name(name: str) -> str:
         """Resolve person name to ID (handles typos, partial names, reordering). Call before any person operation."""
         context = get_tool_context()
@@ -1022,7 +1139,6 @@ def get_read_tools() -> list:
         finally:
             await client.close()
 
-    @tool
     async def resolve_group_name(name: str) -> str:
         """Resolve group name to ID (handles typos, partial names). Call before any group operation."""
         context = get_tool_context()
@@ -1118,6 +1234,68 @@ def get_read_tools() -> list:
             return f"Error resolving group name: {str(e)}"
         finally:
             await client.close()
+
+    @tool
+    async def find_companies(
+        search: Optional[str] = None,
+        page: int = 1,
+        limit: int = 10,
+    ) -> str:
+        """Find companies in the workspace — list all or search by name.
+
+        Replaces list_companies_in_workspace and search_company_by_name.
+        Omit search to list all; provide search for fuzzy name matching.
+
+        Args:
+            search: Optional name/keyword to search for.
+            page: Page number (default: 1).
+            limit: Results per page (default: 10).
+        """
+        if search:
+            return await search_company_by_name(query=search, limit=limit)
+        return await list_companies_in_workspace(page=page, limit=limit, search=None)
+
+    @tool
+    async def find_people(
+        search: Optional[str] = None,
+        page: int = 1,
+        limit: int = 10,
+    ) -> str:
+        """Find people in the workspace — list all or search by name.
+
+        Replaces list_people_in_workspace and search_person_by_name.
+        Omit search to list all; provide search for fuzzy name matching.
+
+        Args:
+            search: Optional name/keyword to search for.
+            page: Page number (default: 1).
+            limit: Results per page (default: 10).
+        """
+        if search:
+            return await search_person_by_name(query=search, limit=limit)
+        return await list_people_in_workspace(page=page, limit=limit, search=None)
+
+    @tool
+    async def resolve_entity(name: str, entity_type: str) -> str:
+        """Resolve any entity name to its ID.
+
+        Replaces resolve_company_name, resolve_person_name, and resolve_group_name.
+        Call before ANY operation that requires an entity ID.
+        Handles typos, partial names, case differences, and name reordering.
+
+        Args:
+            name: The name to look up (e.g. "Acme Corp", "John Smith").
+            entity_type: "company", "person", or "group".
+        """
+        entity_lower = entity_type.lower()
+        if entity_lower == "company":
+            return await resolve_company_name(name)
+        elif entity_lower in ("person", "people"):
+            return await resolve_person_name(name)
+        elif entity_lower == "group":
+            return await resolve_group_name(name)
+        else:
+            return f"Invalid entity_type '{entity_type}'. Use 'company', 'person', or 'group'."
 
     @tool
     async def listEmailsFromPerson(
@@ -1468,7 +1646,6 @@ def get_read_tools() -> list:
         finally:
             await client.close()
 
-    @tool
     async def draft_email(
         to: list[str],
         subject: str,
@@ -1554,7 +1731,6 @@ def get_read_tools() -> list:
         finally:
             await client.close()
 
-    @tool
     async def send_email(
         to: list[str],
         subject: str,
@@ -1588,8 +1764,13 @@ def get_read_tools() -> list:
         
         context = get_tool_context()
         client = context.get_client()
+
+        sender_email = context.user_email
+        if not sender_email:
+            return "Error: Could not determine sender email address. Ensure your profile email is set."
+
         try:
-            # 2. Resolve group_id
+            # Resolve group_id if not provided
             if not group_id:
                 g_query = """
                 query GetGroups($workspaceId: String!) {
@@ -1603,54 +1784,69 @@ def get_read_tools() -> list:
                 else:
                     return "Error: Could not find any group to associate this email with."
 
-            # 3. Create a temporary draft for sending
-            create_mutation = """
-            mutation CreateEmailDraft($input: CreateEmailDraftInput!, $workspaceId: String!) {
-                createEmailDraft(input: $input, workspaceId: $workspaceId) {
-                    id
-                }
-            }
-            """
-            create_vars = {
-                "workspaceId": context.workspace_id,
-                "input": {
-                    "groupId": group_id,
-                    "to": to,
-                    "subject": final_subject,
-                    "textContent": final_body,
-                    "cc": cc or [],
-                    "bcc": bcc or [],
-                }
-            }
-            
-            create_result = await client.mutate(create_mutation, create_vars)
-            draft_id = create_result.get("createEmailDraft", {}).get("id")
-            
-            if not draft_id:
-                return "Error: Failed to create temporary email draft for sending."
-                
-            # 4. Trigger send
+            # Send email directly via createEmail
             send_mutation = """
-            mutation SendEmailDraft($id: String!, $workspaceId: String!) {
-                sendEmailDraft(id: $id, workspaceId: $workspaceId) {
+            mutation CreateEmail($input: CreateEmailInput!, $workspaceId: String) {
+                createEmail(input: $input, workspaceId: $workspaceId) {
                     id
                     status
                 }
             }
             """
-            send_result = await client.mutate(send_mutation, {
-                "id": draft_id,
-                "workspaceId": context.workspace_id
-            })
-            
-            status = send_result.get("sendEmailDraft", {}).get("status")
-            return f"Successfully sent email to {', '.join(to)} (ID: {draft_id}, Status: {status})"
+            send_vars = {
+                "workspaceId": context.workspace_id,
+                "input": {
+                    "groupId": group_id,
+                    "from": sender_email,
+                    "to": to,
+                    "subject": final_subject,
+                    "textContent": final_body,
+                    "cc": cc or [],
+                    "bcc": bcc or [],
+                },
+            }
+
+            send_result = await client.mutate(send_mutation, send_vars)
+            email = send_result.get("createEmail", {})
+            email_id = email.get("id")
+            status = email.get("status")
+            return f"Successfully sent email to {', '.join(to)} (ID: {email_id}, Status: {status})"
             
         except Exception as e:
             logger.error(f"Error in send_email flow: {e}")
             return f"Error in send_email flow: {str(e)}"
         finally:
             await client.close()
+
+    @tool
+    async def compose_email(
+        to: list[str],
+        subject: str,
+        body: str,
+        mode: str = "send",
+        group_id: Optional[str] = None,
+        cc: Optional[list[str]] = None,
+        bcc: Optional[list[str]] = None,
+    ) -> str:
+        """Compose and send (or draft) an email — always shows a confirmation first.
+
+        Replaces draft_email and send_email. Use mode="send" (default) to send
+        immediately after confirmation, or mode="draft" to save as a draft.
+
+        Args:
+            to: List of recipient email addresses.
+            subject: Email subject line.
+            body: Email body text.
+            mode: "send" (default) or "draft".
+            group_id: Optional group to associate the email with.
+            cc: Optional CC addresses.
+            bcc: Optional BCC addresses.
+        """
+        if mode.lower() == "draft":
+            return await draft_email(to=to, subject=subject, body=body,
+                                     group_id=group_id, cc=cc, bcc=bcc)
+        return await send_email(to=to, subject=subject, body=body,
+                                group_id=group_id, cc=cc, bcc=bcc)
 
     @tool
     async def get_group_columns(
@@ -2326,20 +2522,393 @@ def get_read_tools() -> list:
         finally:
             await client.close()
 
+    @tool
+    async def query_companies(
+        page: int = 1,
+        limit: int = 10,
+        search: Optional[str] = None,
+        filter_conditions: Optional[list] = None,
+        sort_by: Optional[list] = None,
+    ) -> str:
+        """Query companies across the entire workspace with optional filtering and sorting.
+
+        Use this instead of list_companies_in_workspace when you need to filter or sort
+        by custom column values, dates, or any field. Works on workspace-level (global)
+        columns. For group-scoped columns use list_companies_in_group with filter_conditions.
+
+        filter_conditions: list of condition dicts, e.g.:
+          [{"field": "global.<column_id>", "operator": "greater_than", "value": ["1000"]}]
+          [{"field": "createdAt", "operator": "this_month"}]
+          [{"field": "name", "operator": "contains", "value": ["acme"]}]
+
+        sort_by: list of sort dicts, e.g.:
+          [{"field": "global.<column_id>", "order": "desc"}]
+          [{"field": "createdAt", "order": "asc"}]
+
+        Field format for custom columns: "global.<column_id>" (use resolve_column_by_name
+        to get the column ID first).
+
+        Available operators: contains, not_contains, equals, not_equals, starts_with,
+        ends_with, is_empty, is_not_empty, is_one_of, is_not_one_of, greater_than,
+        less_than, greater_than_or_equal, less_than_or_equal, between, not_between,
+        before, after, this_week, this_month, this_year.
+        """
+        context = get_tool_context()
+        client = context.get_client()
+
+        query = """
+        query GetCompaniesByWorkspaceView(
+            $workspaceId: ID!
+            $page: Int
+            $limit: Int
+            $search: String
+            $filter: FilterInput
+        ) {
+            getCompaniesByWorkspaceView(
+                workspaceId: $workspaceId
+                page: $page
+                limit: $limit
+                search: $search
+                filter: $filter
+            ) {
+                data {
+                    id
+                    name
+                    description
+                    emails { value isPrimary }
+                    columnValues { columnId value }
+                }
+                meta { total page limit hasNextPage }
+            }
+        }
+        """
+
+        filter_input = None
+        if filter_conditions or sort_by:
+            filter_input = {
+                "logicalOperator": "AND",
+                "conditions": filter_conditions or [],
+                "sortBy": sort_by or [],
+            }
+
+        try:
+            result = await client.query(query, {
+                "workspaceId": context.workspace_id,
+                "page": page,
+                "limit": min(limit, LIST_MAX_RESULTS),
+                "search": search,
+                "filter": filter_input,
+            })
+
+            data = result.get("getCompaniesByWorkspaceView") or {}
+            companies = data.get("data") or []
+            meta = data.get("meta") or {}
+
+            if not companies:
+                return "No companies found matching the criteria."
+
+            total = meta.get("total", len(companies))
+            current_page = meta.get("page", 1)
+
+            sort_note = ""
+            if sort_by:
+                sort_note = f" sorted by {sort_by[0].get('field', '')} ({sort_by[0].get('order', 'asc')})"
+            filter_note = f" matching {len(filter_conditions)} filter(s)" if filter_conditions else ""
+            lines = [f"Found {total} companies in workspace{filter_note}{sort_note} (showing page {current_page}):"]
+
+            active_col_ids = set()
+            for s in (sort_by or []):
+                field = s.get("field", "")
+                if field.startswith("global."):
+                    active_col_ids.add(field.split("global.", 1)[1])
+            for c in (filter_conditions or []):
+                field = c.get("field", "")
+                if field.startswith("global."):
+                    active_col_ids.add(field.split("global.", 1)[1])
+
+            for company in companies:
+                line = format_company_compact(company)
+                if active_col_ids:
+                    col_vals = company.get("columnValues") or []
+                    extras = [
+                        cv.get("value")
+                        for cv in col_vals
+                        if cv.get("columnId") in active_col_ids and cv.get("value")
+                    ]
+                    if extras:
+                        line += f" [{', '.join(extras)}]"
+                lines.append(line)
+
+            if meta.get("hasNextPage"):
+                lines.append(f"(More available — use page={current_page + 1} or search to narrow down)")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.error(f"Error querying companies: {e}")
+            return f"Error querying companies: {str(e)}"
+        finally:
+            await client.close()
+
+    @tool
+    async def query_people(
+        page: int = 1,
+        limit: int = 10,
+        search: Optional[str] = None,
+        filter_conditions: Optional[list] = None,
+        sort_by: Optional[list] = None,
+    ) -> str:
+        """Query people across the entire workspace with optional filtering and sorting.
+
+        Use this instead of list_people_in_workspace when you need to filter or sort
+        by custom column values, dates, or any field. Works on workspace-level (global)
+        columns. For group-scoped columns use list_people_in_group with filter_conditions.
+
+        filter_conditions: list of condition dicts, e.g.:
+          [{"field": "global.<column_id>", "operator": "equals", "value": ["Qualified"]}]
+          [{"field": "createdAt", "operator": "this_week"}]
+          [{"field": "firstName", "operator": "contains", "value": ["john"]}]
+
+        sort_by: list of sort dicts, e.g.:
+          [{"field": "global.<column_id>", "order": "desc"}]
+          [{"field": "createdAt", "order": "asc"}]
+
+        Field format for custom columns: "global.<column_id>" (use resolve_column_by_name
+        to get the column ID first).
+
+        Available operators: contains, not_contains, equals, not_equals, starts_with,
+        ends_with, is_empty, is_not_empty, is_one_of, is_not_one_of, greater_than,
+        less_than, greater_than_or_equal, less_than_or_equal, between, not_between,
+        before, after, this_week, this_month, this_year.
+        """
+        context = get_tool_context()
+        client = context.get_client()
+
+        query = """
+        query GetPeopleByWorkspaceView(
+            $workspaceId: ID!
+            $page: Int
+            $limit: Int
+            $search: String
+            $filter: FilterInput
+        ) {
+            getPeopleByWorkspaceView(
+                workspaceId: $workspaceId
+                page: $page
+                limit: $limit
+                search: $search
+                filter: $filter
+            ) {
+                data {
+                    id
+                    firstName
+                    lastName
+                    jobTitle
+                    emails { value isPrimary }
+                    companyMetaData {
+                        company { name }
+                    }
+                    columnValues { columnId value }
+                }
+                meta { total page limit hasNextPage }
+            }
+        }
+        """
+
+        filter_input = None
+        if filter_conditions or sort_by:
+            filter_input = {
+                "logicalOperator": "AND",
+                "conditions": filter_conditions or [],
+                "sortBy": sort_by or [],
+            }
+
+        try:
+            result = await client.query(query, {
+                "workspaceId": context.workspace_id,
+                "page": page,
+                "limit": min(limit, LIST_MAX_RESULTS),
+                "search": search,
+                "filter": filter_input,
+            })
+
+            data = result.get("getPeopleByWorkspaceView") or {}
+            people = data.get("data") or []
+            meta = data.get("meta") or {}
+
+            if not people:
+                return "No people found matching the criteria."
+
+            total = meta.get("total", len(people))
+            current_page = meta.get("page", 1)
+
+            sort_note = ""
+            if sort_by:
+                sort_note = f" sorted by {sort_by[0].get('field', '')} ({sort_by[0].get('order', 'asc')})"
+            filter_note = f" matching {len(filter_conditions)} filter(s)" if filter_conditions else ""
+            lines = [f"Found {total} people in workspace{filter_note}{sort_note} (showing page {current_page}):"]
+
+            active_col_ids = set()
+            for s in (sort_by or []):
+                field = s.get("field", "")
+                if field.startswith("global."):
+                    active_col_ids.add(field.split("global.", 1)[1])
+            for c in (filter_conditions or []):
+                field = c.get("field", "")
+                if field.startswith("global."):
+                    active_col_ids.add(field.split("global.", 1)[1])
+
+            for person in people:
+                line = format_person_compact(person)
+                if active_col_ids:
+                    col_vals = person.get("columnValues") or []
+                    extras = [
+                        cv.get("value")
+                        for cv in col_vals
+                        if cv.get("columnId") in active_col_ids and cv.get("value")
+                    ]
+                    if extras:
+                        line += f" [{', '.join(extras)}]"
+                lines.append(line)
+
+            if meta.get("hasNextPage"):
+                lines.append(f"(More available — use page={current_page + 1} or search to narrow down)")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.error(f"Error querying people: {e}")
+            return f"Error querying people: {str(e)}"
+        finally:
+            await client.close()
+
+    @tool
+    async def get_profile_stats(
+        entity_id: str,
+        entity_type: str,
+    ) -> str:
+        """Get engagement stats for a person or company.
+
+        Returns counts for notes, reminders, and interactions, plus the last
+        interaction date. Use when the user asks "how engaged are we with X?"
+        or wants a quick activity summary without fetching the full entity.
+
+        Args:
+            entity_id: ID of the person or company.
+            entity_type: "PERSON" or "COMPANY" (case-insensitive).
+        """
+        context = get_tool_context()
+        client = context.get_client()
+        entity_type_upper = entity_type.upper()
+
+        if entity_type_upper == "PERSON":
+            query = """
+            query GetPersonProfileStats($personId: ID!, $workspaceId: ID!) {
+                getPersonProfileStats(personId: $personId, workspaceId: $workspaceId) {
+                    interactionsCount
+                    notesCount
+                    remindersCount
+                }
+            }
+            """
+            variables = {"personId": entity_id, "workspaceId": context.workspace_id}
+            key = "getPersonProfileStats"
+        elif entity_type_upper == "COMPANY":
+            query = """
+            query GetCompanyProfileStats($companyId: ID!, $workspaceId: ID!) {
+                getCompanyProfileStats(companyId: $companyId, workspaceId: $workspaceId) {
+                    interactionsCount
+                    notesCount
+                    remindersCount
+                }
+            }
+            """
+            variables = {"companyId": entity_id, "workspaceId": context.workspace_id}
+            key = "getCompanyProfileStats"
+        else:
+            return f"Invalid entity_type '{entity_type}'. Use 'PERSON' or 'COMPANY'."
+
+        try:
+            result = await client.execute(query, variables)
+            stats = result.get("data", {}).get(key)
+            if not stats:
+                return f"No profile stats found for {entity_type_upper} {entity_id}."
+
+            lines = [f"Profile stats for {entity_type_upper} {entity_id}:"]
+            lines.append(f"  Interactions: {stats.get('interactionsCount', 0)}")
+            lines.append(f"  Notes: {stats.get('notesCount', 0)}")
+            lines.append(f"  Reminders: {stats.get('remindersCount', 0)}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Error fetching profile stats: {e}")
+            return f"Error fetching profile stats: {str(e)}"
+        finally:
+            await client.close()
+
+    @tool
+    async def list_workspace_members() -> str:
+        """List all members in the current workspace.
+
+        Returns each member's id, name, email, and role.
+        Use when the user asks "who's on my team?" or needs to look up
+        a teammate by name for ownership/assignment queries.
+        """
+        context = get_tool_context()
+        client = context.get_client()
+
+        query = """
+        query GetWorkspaceMembers($workspaceId: ID!) {
+            getWorkspaceMembers(workspaceId: $workspaceId) {
+                id
+                userId
+                role
+                createdAt
+                user {
+                    firstName
+                    lastName
+                    email
+                }
+            }
+        }
+        """
+        variables = {"workspaceId": context.workspace_id}
+
+        try:
+            result = await client.execute(query, variables)
+            members = result.get("data", {}).get("getWorkspaceMembers", [])
+            if not members:
+                return "No members found in workspace."
+
+            lines = [f"Workspace members ({len(members)}):"]
+            for m in members:
+                user = m.get("user") or {}
+                first = user.get("firstName", "")
+                last = user.get("lastName", "")
+                name = f"{first} {last}".strip() or "(unnamed)"
+                email = user.get("email", "")
+                role = m.get("role", "")
+                mid = m.get("id", "")
+                lines.append(f"  - {name} | {email} | {role} | id={mid}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Error listing workspace members: {e}")
+            return f"Error listing workspace members: {str(e)}"
+        finally:
+            await client.close()
+
     return [
         # Smart resolvers - use these FIRST to resolve names to IDs
-        resolve_company_name,
-        resolve_person_name,
-        resolve_group_name,
+        resolve_entity,
         resolve_column_by_name,
         # Page awareness
         get_current_page,
         # Pipeline status tools
         get_pipeline_status_options,
         get_entities_by_status,
-        # List tools
-        list_companies_in_workspace,
-        list_people_in_workspace,
+        # Find tools (merged list + search)
+        find_companies,
+        find_people,
+        # List tools (group-scoped with filter/sort)
         list_groups_in_workspace,
         list_companies_in_group,
         list_people_in_group,
@@ -2347,9 +2916,7 @@ def get_read_tools() -> list:
         get_company_by_id,
         get_person_by_id,
         get_group_by_id,
-        # Search tools (also with fuzzy matching)
-        search_company_by_name,
-        search_person_by_name,
+        # Group search
         search_group_by_name,
         # Email/interaction tools
         listEmailsFromPerson,
@@ -2358,11 +2925,16 @@ def get_read_tools() -> list:
         # Drafting and Template tools
         list_email_templates,
         search_email_templates,
-        draft_email,
-        send_email,
+        compose_email,
         # Group column tools
         get_group_columns,
         get_column_options,
+        # Workspace-wide filtered query tools
+        query_companies,
+        query_people,
+        # Profile stats + workspace members
+        get_profile_stats,
+        list_workspace_members,
     ]
 
 
@@ -2374,24 +2946,25 @@ def get_read_tools() -> list:
 # ---------------------------------------------------------------------------
 
 _RESOLVER_NAMES = {
-    "resolve_company_name",
-    "resolve_person_name",
-    "resolve_group_name",
+    "resolve_entity",
     "get_current_page",
+    "list_workspace_members",
 }
 
 _COMPANY_NAMES = {
-    "list_companies_in_workspace",
+    "find_companies",
     "list_companies_in_group",
     "get_company_by_id",
-    "search_company_by_name",
+    "query_companies",
+    "get_profile_stats",
 }
 
 _PEOPLE_NAMES = {
-    "list_people_in_workspace",
+    "find_people",
     "list_people_in_group",
     "get_person_by_id",
-    "search_person_by_name",
+    "query_people",
+    "get_profile_stats",
 }
 
 _GROUP_NAMES = {
@@ -2406,8 +2979,7 @@ _EMAIL_NAMES = {
     "get_email_thread",
     "list_email_templates",
     "search_email_templates",
-    "draft_email",
-    "send_email",
+    "compose_email",
 }
 
 _COLUMN_NAMES = {
