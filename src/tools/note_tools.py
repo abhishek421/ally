@@ -201,7 +201,6 @@ def get_note_tools() -> list:
             logger.error(f"Error creating note: {type(e).__name__}: {e}")
             return f"Error creating note: {str(e)}"
 
-    @tool
     async def list_notes(
         entity_name: str,
         entity_type: str,
@@ -344,7 +343,6 @@ def get_note_tools() -> list:
         finally:
             await client.close()
 
-    @tool
     async def get_note(
         entity_name: str,
         entity_type: str,
@@ -763,10 +761,29 @@ def get_note_tools() -> list:
         finally:
             await client.close()
 
+    @tool
+    async def get_notes(
+        entity_name: str,
+        entity_type: str,
+        search_text: Optional[str] = None,
+        limit: int = 10,
+    ) -> str:
+        """Fetch notes for a person or company, with optional content search.
+
+        Replaces both list_notes and get_note. Use search_text to find a
+        specific note by content snippet.
+
+        Args:
+            entity_name: Name of the person or company.
+            entity_type: "PEOPLE" (or "PERSON") or "COMPANY".
+            search_text: Optional snippet to filter notes by content.
+            limit: Max notes to return (default: 10).
+        """
+        return await get_note(entity_name=entity_name, entity_type=entity_type, content_search=search_text)
+
     return [
         create_note,
-        list_notes,
-        get_note,
+        get_notes,
         update_note,
         delete_note,
     ]

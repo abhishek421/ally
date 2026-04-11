@@ -20,6 +20,7 @@ from src.tools.read_tools import (
 )
 from src.tools.create_tools import get_create_tools
 from src.tools.update_tools import get_update_tools
+from src.tools.deal_tools import get_deal_tools
 from src.tools.research_tools import get_research_tools
 from src.tools.context_tools import get_context_tools
 from src.tools.reminder_tools import get_reminder_tools
@@ -47,14 +48,15 @@ logger = logging.getLogger(__name__)
 class ToolCategory(str, Enum):
     """Categories for grouping tools by user intent."""
     # Core — always loaded (resolvers + memory)
-    READ = "read"           # resolve_company/person/group, get_current_page (4 tools)
-    MEMORY = "memory"       # get/save object memories (2 tools)
+    READ = "read"           # resolve_entity, get_current_page, list_workspace_members (3 tools)
+    MEMORY = "memory"       # get/save/update/delete object memories (4 tools)
     # Entity read sub-categories — loaded based on which entity the query mentions
-    COMPANIES = "companies" # list/get/search company tools (4 tools)
-    PEOPLE = "people"       # list/get/search people tools (4 tools)
+    COMPANIES = "companies" # find/list/get/query company tools (5 tools)
+    PEOPLE = "people"       # find/list/get/query people tools (5 tools)
     GROUPS = "groups"       # list/get/search group tools (3 tools)
-    EMAIL = "email"         # email read/draft/send tools (7 tools)
+    EMAIL = "email"         # email read + compose tools (6 tools)
     COLUMNS = "columns"     # column/pipeline/status tools (5 tools)
+    DEALS = "deals"         # list/get/create/update/delete deal tools (7 tools)
     # Write categories
     CREATE = "create"
     UPDATE = "update"
@@ -78,6 +80,7 @@ TOOL_REGISTRY: dict[ToolCategory, Callable] = {
     ToolCategory.GROUPS: get_group_read_tools,
     ToolCategory.EMAIL: get_email_tools,
     ToolCategory.COLUMNS: get_column_tools,
+    ToolCategory.DEALS: get_deal_tools,
     # Write categories
     ToolCategory.CREATE: get_create_tools,
     ToolCategory.UPDATE: get_update_tools,
