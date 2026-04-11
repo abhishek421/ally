@@ -41,7 +41,6 @@ def get_update_tools() -> list:
         List of tool functions
     """
 
-    @tool
     async def add_company_to_group(company_id: str, group_id: str) -> str:
         """Add a company to a group."""
         context = get_tool_context()
@@ -61,6 +60,7 @@ def get_update_tools() -> list:
                 "input": {
                     "groupId": group_id,
                     "companyId": company_id,
+                    "workspaceId": context.workspace_id,
                 },
                 "userId": context.user_id,
             })
@@ -90,25 +90,13 @@ def get_update_tools() -> list:
         finally:
             await client.close()
 
-    @tool
     async def remove_company_from_group(
         company_id: str,
         group_id: str,
         company_name: str,
         group_name: str,
     ) -> str:
-        """Remove a company from a group (asks for confirmation)."""
-        # Request user confirmation for this destructive action
-        confirmation = request_delete_confirmation(
-            entity_type="company",
-            entity_name=company_name,
-            context=f"Remove '{company_name}' from group '{group_name}'?",
-        )
-        
-        if not confirmation.confirmed:
-            feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
-            return f"Removal cancelled by user.{feedback}"
-        
+        """Remove a company from a group. Confirmation is handled by the caller."""
         context = get_tool_context()
         client = context.get_client()
         
@@ -152,7 +140,6 @@ def get_update_tools() -> list:
         finally:
             await client.close()
 
-    @tool
     async def add_person_to_group(person_id: str, group_id: str) -> str:
         """Add a person to a group."""
         context = get_tool_context()
@@ -172,9 +159,10 @@ def get_update_tools() -> list:
                 "input": {
                     "groupId": group_id,
                     "peopleId": person_id,
+                    "workspaceId": context.workspace_id,
                 },
             })
-            
+
             data = result.get("createGroupPeople")
             
             if data:
@@ -200,25 +188,13 @@ def get_update_tools() -> list:
         finally:
             await client.close()
 
-    @tool
     async def remove_person_from_group(
         person_id: str,
         group_id: str,
         person_name: str,
         group_name: str,
     ) -> str:
-        """Remove a person from a group (asks for confirmation)."""
-        # Request user confirmation for this destructive action
-        confirmation = request_delete_confirmation(
-            entity_type="person",
-            entity_name=person_name,
-            context=f"Remove '{person_name}' from group '{group_name}'?",
-        )
-        
-        if not confirmation.confirmed:
-            feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
-            return f"Removal cancelled by user.{feedback}"
-        
+        """Remove a person from a group. Confirmation is handled by the caller."""
         context = get_tool_context()
         client = context.get_client()
         
@@ -262,7 +238,6 @@ def get_update_tools() -> list:
         finally:
             await client.close()
 
-    @tool
     async def add_person_to_company(person_id: str, company_id: str) -> str:
         """Link a person to a company."""
         context = get_tool_context()
@@ -306,7 +281,6 @@ def get_update_tools() -> list:
         finally:
             await client.close()
 
-    @tool
     async def remove_person_from_company(person_id: str, company_id: str) -> str:
         """Unlink a person from a company."""
         context = get_tool_context()
@@ -1506,19 +1480,213 @@ def get_update_tools() -> list:
         finally:
             await client.close()
 
+    @tool
+    async def delete_person(person_id: str, person_name: str) -> str:
+        """Permanently delete a person/contact from the workspace.
+
+        This is irreversible — ask for confirmation before calling.
+        Use resolve_person_name to get the person_id if you only have a name.
+
+        Args:
+            person_id: ID of the person to delete
+            person_name: Display name for the confirmation dialog
+        """
+        confirmation = request_delete_confirmation(
+            entity_type="person",
+            entity_name=person_name,
+            context=f"Permanently delete '{person_name}' from the workspace? This cannot be undone.",
+        )
+
+        if not confirmation.confirmed:
+            feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
+            return f"Deletion cancelled by user.{feedback}"
+
+        context = get_tool_context()
+        client = context.get_client()
+
+        mutation = """
+        mutation DeletePeoples($peopleIds: [ID!]!, $workspaceId: ID!) {
+            deletePeoples(peopleIds: $peopleIds, workspaceId: $workspaceId)
+        }
+        """
+
+        try:
+            result = await client.mutate(mutation, {
+                "peopleIds": [person_id],
+                "workspaceId": context.workspace_id,
+            })
+
+            success = result.get("deletePeoples")
+
+            if success:
+                change = DataChange(
+                    entity_type=EntityType.PERSON,
+                    action=ChangeAction.DELETED,
+                    entity_id=person_id,
+                )
+                return f"Successfully deleted '{person_name}'." + change.to_marker()
+            else:
+                return f"Failed to delete '{person_name}' — no confirmation returned."
+
+        except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
+            logger.error(f"Error deleting person: {e}")
+            return f"Error deleting person: {str(e)}"
+        finally:
+            await client.close()
+
+    @tool
+    async def delete_company(company_id: str, company_name: str) -> str:
+        """Permanently delete a company from the workspace.
+
+        This is irreversible — asks for confirmation before executing.
+        Use resolve_company_name to get the company_id if you only have a name.
+
+        Args:
+            company_id: ID of the company to delete
+            company_name: Display name for the confirmation dialog
+        """
+        confirmation = request_delete_confirmation(
+            entity_type="company",
+            entity_name=company_name,
+            context=f"Permanently delete '{company_name}' from the workspace? This cannot be undone.",
+        )
+
+        if not confirmation.confirmed:
+            feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
+            return f"Deletion cancelled by user.{feedback}"
+
+        context = get_tool_context()
+        client = context.get_client()
+
+        mutation = """
+        mutation DeleteCompanies($companyIds: [ID!]!) {
+            deleteCompanies(companyIds: $companyIds)
+        }
+        """
+
+        try:
+            result = await client.mutate(mutation, {
+                "companyIds": [company_id],
+            })
+
+            success = result.get("deleteCompanies")
+
+            if success:
+                change = DataChange(
+                    entity_type=EntityType.COMPANY,
+                    action=ChangeAction.DELETED,
+                    entity_id=company_id,
+                )
+                return f"Successfully deleted '{company_name}'." + change.to_marker()
+            else:
+                return f"Failed to delete '{company_name}' — no confirmation returned."
+
+        except Exception as e:
+            if GraphInterrupt and isinstance(e, GraphInterrupt):
+                raise
+            if 'Interrupt' in type(e).__name__:
+                raise
+            logger.error(f"Error deleting company: {e}")
+            return f"Error deleting company: {str(e)}"
+        finally:
+            await client.close()
+
+    @tool
+    async def manage_group_membership(
+        entity_id: str,
+        entity_type: str,
+        group_id: str,
+        action: str,
+        entity_name: str = "",
+        group_name: str = "",
+    ) -> str:
+        """Add or remove a person or company from a group.
+
+        Replaces: add_person_to_group, remove_person_from_group,
+                  add_company_to_group, remove_company_from_group.
+
+        Args:
+            entity_id: ID of the person or company.
+            entity_type: "person" or "company".
+            group_id: ID of the target group.
+            action: "add" or "remove".
+            entity_name: Display name (used in confirmation message for remove).
+            group_name: Display name of the group (used in confirmation message).
+        """
+        action_lower = action.lower()
+        entity_lower = entity_type.lower()
+
+        if action_lower not in ("add", "remove"):
+            return f"Invalid action '{action}'. Use 'add' or 'remove'."
+        if entity_lower not in ("person", "company"):
+            return f"Invalid entity_type '{entity_type}'. Use 'person' or 'company'."
+
+        if action_lower == "remove":
+            confirmation = request_delete_confirmation(
+                entity_type=entity_lower,
+                entity_name=entity_name or entity_id,
+                context=f"Remove '{entity_name or entity_id}' from group '{group_name or group_id}'?",
+            )
+            if not confirmation.confirmed:
+                feedback = f" Feedback: {confirmation.feedback}" if confirmation.feedback else ""
+                return f"Removal cancelled by user.{feedback}"
+
+        if entity_lower == "company":
+            if action_lower == "add":
+                return await add_company_to_group(company_id=entity_id, group_id=group_id)
+            else:
+                return await remove_company_from_group(
+                    company_id=entity_id, group_id=group_id,
+                    company_name=entity_name or entity_id, group_name=group_name or group_id,
+                )
+        else:
+            if action_lower == "add":
+                return await add_person_to_group(person_id=entity_id, group_id=group_id)
+            else:
+                return await remove_person_from_group(
+                    person_id=entity_id, group_id=group_id,
+                    person_name=entity_name or entity_id, group_name=group_name or group_id,
+                )
+
+    @tool
+    async def manage_company_relationship(
+        person_id: str,
+        company_id: str,
+        action: str,
+    ) -> str:
+        """Link or unlink a person from a company.
+
+        Replaces: add_person_to_company, remove_person_from_company.
+
+        Args:
+            person_id: ID of the person.
+            company_id: ID of the company.
+            action: "add" to link, "remove" to unlink.
+        """
+        action_lower = action.lower()
+        if action_lower == "add":
+            return await add_person_to_company(person_id=person_id, company_id=company_id)
+        elif action_lower == "remove":
+            return await remove_person_from_company(person_id=person_id, company_id=company_id)
+        else:
+            return f"Invalid action '{action}'. Use 'add' or 'remove'."
+
     return [
-        # Group membership tools
-        add_company_to_group,
-        remove_company_from_group,
-        add_person_to_group,
-        remove_person_from_group,
-        # Company-person relationship tools
-        add_person_to_company,
-        remove_person_from_company,
+        # Group membership
+        manage_group_membership,
+        # Company-person relationship
+        manage_company_relationship,
         # Entity update tools
         update_company,
         update_person,
         update_group,
+        # Entity delete tools
+        delete_person,
+        delete_company,
         # Group column value update tools
         update_company_column_value,
         update_person_column_value,

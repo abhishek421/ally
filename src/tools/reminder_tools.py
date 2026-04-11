@@ -209,7 +209,6 @@ def get_reminder_tools() -> list:
         finally:
             await client.close()
 
-    @tool
     async def list_reminders(
         entity_name: str | None = None,
         entity_type: str | None = None,
@@ -301,7 +300,6 @@ def get_reminder_tools() -> list:
         finally:
             await client.close()
 
-    @tool
     async def get_reminder(title_search: str) -> str:
         """Get a reminder by searching its title.
 
@@ -485,10 +483,95 @@ def get_reminder_tools() -> list:
         finally:
             await client.close()
 
+    @tool
+    async def get_reminders(
+        entity_name: str | None = None,
+        entity_type: str | None = None,
+        search_title: str | None = None,
+        limit: int = 10,
+    ) -> str:
+        """Fetch reminders, with optional filtering by linked entity or title search.
+
+        Replaces both list_reminders and get_reminder.
+
+        Args:
+            entity_name: Optional person or company name to filter by.
+            entity_type: "PEOPLE" or "COMPANY" — required if entity_name is given.
+            search_title: Optional title snippet to find a specific reminder.
+            limit: Max reminders to return (default: 10).
+        """
+        if search_title and not entity_name:
+            # Title-based lookup — delegate to helper
+            context = get_tool_context()
+            client = context.get_client()
+            try:
+                matched, all_items = await _find_reminder_by_title(client, context.workspace_id, search_title)
+                if not matched:
+                    if not all_items:
+                        return "No reminders found in your workspace."
+                    previews = "\n".join(f"- {r['title']}" for r in all_items[:10])
+                    return f"No reminder found matching '{search_title}'.\nExisting reminders:\n{previews}"
+                return format_reminder(matched)
+            finally:
+                await client.close()
+
+        # Entity-filtered list (or unfiltered)
+        return await list_reminders(entity_name=entity_name, entity_type=entity_type, limit=limit)
+
+    @tool
+    async def get_upcoming_reminders(limit: int = 10) -> str:
+        """Get upcoming reminders sorted by due date (soonest first).
+
+        Use when the user asks "what do I have coming up?", "what's due this week?",
+        or "show me my upcoming reminders".
+
+        Args:
+            limit: Maximum number of reminders to return (default: 10, max: 50).
+        """
+        context = get_tool_context()
+        client = context.get_client()
+
+        query = """
+        query UpcomingReminders($workspaceId: String!, $limit: Int) {
+            upcomingReminders(workspaceId: $workspaceId, limit: $limit) {
+                items {
+                    id title duedate timezone recurring
+                    reminderVisibility peopleId companyId createdAt
+                }
+                totalCount
+            }
+        }
+        """
+        variables = {
+            "workspaceId": context.workspace_id,
+            "limit": min(limit, 50),
+        }
+
+        try:
+            result = await client.execute(query, variables)
+            data = result.get("data", {}).get("upcomingReminders", {})
+            items = data.get("items", [])
+            total = data.get("totalCount", 0)
+
+            if not items:
+                return "No upcoming reminders found."
+
+            lines = [f"Upcoming reminders ({total} total, showing {len(items)}):"]
+            lines.append("")
+            for reminder in items:
+                lines.append(format_reminder(reminder))
+                lines.append("")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Error fetching upcoming reminders: {e}")
+            return f"Error fetching upcoming reminders: {str(e)}"
+        finally:
+            await client.close()
+
     return [
         create_reminder,
-        list_reminders,
-        get_reminder,
+        get_reminders,
         update_reminder,
         delete_reminder,
+        get_upcoming_reminders,
     ]

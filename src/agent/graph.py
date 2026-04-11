@@ -705,7 +705,7 @@ async def stream_agent(
         logger.info("💬 Greeting detected → LITE + 0 tools")
     else:
         # Classify intent and load only relevant tools
-        categories = classify_intent(message)
+        categories = await classify_intent(message)
 
         # RESEARCH tools gate: always inject when web search is enabled,
         # always strip when disabled. This ensures the agent has web_search
