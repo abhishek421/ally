@@ -871,6 +871,215 @@ def get_create_tools() -> list:
         finally:
             await client.close()
 
+    @tool
+    async def create_column(
+        group_id: str,
+        name: str,
+        data_type: str,
+        entity_type: str = "company",
+        description: Optional[str] = None,
+        select_options: Optional[list] = None,
+    ) -> str:
+        """Create a new custom column (field) for a group/pipeline.
+
+        Args:
+            group_id: ID of the group to add the column to.
+            name: Column name (e.g., "Revenue", "Contract Value").
+            data_type: Column data type — one of: TEXT, NUMBER, SELECT, MULTISELECT, DATE, LONG_TEXT.
+            entity_type: Entity this column applies to — "company" or "people". Defaults to "company".
+            description: Optional description of the column.
+            select_options: Required for SELECT/MULTISELECT — list of {"value": str, "color": str} objects.
+        """
+        # Map entity_type to ColumnType enum values used by the GraphQL API (must be uppercase)
+        column_type_map = {"company": "COMPANY", "people": "PEOPLE", "person": "PEOPLE"}
+        column_type = column_type_map.get(entity_type.lower(), "COMPANY")
+
+        # Validate data_type
+        data_type_upper = data_type.upper()
+        valid_types = {"TEXT", "NUMBER", "SELECT", "MULTISELECT", "DATE", "LONG_TEXT"}
+        if data_type_upper not in valid_types:
+            return f"Invalid data_type '{data_type}'. Must be one of: {', '.join(sorted(valid_types))}"
+
+        # Build draft for confirmation preview
+        draft_data: dict = {
+            "name": name,
+            "data_type": data_type_upper,
+            "entity_type": entity_type,
+        }
+        if description:
+            draft_data["description"] = description
+        if select_options:
+            draft_data["select_options"] = select_options
+
+        confirmation = request_create_confirmation(
+            entity_type="column",
+            draft_data=draft_data,
+            message=f"I'll create a new '{data_type_upper}' column named '{name}' for {entity_type}s in this group.",
+        )
+
+        if not confirmation.confirmed:
+            return "Column creation cancelled. [CANCELLED - stop here, do not retry or reattempt]"
+
+        context = get_tool_context()
+        client = context.get_client()
+
+        mutation = """
+        mutation CreateColumn($input: CreateColumnRequest!) {
+            createColumn(input: $input) {
+                id
+                name
+                dataType
+                type
+                groupId
+                isDefault
+            }
+        }
+        """
+
+        input_data: dict = {
+            "name": name,
+            "dataType": data_type_upper,
+            "type": column_type,
+            "groupId": group_id,
+        }
+        if description:
+            input_data["description"] = description
+        if select_options:
+            input_data["selectOptions"] = select_options
+
+        try:
+            result = await client.mutate(mutation, {"input": input_data})
+            column = result.get("createColumn")
+
+            if column:
+                change = DataChange(
+                    entity_type=EntityType.COLUMN,
+                    action=ChangeAction.CREATED,
+                    entity_id=column.get("id"),
+                    group_id=group_id,
+                )
+                entity_label = "people" if column_type == "PEOPLE" else "companies"
+                return (
+                    f"Successfully created column '{column['name']}' "
+                    f"(type: {column['dataType']}) for {entity_label} in group."
+                    + change.to_marker()
+                )
+            else:
+                return "Failed to create column - no data returned."
+
+        except GraphInterrupt:
+            raise
+        except Exception as e:
+            logger.error(f"Error creating column: {e}")
+            return f"Error creating column: {str(e)}"
+        finally:
+            await client.close()
+
+    @tool
+    async def create_global_column(
+        name: str,
+        data_type: str,
+        entity_type: str = "company",
+        description: Optional[str] = None,
+        select_options: Optional[list] = None,
+    ) -> str:
+        """Create a global custom column (field) that applies to ALL entities of that type across the workspace.
+
+        Use this when the column should be workspace-wide, not scoped to a specific group.
+        For group-specific columns, use create_column instead.
+
+        Args:
+            name: Column name (e.g., "LinkedIn URL", "Industry").
+            data_type: Column data type — one of: TEXT, NUMBER, SELECT, MULTISELECT, DATE, LONG_TEXT.
+            entity_type: Entity this column applies to — "company" or "people". Defaults to "company".
+            description: Optional description of the column.
+            select_options: Required for SELECT/MULTISELECT — list of {"value": str, "color": str} objects.
+        """
+        # Map entity_type to ColumnType enum values (must be uppercase)
+        column_type_map = {"company": "COMPANY", "people": "PEOPLE", "person": "PEOPLE"}
+        column_type = column_type_map.get(entity_type.lower(), "COMPANY")
+
+        # Validate data_type
+        data_type_upper = data_type.upper()
+        valid_types = {"TEXT", "NUMBER", "SELECT", "MULTISELECT", "DATE", "LONG_TEXT"}
+        if data_type_upper not in valid_types:
+            return f"Invalid data_type '{data_type}'. Must be one of: {', '.join(sorted(valid_types))}"
+
+        # Build draft for confirmation preview
+        draft_data: dict = {
+            "name": name,
+            "data_type": data_type_upper,
+            "entity_type": entity_type,
+            "scope": "global (all entities in workspace)",
+        }
+        if description:
+            draft_data["description"] = description
+        if select_options:
+            draft_data["select_options"] = select_options
+
+        confirmation = request_create_confirmation(
+            entity_type="global column",
+            draft_data=draft_data,
+            message=f"I'll create a global '{data_type_upper}' column named '{name}' for all {entity_type}s in the workspace.",
+        )
+
+        if not confirmation.confirmed:
+            return "Global column creation cancelled. [CANCELLED - stop here, do not retry or reattempt]"
+
+        context = get_tool_context()
+        client = context.get_client()
+
+        mutation = """
+        mutation CreateGlobalColumn($input: CreateGlobalColumnRequest!) {
+            createGlobalColumn(input: $input) {
+                id
+                name
+                dataType
+                type
+                isGlobal
+                workspaceId
+            }
+        }
+        """
+
+        input_data: dict = {
+            "name": name,
+            "dataType": data_type_upper,
+            "type": column_type,
+            "workspaceId": context.workspace_id,
+        }
+        if description:
+            input_data["description"] = description
+        if select_options:
+            input_data["selectOptions"] = select_options
+
+        try:
+            result = await client.mutate(mutation, {"input": input_data})
+            column = result.get("createGlobalColumn")
+
+            if column:
+                change = DataChange(
+                    entity_type=EntityType.COLUMN,
+                    action=ChangeAction.CREATED,
+                    entity_id=column.get("id"),
+                )
+                entity_label = "people" if column_type == "PEOPLE" else "companies"
+                return (
+                    f"Successfully created global column '{column['name']}' "
+                    f"(type: {column['dataType']}) for all {entity_label} in the workspace."
+                    + change.to_marker()
+                )
+            else:
+                return "Failed to create global column - no data returned."
+
+        except GraphInterrupt:
+            raise
+        except Exception as e:
+            logger.error(f"Error creating global column: {e}")
+            return f"Error creating global column: {str(e)}"
+        finally:
+            await client.close()
+
     return [
         create_company,
         create_person,
@@ -879,5 +1088,7 @@ def get_create_tools() -> list:
         create_note,
         bulk_create_companies,
         bulk_create_people,
+        create_column,
+        create_global_column,
     ]
 

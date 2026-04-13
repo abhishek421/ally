@@ -574,77 +574,6 @@ def get_update_tools() -> list:
         finally:
             await client.close()
 
-    async def _get_current_select_option_value(
-        client, 
-        column_id: str, 
-        company_id: Optional[str] = None, 
-        person_id: Optional[str] = None
-    ) -> tuple[Optional[str], Optional[str]]:
-        """Fetch the current selected option value for a company or person.
-        
-        Returns:
-            Tuple of (value_label, color) or (None, None) if not set
-        """
-        try:
-            # Query the company/person to see which option is selected
-            if company_id:
-                entity_query = """
-                query GetCompanyColumnValue($companyId: ID!) {
-                    getOneCompany(companyId: $companyId) {
-                        columnValueSelectOption {
-                            columnId
-                            selectOptionId
-                            selectOption {
-                                id
-                                value
-                                color
-                            }
-                        }
-                    }
-                }
-                """
-                entity_result = await client.query(entity_query, {"companyId": company_id})
-                entity = entity_result.get("getOneCompany", {})
-                selected_options = entity.get("columnValueSelectOption", []) if entity else []
-            elif person_id:
-                entity_query = """
-                query GetPersonColumnValue($peopleId: ID!) {
-                    getPerson(peopleId: $peopleId) {
-                        columnValueSelectOption {
-                            columnId
-                            selectOptionId
-                            selectOption {
-                                id
-                                value
-                                color
-                            }
-                        }
-                    }
-                }
-                """
-                entity_result = await client.query(entity_query, {"peopleId": person_id})
-                entity = entity_result.get("getPerson", {})
-                selected_options = entity.get("columnValueSelectOption", []) if entity else []
-            else:
-                return None, None
-            
-            # Find the selected option for this column
-            for selected in selected_options:
-                if selected.get("columnId") == column_id:
-                    option = selected.get("selectOption", {})
-                    if option:
-                        return option.get("value"), option.get("color")
-            
-            return None, None
-            
-        except Exception as e:
-            if GraphInterrupt and isinstance(e, GraphInterrupt):
-                raise
-            if 'Interrupt' in type(e).__name__:
-                raise
-            logger.warning(f"Could not fetch current column value: {e}")
-            return None, None
-
     @tool
     async def update_company_column_value(
         company_id: str,
@@ -657,11 +586,14 @@ def get_update_tools() -> list:
         select_option_id: Optional[str] = None,
         group_name: Optional[str] = None,
         new_value_color: Optional[str] = None,
+        current_value_label: Optional[str] = None,
+        current_value_color: Optional[str] = None,
     ) -> str:
         """Update a company's column value (Status, Priority, etc.) within a group.
 
         Requires: resolve entity/group names first, then get_group_columns → get_column_options.
         Pass all IDs + display names so the confirmation UI shows "Old → New".
+        current_value_label/current_value_color can be read from get_company_by_id custom fields.
 
         Args:
             company_id: Company ID
@@ -674,22 +606,16 @@ def get_update_tools() -> list:
             select_option_id: Option ID for SELECT/MULTISELECT columns
             group_name: Group display name (for confirmation UI)
             new_value_color: Color of new value badge
+            current_value_label: Current value label (from get_company_by_id) for "Old → New" display
+            current_value_color: Current value color (from get_company_by_id) for confirmation UI
         """
         if not value and not select_option_id:
             return "Please provide either 'value' (for TEXT/NUMBER columns) or 'select_option_id' (for SELECT/MULTISELECT columns)."
-        
+
         context = get_tool_context()
         client = context.get_client()
-        
+
         try:
-            # Fetch the current value before showing confirmation
-            current_value_label = None
-            current_value_color = None
-            if select_option_id:
-                current_value_label, current_value_color = await _get_current_select_option_value(
-                    client, column_id, company_id=company_id
-                )
-            
             # Request user confirmation before updating
             confirmation = request_column_update_confirmation(
                 entity_type="company",
@@ -796,11 +722,14 @@ def get_update_tools() -> list:
         select_option_id: Optional[str] = None,
         group_name: Optional[str] = None,
         new_value_color: Optional[str] = None,
+        current_value_label: Optional[str] = None,
+        current_value_color: Optional[str] = None,
     ) -> str:
         """Update a person's column value (Status, Priority, etc.) within a group.
 
         Requires: resolve entity/group names first, then get_group_columns → get_column_options.
         Pass all IDs + display names so the confirmation UI shows "Old → New".
+        current_value_label/current_value_color can be read from get_person_by_id custom fields.
 
         Args:
             person_id: Person ID
@@ -813,22 +742,16 @@ def get_update_tools() -> list:
             select_option_id: Option ID for SELECT/MULTISELECT columns
             group_name: Group display name (for confirmation UI)
             new_value_color: Color of new value badge
+            current_value_label: Current value label (from get_person_by_id) for "Old → New" display
+            current_value_color: Current value color (from get_person_by_id) for confirmation UI
         """
         if not value and not select_option_id:
             return "Please provide either 'value' (for TEXT/NUMBER columns) or 'select_option_id' (for SELECT/MULTISELECT columns)."
-        
+
         context = get_tool_context()
         client = context.get_client()
-        
+
         try:
-            # Fetch the current value before showing confirmation
-            current_value_label = None
-            current_value_color = None
-            if select_option_id:
-                current_value_label, current_value_color = await _get_current_select_option_value(
-                    client, column_id, person_id=person_id
-                )
-            
             # Request user confirmation before updating
             confirmation = request_column_update_confirmation(
                 entity_type="person",

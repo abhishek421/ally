@@ -22,6 +22,7 @@ class EntityType(str, Enum):
     COMPANY = "company"
     GROUP = "group"
     VIEW = "view"
+    COLUMN = "column"
     REMINDER = "reminder"
     NOTE = "note"
 
