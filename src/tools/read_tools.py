@@ -118,13 +118,13 @@ def get_read_tools() -> list:
         client = context.get_client()
 
         query = """
-        query GetWorkspacePeople(
+        query GetPeopleByWorkspaceView(
             $workspaceId: ID!
             $page: Int
             $limit: Int
             $search: String
         ) {
-            getWorkspacePeople(
+            getPeopleByWorkspaceView(
                 workspaceId: $workspaceId
                 page: $page
                 limit: $limit
@@ -135,10 +135,7 @@ def get_read_tools() -> list:
                     firstName
                     lastName
                     jobTitle
-                    emails { value isPrimary }
-                    companyMetaData {
-                        company { name }
-                    }
+                    primaryEmail
                 }
                 meta { total page limit hasNextPage }
             }
@@ -153,7 +150,7 @@ def get_read_tools() -> list:
                 "search": search,
             })
 
-            data = result.get("getWorkspacePeople", {})
+            data = result.get("getPeopleByWorkspaceView", {})
             people = data.get("data") or []
             meta = data.get("meta") or {}
 
@@ -164,7 +161,13 @@ def get_read_tools() -> list:
             current_page = meta.get("page", 1)
             lines = [f"Found {total} people (showing page {current_page}):"]
             for person in people:
-                lines.append(format_person_compact(person))
+                name = f"{person.get('firstName', '')} {person.get('lastName', '')}".strip() or "Unknown"
+                job = person.get("jobTitle", "")
+                email = person.get("primaryEmail", "")
+                parts = [f"{name}, {job}" if job else name]
+                if email:
+                    parts.append(email)
+                lines.append("- " + " — ".join(parts))
 
             if meta.get("hasNextPage"):
                 lines.append(f"(More available — use page={current_page + 1} or search to narrow down)")
@@ -489,10 +492,10 @@ def get_read_tools() -> list:
 
     @tool
     async def get_company_by_id(company_id: str) -> str:
-        """Get full details for a company by ID (emails, phones, addresses, groups, people)."""
+        """Get full details for a company by ID including all custom column values."""
         context = get_tool_context()
         client = context.get_client()
-        
+
         query = """
         query GetOneCompany($companyId: ID!) {
             getOneCompany(companyId: $companyId) {
@@ -511,59 +514,121 @@ def get_read_tools() -> list:
                 peopleMetaData {
                     people { id firstName lastName jobTitle }
                 }
+                workspaceColumns { id dataType label name }
+                columnValues { columnId value }
+                columnValueSelectOption {
+                    columnId
+                    selectOptionId
+                    selectOption { id value color }
+                }
+                columnValueMember {
+                    columnId
+                    members { id firstName lastName }
+                }
                 groupCompany {
-                    group { id name emoji }
+                    group {
+                        id name emoji
+                        companyColumns { id dataType label name isDefault }
+                    }
                 }
             }
         }
         """
-        
+
         try:
             result = await client.query(query, {"companyId": company_id})
             company = result.get("getOneCompany")
-            
+
             if not company:
                 return f"Company with ID {company_id} not found."
-            
+
             lines = [format_company(company)]
-            
-            # Add URLs
+
+            # URLs
             urls = company.get("urls", [])
             if urls:
                 url_strs = [f"{u.get('label', 'URL')}: {u.get('value', '')}" for u in urls]
                 lines.append(f"  URLs: {', '.join(url_strs)}")
-            
-            # Add addresses
+
+            # Addresses
             addresses = company.get("addresses", [])
             if addresses:
                 addr_strs = [a.get("value", "") for a in addresses if a.get("value")]
                 if addr_strs:
                     lines.append(f"  Addresses: {'; '.join(addr_strs)}")
-            
-            # Add associated people
+
+            # Associated people
             people_meta = company.get("peopleMetaData", [])
             if people_meta:
                 people_names = [
                     f"{p['people']['firstName']} {p['people'].get('lastName', '')}".strip()
-                    for p in people_meta
-                    if p.get("people")
+                    for p in people_meta if p.get("people")
                 ]
                 if people_names:
                     lines.append(f"  Associated People: {', '.join(people_names)}")
-            
-            # Add groups
+
+            # Groups
             groups = company.get("groupCompany", [])
             if groups:
                 group_names = [
                     f"{g['group'].get('emoji', '')} {g['group']['name']}".strip()
-                    for g in groups
-                    if g.get("group")
+                    for g in groups if g.get("group")
                 ]
                 if group_names:
                     lines.append(f"  Groups: {', '.join(group_names)}")
-            
+
+            # Build column id → {name, dataType} map from group columns + workspace columns
+            col_meta: dict = {}
+            for g in groups:
+                for col in (g.get("group") or {}).get("companyColumns", []):
+                    col_meta[col["id"]] = {"name": col.get("label") or col.get("name"), "dataType": col.get("dataType")}
+            for col in company.get("workspaceColumns", []):
+                col_meta[col["id"]] = {"name": col.get("label") or col.get("name"), "dataType": col.get("dataType")}
+
+            # Text/Number/Date column values
+            col_values = company.get("columnValues", [])
+            # Select/Multiselect column values
+            select_values = company.get("columnValueSelectOption", [])
+            # Member column values
+            member_values = company.get("columnValueMember", [])
+
+            custom_lines = []
+            seen = set()
+
+            for cv in col_values:
+                cid = cv.get("columnId")
+                val = cv.get("value")
+                if cid and val:
+                    meta = col_meta.get(cid, {})
+                    name = meta.get("name") or cid
+                    custom_lines.append(f"    {name}: {val}")
+                    seen.add(cid)
+
+            for sv in select_values:
+                cid = sv.get("columnId")
+                opt = sv.get("selectOption") or {}
+                val = opt.get("value")
+                if cid and val:
+                    meta = col_meta.get(cid, {})
+                    name = meta.get("name") or cid
+                    custom_lines.append(f"    {name}: {val}")
+                    seen.add(cid)
+
+            for mv in member_values:
+                cid = mv.get("columnId")
+                members = mv.get("members") or []
+                if cid and members:
+                    meta = col_meta.get(cid, {})
+                    name = meta.get("name") or cid
+                    member_names = [f"{m.get('firstName','')} {m.get('lastName','')}".strip() for m in members]
+                    custom_lines.append(f"    {name}: {', '.join(member_names)}")
+
+            if custom_lines:
+                lines.append("  Custom Fields:")
+                lines.extend(custom_lines)
+
             return "\n".join(lines)
-            
+
         except Exception as e:
             logger.error(f"Error getting company: {e}")
             return f"Error getting company: {str(e)}"
@@ -572,10 +637,10 @@ def get_read_tools() -> list:
 
     @tool
     async def get_person_by_id(person_id: str) -> str:
-        """Get full details for a person by ID (emails, phones, addresses, groups, companies)."""
+        """Get full details for a person by ID including all custom column values."""
         context = get_tool_context()
         client = context.get_client()
-        
+
         query = """
         query GetPerson($peopleId: ID!) {
             getPerson(peopleId: $peopleId) {
@@ -598,48 +663,108 @@ def get_read_tools() -> list:
                 companyMetaData {
                     company { id name imageUrl }
                 }
+                workspaceColumns { id dataType label name }
+                columnValues { columnId peopleId value }
+                columnValueSelectOption {
+                    columnId
+                    selectOptionId
+                    selectOption { id value color }
+                }
+                columnValueMember {
+                    columnId
+                    members { id firstName lastName }
+                }
                 groupPeople {
-                    group { id name emoji }
+                    group {
+                        id name emoji
+                        peopleColumns { id dataType label name isDefault }
+                    }
                 }
             }
         }
         """
-        
+
         try:
             result = await client.query(query, {"peopleId": person_id})
             person = result.get("getPerson")
-            
+
             if not person:
                 return f"Person with ID {person_id} not found."
-            
+
             lines = [format_person(person)]
-            
-            # Add URLs
+
+            # URLs
             urls = person.get("urls", [])
             if urls:
                 url_strs = [f"{u.get('label', 'URL')}: {u.get('value', '')}" for u in urls]
                 lines.append(f"  URLs: {', '.join(url_strs)}")
-            
-            # Add addresses
+
+            # Addresses
             addresses = person.get("addresses", [])
             if addresses:
                 addr_strs = [a.get("value", "") for a in addresses if a.get("value")]
                 if addr_strs:
                     lines.append(f"  Addresses: {'; '.join(addr_strs)}")
-            
-            # Add groups
+
+            # Groups
             groups = person.get("groupPeople", [])
             if groups:
                 group_names = [
                     f"{g['group'].get('emoji', '')} {g['group']['name']}".strip()
-                    for g in groups
-                    if g.get("group")
+                    for g in groups if g.get("group")
                 ]
                 if group_names:
                     lines.append(f"  Groups: {', '.join(group_names)}")
-            
+
+            # Build column id → {name, dataType} map from group columns + workspace columns
+            col_meta: dict = {}
+            for g in groups:
+                for col in (g.get("group") or {}).get("peopleColumns", []):
+                    col_meta[col["id"]] = {"name": col.get("label") or col.get("name"), "dataType": col.get("dataType")}
+            for col in person.get("workspaceColumns", []):
+                col_meta[col["id"]] = {"name": col.get("label") or col.get("name"), "dataType": col.get("dataType")}
+
+            # Text/Number/Date column values
+            col_values = person.get("columnValues", [])
+            # Select/Multiselect column values
+            select_values = person.get("columnValueSelectOption", [])
+            # Member column values
+            member_values = person.get("columnValueMember", [])
+
+            custom_lines = []
+
+            for cv in col_values:
+                cid = cv.get("columnId")
+                val = cv.get("value")
+                if cid and val:
+                    meta = col_meta.get(cid, {})
+                    name = meta.get("name") or cid
+                    custom_lines.append(f"    {name}: {val}")
+
+            for sv in select_values:
+                cid = sv.get("columnId")
+                opt = sv.get("selectOption") or {}
+                val = opt.get("value")
+                if cid and val:
+                    meta = col_meta.get(cid, {})
+                    name = meta.get("name") or cid
+                    custom_lines.append(f"    {name}: {val}")
+
+            for mv in member_values:
+                cid = mv.get("columnId")
+                members = mv.get("members") or []
+                if cid and members:
+                    meta = col_meta.get(cid, {})
+                    name = meta.get("name") or cid
+                    member_names = [f"{m.get('firstName','')} {m.get('lastName','')}".strip() for m in members]
+                    custom_lines.append(f"    {name}: {', '.join(member_names)}")
+
+            if custom_lines:
+                lines.append("  Custom Fields:")
+                lines.extend(custom_lines)
+
             return "\n".join(lines)
-            
+
         except Exception as e:
             logger.error(f"Error getting person: {e}")
             return f"Error getting person: {str(e)}"
@@ -2830,7 +2955,7 @@ def get_read_tools() -> list:
 
         try:
             result = await client.execute(query, variables)
-            stats = result.get("data", {}).get(key)
+            stats = result.get(key)
             if not stats:
                 return f"No profile stats found for {entity_type_upper} {entity_id}."
 
@@ -2956,7 +3081,6 @@ _COMPANY_NAMES = {
     "list_companies_in_group",
     "get_company_by_id",
     "query_companies",
-    "get_profile_stats",
 }
 
 _PEOPLE_NAMES = {

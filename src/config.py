@@ -21,11 +21,11 @@ class Settings(BaseSettings):
     )
 
     # LLM Configuration
-    llm_provider: Literal["openai", "anthropic", "gemini"] = "openai"
+    llm_provider: Literal["openai", "anthropic", "gemini"]
 openai_api_key="REDACTED"
     anthropic_api_key: str = ""
     google_api_key: str = ""
-    llm_model: str = "gpt-4o"
+    llm_model: str
 
     # Research / Web Search
 PERPLEXITY_API_KEY=REDACTED
@@ -52,12 +52,12 @@ PERPLEXITY_API_KEY=REDACTED
 
     # Model Routing
     enable_model_routing: bool = True
-    lite_provider: str = "openai"
-    lite_model: str = "gpt-4o-mini"
-    standard_provider: str = "openai"
-    standard_model: str = "gpt-4o"
-    power_provider: str = "openai"
-    power_model: str = "gpt-4o"
+    lite_provider: str
+    lite_model: str
+    standard_provider: str
+    standard_model: str
+    power_provider: str
+    power_model: str
 
     # Token / Context Configuration
     default_context_window: int = 128000
