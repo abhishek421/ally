@@ -113,8 +113,8 @@ def get_note_tools() -> list:
         context = get_tool_context()
         client = context.get_client()
 
-        # Step 1: Resolve entity → get entity_id
         try:
+            # Step 1: Resolve entity → get entity_id
             if entity_type_upper == "PEOPLE":
                 search_query = """
                 query GetWorkspacePeople($workspaceId: ID!, $search: String, $limit: Int) {
@@ -153,12 +153,8 @@ def get_note_tools() -> list:
                 entity = entities[0]
                 entity_id = entity["id"]
                 entity_display = entity.get("name", entity_name)
-        except Exception as e:
-            logger.error(f"Error creating note: {type(e).__name__}: {e}")
-            return f"Error creating note: {str(e)}"
 
-        # Step 2: Create the note
-        try:
+            # Step 2: Create the note
             mutation = """
             mutation CreateNote($input: CreateNoteInput!, $workspaceId: String) {
                 createNote(input: $input, workspaceId: $workspaceId) {
@@ -200,6 +196,8 @@ def get_note_tools() -> list:
         except Exception as e:
             logger.error(f"Error creating note: {type(e).__name__}: {e}")
             return f"Error creating note: {str(e)}"
+        finally:
+            await client.close()
 
     async def list_notes(
         entity_name: str,
