@@ -56,10 +56,9 @@ The Python agent **streams events back via SSE**. The frontend consumes them and
       a. is_first_message() — check if new conversation (affects greeting behavior)
       b. is_greeting(message) check:
            YES → categories = [], tier = LITE, ~200 token system prompt, 0 tools
-           NO  → classify_intent(message) → List[ToolCategory]
-                 route_query(message, categories) → ModelTier (LITE/STANDARD/POWER)
+           NO  → tier = STANDARD, categories = None (all tools loaded)
       c. set_tool_context(ctx) — inject per-request auth into contextvars
-      d. get_tools_for_categories(categories) — load only relevant tools
+      d. get_all_tools() or get_tools_for_categories([]) for greetings
       e. LangGraph ReAct loop begins, streaming SSE events:
            thinking (heartbeat every 1.5s) → tool_call → tool_result → response → done
       f. First message only: generate_conversation_title() → conversation_title SSE event
@@ -101,7 +100,7 @@ Tool result with DATA_CHANGE_MARKER
 
 ### Categories & Loading
 
-Tools load **dynamically per request** based on intent classification. Only relevant categories are loaded — wrong categories aren't even in the LLM's context window.
+Tools load **per request**. Greetings get zero tools (fast-path). All other requests load the full tool set.
 
 | Category | Always | ~Tokens | Key Tools |
 |----------|:------:|--------:|-----------|
@@ -121,29 +120,16 @@ Tools load **dynamically per request** based on intent classification. Only rele
 
 **Chitchat fast-path**: `get_tools_for_categories([])` bypasses ALWAYS_INCLUDE entirely — **zero tools loaded**. This is intentional; greetings get a ~200 token system prompt vs ~7,000 with tools.
 
-### Intent Classification (`intent.py`)
+### Model Routing (`router.py`)
 
-Regex pattern matching, no LLM call. Maps message text to `List[ToolCategory]`:
+Two tiers, decided by a single regex check before agent invocation.
 
-- "company / business / client / startup / firm" → COMPANIES
-- "person / contact / founder / CEO / employee" → PEOPLE
-- "email / inbox / send / draft / template" → EMAIL
-- "pipeline / column / status / stage" → COLUMNS
-- "create / add / new" → CREATE
-- "update / change / modify / move" → UPDATE
-- etc.
-
-### Multi-Model Routing (`router.py`)
-
-Zero-cost heuristic routing before agent invocation. Typical savings: **~60–70%** vs single model.
-
-| Tier | When | Examples |
+| Tier | When | Details |
 |------|------|---------|
-| LITE | Greetings, acks, emoji-only | "hi", "thanks", "yes", "👍" |
-| STANDARD | Normal CRM ops | "list companies", "add note to Acme" |
-| POWER | Analysis, bulk ops, complex reasoning | "summarize all deals", "compare founders", "why did..." |
+| LITE | Greetings, acks, emoji-only | "hi", "thanks", "yes", "👍" — 0 tools, ~200 token prompt |
+| STANDARD | Everything else | All tools loaded, full system prompt |
 
-`route_query(message, categories)` is called after `classify_intent()` — it uses both the message text and the loaded categories to determine tier.
+`is_greeting(message)` is the only routing gate — pure regex, <1ms, no LLM call.
 
 ### ToolContext & contextvars (`context_var.py`)
 
@@ -326,9 +312,8 @@ deleteGroupCustomInstructions(groupId)
 |-------------|------|
 | Change the agent's behavior / personality / instructions | `ally/src/agent/prompts.py` |
 | Add or modify a tool | `ally/src/tools/<category>_tools.py` → add to category getter |
-| Add a new tool category | `ally/src/tools/__init__.py` (ToolCategory + TOOL_REGISTRY) + `ally/src/agent/intent.py` |
-| Change which tools load for a type of query | `ally/src/agent/intent.py` |
-| Change model routing (LITE/STANDARD/POWER) | `ally/src/agent/router.py` |
+| Add a new tool category | `ally/src/tools/__init__.py` (ToolCategory + TOOL_REGISTRY) |
+| Change greeting detection | `ally/src/agent/router.py` — edit `GREETING_PATTERNS` |
 | Add a new confirmation type | `ally/src/tools/confirmation.py` + `frontend/types/ally-confirmation.ts` + `frontend/components/ally/AllyConfirmation.tsx` |
 | Change how SSE events are emitted | `ally/src/agent/graph.py` |
 | Change how SSE events are consumed | `frontend/contexts/ally-context.tsx` |
@@ -349,7 +334,7 @@ deleteGroupCustomInstructions(groupId)
 
 2. **`get_tools_for_categories([])` is the greeting fast-path.** The empty list explicitly bypasses `ALWAYS_INCLUDE`. Do not change this to fall back to loading all tools — the zero-tool path is intentional. Greetings get a ~200 token system prompt instead of ~7,000.
 
-3. **Intent classification happens inside `graph.py`, not `routes.py`.** `routes.py` just resolves user profile and instructions in parallel. All the routing logic (greeting detect → intent classify → model tier) is in `stream_agent()`.
+3. **Routing logic is in `graph.py`, not `routes.py`.** `routes.py` resolves user profile and instructions in parallel. The greeting check and tier/tool selection happen inside `stream_agent()`.
 
 4. **`AllyContext` is at root layout level.** State (messages, streaming connection) survives closing/reopening the Ally panel. If you ever move the context closer to the chat component, the SSE stream will terminate on unmount.
 
@@ -377,8 +362,7 @@ agent/
                    generate_conversation_title(), heartbeat system
   prompts.py       System prompt builder — injects workspace/group/entity instructions,
                    user personalization, tool guidance
-  intent.py        classify_intent(message) → List[ToolCategory] — pure regex, no LLM
-  router.py        route_query(message, categories) → ModelTier — pure heuristic, no LLM
+  router.py        is_greeting() — regex greeting detection, ModelTier enum (LITE/STANDARD)
   state.py         AgentState schema (messages, workspace_id, user_id, auth_token)
 
 api/

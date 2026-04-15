@@ -15,11 +15,10 @@ from langgraph.types import Command, interrupt
 
 from src.config import get_settings
 from src.agent.prompts import get_system_prompt, get_system_prompt_messages, get_chitchat_prompt
-from src.agent.router import ModelTier, route_query, is_greeting
+from src.agent.router import ModelTier, is_greeting
 from src.tools import get_all_tools, get_tools_for_categories, ToolCategory
 from src.tools.base import ToolContext, parse_data_change
 from src.tools.context_var import set_tool_context
-from src.agent.intent import classify_intent
 
 logger = logging.getLogger(__name__)
 
@@ -149,39 +148,19 @@ def _create_llm(provider: str, model: str):
         )
 
 
-def get_llm():
-    """Get the default LLM instance (single-model mode).
-
-    Used when model routing is disabled, or as a fallback.
-
-    Returns:
-        ChatOpenAI, ChatAnthropic, or ChatGoogleGenerativeAI instance
-    """
-    settings = get_settings()
-    return _get_cached_llm(settings.llm_provider, settings.llm_model)
-
-
 def get_llm_for_tier(tier: ModelTier) -> tuple:
     """Get an LLM instance for the given model tier.
 
-    If model routing is disabled, falls back to the single default model.
-
     Args:
-        tier: ModelTier (LITE, STANDARD, or POWER)
+        tier: ModelTier (LITE or STANDARD)
 
     Returns:
         Tuple of (llm_instance, provider_str, model_str)
     """
     settings = get_settings()
-
-    if not settings.enable_model_routing:
-        return get_llm(), settings.llm_provider, settings.llm_model
-
-    # Map tier to provider + model from config
     tier_map = {
         ModelTier.LITE: (settings.lite_provider, settings.lite_model),
         ModelTier.STANDARD: (settings.standard_provider, settings.standard_model),
-        ModelTier.POWER: (settings.power_provider, settings.power_model),
     }
     provider, model = tier_map[tier]
     llm = _get_cached_llm(provider, model)
@@ -443,10 +422,9 @@ def create_agent_for_context(
         context: Tool context with auth and workspace info
         checkpointer: Optional checkpointer for conversation memory
         is_new_conversation: Whether this is the first message (for greeting behavior)
-        tier: Model tier to use (LITE/STANDARD/POWER). None = default model.
-        categories: Intent categories from classify_intent(). When provided,
-            only tools relevant to these categories are loaded (plus ALWAYS_INCLUDE),
-            reducing token usage. When None, all tools are loaded.
+        tier: Model tier to use (LITE or STANDARD). None defaults to STANDARD.
+        categories: Tool categories to load. When provided, only those tools are loaded
+            (plus ALWAYS_INCLUDE). When None, all tools are loaded.
 
     Returns:
         Compiled LangGraph agent
@@ -454,18 +432,15 @@ def create_agent_for_context(
     # Inject per-request context so tools can access auth dynamically
     set_tool_context(context)
 
-    # Select the LLM based on tier (or fall back to default)
-    if tier is not None:
-        llm, provider, model = get_llm_for_tier(tier)
-        is_anthropic = (provider == "anthropic")
-    else:
-        llm = get_llm()
-        settings = get_settings()
-        is_anthropic = settings.is_anthropic
+    # Select the LLM based on tier (defaults to STANDARD)
+    if tier is None:
+        tier = ModelTier.STANDARD
+    llm, provider, model = get_llm_for_tier(tier)
+    is_anthropic = (provider == "anthropic")
 
     user_name = context.user_first_name or "Unknown"
     conv_type = "new" if is_new_conversation else "continuing"
-    tier_label = f" [{tier.value.upper()}]" if tier else ""
+    tier_label = f" [{tier.value.upper()}]"
 
     # Build tools first — this determines which prompt path we take.
     # categories=[] is the greeting fast-path: zero tools, minimal prompt.
@@ -536,8 +511,8 @@ async def create_agent(
     Args:
         context: Tool context with auth and workspace info
         is_new_conversation: Whether this is the first message (for greeting behavior)
-        tier: Model tier to use (LITE/STANDARD/POWER)
-        categories: Intent categories for dynamic tool selection. None = all tools.
+        tier: Model tier to use (LITE or STANDARD). None defaults to STANDARD.
+        categories: Tool categories for selection. None = all tools.
 
     Returns:
         Compiled LangGraph agent with checkpointer
@@ -557,8 +532,8 @@ async def get_agent(
     Args:
         context: Tool context with auth and workspace info
         is_new_conversation: Whether this is the first message (for greeting behavior)
-        tier: Model tier to use (LITE/STANDARD/POWER)
-        categories: Intent categories for dynamic tool selection. None = all tools.
+        tier: Model tier to use (LITE or STANDARD). None defaults to STANDARD.
+        categories: Tool categories for selection. None = all tools.
 
     Returns:
         Compiled LangGraph agent
@@ -704,26 +679,8 @@ async def stream_agent(
         _, tier_provider, tier_model = get_llm_for_tier(tier)
         logger.info("💬 Greeting detected → LITE + 0 tools")
     else:
-        # Classify intent and load only relevant tools
-        categories = await classify_intent(message)
-
-        # RESEARCH tools gate: always inject when web search is enabled,
-        # always strip when disabled. This ensures the agent has web_search
-        # available for external queries even if the intent classifier didn't
-        # explicitly detect a research keyword.
-        if context.web_search_enabled:
-            if ToolCategory.RESEARCH not in categories:
-                categories = categories + [ToolCategory.RESEARCH]
-                logger.info("🔓 Web search enabled — RESEARCH tools injected")
-        else:
-            if ToolCategory.RESEARCH in categories:
-                categories = [c for c in categories if c != ToolCategory.RESEARCH]
-                logger.info("🔒 Web search disabled — RESEARCH tools excluded")
-
-        logger.info(f"🎯 Intent: {[c.value for c in categories]}")
-
-        # Route query to the appropriate model tier
-        tier = route_query(message, categories)
+        tier = ModelTier.STANDARD
+        categories = None  # load all tools
         _, tier_provider, tier_model = get_llm_for_tier(tier)
 
     # Create agent with the routed model tier AND filtered tool set.
@@ -956,8 +913,7 @@ async def resume_agent(
         Event dictionaries with type and data (same as stream_agent)
     """
     # Resume is always a continuing conversation (not new)
-    # Use POWER tier for resume — ensures all tools from the original query are available
-    resume_tier = ModelTier.POWER
+    resume_tier = ModelTier.STANDARD
     _, _, resume_model = get_llm_for_tier(resume_tier)
     agent = await get_agent(context, is_new_conversation=False, tier=resume_tier)
     config = {
