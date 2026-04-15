@@ -32,6 +32,22 @@ services:
       # LLM Configuration (override via .env file or CLI)
       LLM_PROVIDER: "${LLM_PROVIDER:-openai}"
       LLM_MODEL: "${LLM_MODEL:-gpt-4o}"
+
+      # Model Routing (per-tier overrides — takes effect when ENABLE_MODEL_ROUTING=true)
+      ENABLE_MODEL_ROUTING: "${ENABLE_MODEL_ROUTING:-true}"
+
+      # LITE tier — greetings, simple lookups, title generation
+      LITE_PROVIDER: "${LITE_PROVIDER:-openai}"
+      LITE_MODEL: "${LITE_MODEL:-gpt-5-nano}"
+
+      # STANDARD tier — CRM operations, summaries
+      STANDARD_PROVIDER: "${STANDARD_PROVIDER:-openai}"
+      STANDARD_MODEL: "${STANDARD_MODEL:-gpt-5-mini}"
+
+      # POWER tier — deep analysis, research, bulk ops
+      POWER_PROVIDER: "${POWER_PROVIDER:-openai}"
+      POWER_MODEL: "${POWER_MODEL:-gpt-5}"
+
 OPENAI_API_KEY=REDACTED
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       GOOGLE_API_KEY: "${GOOGLE_API_KEY:-}"

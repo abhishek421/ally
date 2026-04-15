@@ -1976,73 +1976,80 @@ def get_read_tools() -> list:
     @tool
     async def get_group_columns(
         group_id: str,
-        entity_type: str = "company",
+        entity_type: str = "auto",
     ) -> str:
-        """Get custom columns (Status, Priority, etc.) for a group. Returns column IDs for updates."""
+        """Get custom columns (Status, Priority, etc.) for a group. Returns column IDs for updates.
+
+        entity_type: "people", "company", or "auto" (default) to try both and return whichever has columns.
+        """
         context = get_tool_context()
         client = context.get_client()
-        
-        # Use the group resolver to get columns based on entity type
-        if entity_type.lower() == "people":
-            query = """
-            query GetGroupWithPeopleColumns($workspaceId: String!) {
-                getGroups(workspaceId: $workspaceId) {
+
+        both_query = """
+        query GetGroupWithAllColumns($workspaceId: String!) {
+            getGroups(workspaceId: $workspaceId) {
+                id
+                name
+                peopleColumns {
                     id
                     name
-                    peopleColumns {
-                        id
-                        name
-                        dataType
-                        type
-                        isDefault
-                    }
+                    dataType
+                    type
+                    isDefault
                 }
-            }
-            """
-        else:
-            query = """
-            query GetGroupWithCompanyColumns($workspaceId: String!) {
-                getGroups(workspaceId: $workspaceId) {
+                companyColumns {
                     id
                     name
-                    companyColumns {
-                        id
-                        name
-                        dataType
-                        type
-                        isDefault
-                    }
+                    dataType
+                    type
+                    isDefault
                 }
             }
-            """
-        
+        }
+        """
+
         try:
-            result = await client.query(query, {
+            result = await client.query(both_query, {
                 "workspaceId": context.workspace_id,
             })
-            
+
             groups = result.get("getGroups") or []
             group = next((g for g in groups if g.get("id") == group_id), None)
-            
+
             if not group:
                 return f"Group with ID {group_id} not found."
-            
-            columns_key = "peopleColumns" if entity_type.lower() == "people" else "companyColumns"
-            columns = group.get(columns_key, [])
-            
+
+            et = entity_type.lower()
+            if et == "people":
+                columns = group.get("peopleColumns", [])
+                resolved_type = "people"
+            elif et == "company":
+                columns = group.get("companyColumns", [])
+                resolved_type = "company"
+            else:
+                # auto: use whichever side has columns
+                people_cols = group.get("peopleColumns") or []
+                company_cols = group.get("companyColumns") or []
+                if people_cols:
+                    columns, resolved_type = people_cols, "people"
+                elif company_cols:
+                    columns, resolved_type = company_cols, "company"
+                else:
+                    columns, resolved_type = [], "unknown"
+
             if not columns:
-                return f"No {entity_type} columns found for group '{group.get('name', 'Unknown')}'."
-            
-            lines = [f"Columns for group '{group.get('name', 'Unknown')}' ({entity_type}):\n"]
+                return f"No columns found for group '{group.get('name', 'Unknown')}'."
+
+            lines = [f"Columns for group '{group.get('name', 'Unknown')}' ({resolved_type}):\n"]
             for col in columns:
                 data_type = col.get("dataType", "UNKNOWN")
                 is_default = col.get("isDefault", False)
                 default_marker = " (default)" if is_default else ""
                 lines.append(f"- **{col.get('name', 'Unknown')}** (ID: {col.get('id', 'N/A')})")
                 lines.append(f"  Type: {data_type}{default_marker}")
-            
+
             return "\n".join(lines)
-            
+
         except Exception as e:
             logger.error(f"Error getting group columns: {e}")
             return f"Error getting group columns: {str(e)}"
