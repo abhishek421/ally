@@ -50,14 +50,11 @@ class Settings(BaseSettings):
     graphql_connect_timeout: float = 10.0   # seconds to establish TCP connection
     graphql_request_timeout: float = 30.0   # seconds per query/mutation
 
-    # Model Routing
-    enable_model_routing: bool = True
+    # Model Configuration
     lite_provider: str
     lite_model: str
     standard_provider: str
     standard_model: str
-    power_provider: str
-    power_model: str
 
     # Token / Context Configuration
     default_context_window: int = 128000
@@ -70,7 +67,13 @@ class Settings(BaseSettings):
         "gpt-4-turbo": 128000,
         "gpt-4": 8192,
         "gpt-3.5-turbo": 16385,
-        # Anthropic
+        # Anthropic — Claude 4.x (1M context)
+        "claude-sonnet-4-6": 1000000,
+        "claude-opus-4-7": 1000000,
+        "claude-opus-4-6": 1000000,
+        # Anthropic — Claude 4.x (200k context)
+        "claude-haiku-4-5": 200000,
+        # Anthropic — Claude 3.x (200k context)
         "claude-3-5-sonnet": 200000,
         "claude-3-opus": 200000,
         "claude-3-sonnet": 200000,

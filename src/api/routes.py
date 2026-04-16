@@ -154,18 +154,51 @@ class ChatResponse(BaseModel):
     conversation_id: str
 
 
+async def _save_assistant_message(
+    context: ToolContext,
+    conversation_id: str,
+    full_content: str,
+    tool_calls: list[dict],
+) -> None:
+    """Save the assistant message to the backend after streaming completes.
+
+    Creates a fresh GraphQL client (separate from the tool-level client)
+    so cleanup of either doesn't affect the other.
+    """
+    if not full_content and not tool_calls:
+        return
+
+    # Fill in result for any tool calls that never got a result event
+    for tc in tool_calls:
+        if not tc.get("result"):
+            tc["result"] = "✓ Completed"
+
+    save_client = context.get_client()
+    try:
+        await save_client.save_ally_message(
+            conversation_id=conversation_id,
+            content=full_content,
+            tool_calls=tool_calls if tool_calls else None,
+        )
+        logger.info(f"💾 Saved assistant message for conversation {conversation_id}")
+    except Exception as e:
+        logger.error(f"Failed to persist assistant message: {e}")
+    finally:
+        await save_client.close()
+
+
 async def event_generator(
     context: ToolContext,
     message: str,
     conversation_id: str,
 ) -> AsyncGenerator[dict, None]:
     """Generate SSE events from the agent stream.
-    
+
     Args:
         context: Tool context with auth and workspace info
         message: User message
         conversation_id: Conversation thread ID
-        
+
     Yields:
         SSE event dictionaries
     """
@@ -175,19 +208,33 @@ async def event_generator(
         first_message = await is_first_message(conversation_id)
     except Exception as e:
         logger.warning(f"Could not check if first message: {e}")
-    
-    # Accumulate the assistant response for title generation
-    accumulated_response = ""
-    
+
+    # Accumulate assistant response and tool calls for persistence
+    full_content = ""
+    tool_calls: list[dict] = []
+
     try:
         async for event in stream_agent(context, message, conversation_id):
             event_type = event.get("type", "unknown")
             event_data = event.get("data", {})
-            
-            # Accumulate response content for title generation
-            if event_type == "response" and first_message:
-                accumulated_response += event_data.get("content", "")
-            
+
+            # Collect data for server-side persistence
+            if event_type == "response":
+                full_content += event_data.get("content", "")
+            elif event_type == "tool_call":
+                tool_calls.append({
+                    "name": event_data.get("name"),
+                    "args": event_data.get("args"),
+                })
+            elif event_type == "tool_result":
+                tool_name = event_data.get("name")
+                result = event_data.get("result")
+                # Match result to the most recent unresolved call with this name
+                for tc in reversed(tool_calls):
+                    if tc.get("name") == tool_name and not tc.get("result"):
+                        tc["result"] = result
+                        break
+
             # Yield the event immediately so frontend can respond without delay
             yield {
                 "event": event_type,
@@ -195,37 +242,39 @@ async def event_generator(
             }
 
             # For "done" event, generate title AFTER sending done (so input is available immediately)
-            if event_type == "done" and first_message and accumulated_response:
-                try:
-                    title, title_token_usage = await generate_conversation_title(message, accumulated_response)
-                    if title:
-                        logger.info(f"📝 Generated title: \"{title}\"")
-                        yield {
-                            "event": "conversation_title",
-                            "data": json.dumps({
-                                "title": title,
-                                "conversation_id": conversation_id,
-                            }),
-                        }
-                    # Emit title generation token usage separately
-                    if title_token_usage:
-                        logger.info(
-                            f"📊 TITLE TOKEN USAGE: {title_token_usage['input_tokens']} input "
-                            f"+ {title_token_usage['output_tokens']} output "
-                            f"= {title_token_usage['total_tokens']} total"
-                        )
-                        yield {
-                            "event": "token_usage",
-                            "data": json.dumps({
-                                **title_token_usage,
-                                "llm_calls": 1,
-                                "request_type": "title_generation",
-                            }),
-                        }
-                except Exception as e:
-                    logger.warning(f"Failed to generate conversation title: {e}")
-                    # Continue without title - not critical
-            
+            if event_type == "done":
+                if first_message and full_content:
+                    try:
+                        title, title_token_usage = await generate_conversation_title(message, full_content)
+                        if title:
+                            logger.info(f"📝 Generated title: \"{title}\"")
+                            yield {
+                                "event": "conversation_title",
+                                "data": json.dumps({
+                                    "title": title,
+                                    "conversation_id": conversation_id,
+                                }),
+                            }
+                        if title_token_usage:
+                            logger.info(
+                                f"📊 TITLE TOKEN USAGE: {title_token_usage['input_tokens']} input "
+                                f"+ {title_token_usage['output_tokens']} output "
+                                f"= {title_token_usage['total_tokens']} total"
+                            )
+                            yield {
+                                "event": "token_usage",
+                                "data": json.dumps({
+                                    **title_token_usage,
+                                    "llm_calls": 1,
+                                    "request_type": "title_generation",
+                                }),
+                            }
+                    except Exception as e:
+                        logger.warning(f"Failed to generate conversation title: {e}")
+
+                # Persist the assistant message server-side
+                await _save_assistant_message(context, conversation_id, full_content, tool_calls)
+
     except Exception as e:
         logger.error(f"Error in agent stream: {e}")
         yield {
@@ -323,25 +372,47 @@ async def confirmation_event_generator(
     confirmation_response: dict,
 ) -> AsyncGenerator[dict, None]:
     """Generate SSE events from resumed agent stream.
-    
+
     Args:
         context: Tool context with auth and workspace info
         conversation_id: Conversation thread ID
         confirmation_response: User's confirmation response
-        
+
     Yields:
         SSE event dictionaries
     """
+    full_content = ""
+    tool_calls: list[dict] = []
+
     try:
         async for event in resume_agent(context, conversation_id, confirmation_response):
             event_type = event.get("type", "unknown")
             event_data = event.get("data", {})
-            
+
+            # Collect data for server-side persistence
+            if event_type == "response":
+                full_content += event_data.get("content", "")
+            elif event_type == "tool_call":
+                tool_calls.append({
+                    "name": event_data.get("name"),
+                    "args": event_data.get("args"),
+                })
+            elif event_type == "tool_result":
+                tool_name = event_data.get("name")
+                result = event_data.get("result")
+                for tc in reversed(tool_calls):
+                    if tc.get("name") == tool_name and not tc.get("result"):
+                        tc["result"] = result
+                        break
+
             yield {
                 "event": event_type,
                 "data": json.dumps(event_data),
             }
-            
+
+            if event_type == "done":
+                await _save_assistant_message(context, conversation_id, full_content, tool_calls)
+
     except Exception as e:
         logger.error(f"Error in resumed agent stream: {e}")
         yield {

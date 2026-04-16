@@ -252,14 +252,12 @@ class ToolContext:
     _client: Optional[GraphQLClient] = field(default=None, init=False, repr=False)
 
     def get_client(self) -> GraphQLClient:
-        """Get a cached GraphQL client for this request context.
+        """Create a new GraphQL client for this request context.
 
-        Returns the same client instance on repeated calls so all tool
-        invocations within a single request share one HTTP connection.
+        Each call returns a fresh instance so parallel tool invocations
+        don't share a connection that one tool might close mid-flight.
         """
-        if self._client is None:
-            self._client = GraphQLClient(self.auth_token, self.workspace_id, self.session_id)
-        return self._client
+        return GraphQLClient(self.auth_token, self.workspace_id, self.session_id)
 
     async def close_client(self) -> None:
         """Close the cached GraphQL client and release its connection."""
