@@ -67,7 +67,13 @@ class Settings(BaseSettings):
         "gpt-4-turbo": 128000,
         "gpt-4": 8192,
         "gpt-3.5-turbo": 16385,
-        # Anthropic
+        # Anthropic — Claude 4.x (1M context)
+        "claude-sonnet-4-6": 1000000,
+        "claude-opus-4-7": 1000000,
+        "claude-opus-4-6": 1000000,
+        # Anthropic — Claude 4.x (200k context)
+        "claude-haiku-4-5": 200000,
+        # Anthropic — Claude 3.x (200k context)
         "claude-3-5-sonnet": 200000,
         "claude-3-opus": 200000,
         "claude-3-sonnet": 200000,

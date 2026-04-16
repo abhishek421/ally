@@ -4,8 +4,8 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from langchain_anthropic import ChatAnthropic, convert_to_anthropic_tool
 from langchain_core.messages import SystemMessage, RemoveMessage
-from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -145,6 +145,7 @@ def _create_llm(provider: str, model: str):
             api_key=settings.anthropic_api_key,
             temperature=0.7,
             streaming=True,
+            thinking={"type": "disabled"},
         )
 
 
@@ -307,43 +308,44 @@ Title:"""
 
 
 async def get_conversation_usage(conversation_id: str) -> dict:
-    """Fetch history and calculate cumulative token usage from metadata.
-    
+    """Return the context window size at the end of the last conversation turn.
+
+    Reads usage_metadata from the most recent AIMessage in the checkpoint.
+    input_tokens on that message = full context sent in that LLM call
+    (system + tools + history + user msg), which is the accurate measure of
+    how full the context window is heading into the next request.
+
     Args:
         conversation_id: The thread ID to check
-        
+
     Returns:
-        Dict with input_tokens, output_tokens, total_tokens
+        Dict with input_tokens, output_tokens, total_tokens from the last LLM call
     """
     try:
         checkpointer = await get_checkpointer()
         config = {"configurable": {"thread_id": conversation_id}}
-        
-        # Get the latest state from checkpointer
+
         state_data = await checkpointer.aget(config)
         if not state_data:
             return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-            
-        # LangGraph savers return a CheckpointTuple; the checkpoint is in the 'checkpoint' key/attr
+
         checkpoint = state_data.get("checkpoint") if isinstance(state_data, dict) else getattr(state_data, "checkpoint", state_data)
-        
-        # messages are usually in channel_values
         channel_values = checkpoint.get("channel_values") if isinstance(checkpoint, dict) else getattr(checkpoint, "channel_values", {})
         messages = channel_values.get("messages", [])
-        
-        total_input = 0
-        total_output = 0
-        
-        for msg in messages:
+
+        # Walk backwards — find the most recent AIMessage with usage data.
+        # That message's input_tokens IS the context window size at that turn.
+        for msg in reversed(messages):
             if hasattr(msg, "usage_metadata") and msg.usage_metadata:
-                total_input += msg.usage_metadata.get("input_tokens", 0)
-                total_output += msg.usage_metadata.get("output_tokens", 0)
-        
-        return {
-            "input_tokens": total_input,
-            "output_tokens": total_output,
-            "total_tokens": total_input + total_output
-        }
+                inp = msg.usage_metadata.get("input_tokens", 0)
+                out = msg.usage_metadata.get("output_tokens", 0)
+                return {
+                    "input_tokens": inp,
+                    "output_tokens": out,
+                    "total_tokens": inp + out,
+                }
+
+        return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     except Exception as e:
         logger.warning(f"Error calculating conversation usage: {e}")
         return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
@@ -488,6 +490,16 @@ def create_agent_for_context(
             logger.info(f"🤖 Agent for {user_name} ({conv_type}){tier_label} WITH {', '.join(instructions_info)} instructions")
         else:
             logger.info(f"🤖 Agent for {user_name} ({conv_type}){tier_label}")
+
+    # For Anthropic, pre-bind tools with cache_control on the last tool so the
+    # tool schemas are cached. LangGraph detects the pre-bound model and skips
+    # its own bind_tools call, so the ToolNode still uses the original BaseTool
+    # list for execution while the LLM gets cached tool schemas.
+    if is_anthropic and tools:
+        *other_tools, last_tool = tools
+        last_tool_cached = convert_to_anthropic_tool(last_tool)
+        last_tool_cached["cache_control"] = {"type": "ephemeral"}
+        llm = llm.bind_tools(other_tools + [last_tool_cached])
 
     # Create the agent using the prebuilt ReAct pattern
     agent = create_react_agent(
@@ -702,6 +714,7 @@ async def stream_agent(
     # Token usage tracking
     request_token_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     llm_call_count = 0
+    last_llm_input_tokens = 0  # input_tokens of the most recent LLM call = current context window size
 
     # Heartbeat configuration
     last_heartbeat_time = time.time()
@@ -709,9 +722,9 @@ async def stream_agent(
     has_seen_tool_result = False
 
     # PRE-REQUEST BUDGET CHECK (use the routed model for context window limit)
-    settings = get_settings()
     history_usage = await get_conversation_usage(conversation_id)
-    pre_check = compute_budget_status(history_usage["total_tokens"], tier_model)
+    # input_tokens from the last turn = actual context window size going into this request
+    pre_check = compute_budget_status(history_usage["input_tokens"], tier_model)
     
     if pre_check["status"] == "blocked":
         logger.warning(
@@ -777,6 +790,8 @@ async def stream_agent(
                             request_token_usage["output_tokens"] += usage.get("output_tokens", 0)
                             request_token_usage["total_tokens"] += usage.get("total_tokens", 0)
                             llm_call_count += 1
+                            # Track most recent call's input — this IS the current context window size
+                            last_llm_input_tokens = usage.get("input_tokens", 0)
 
                         if hasattr(msg, "tool_calls") and msg.tool_calls:
                             # Agent decided to call tools
@@ -867,9 +882,8 @@ async def stream_agent(
             }
 
             # Emit Context Window Status
-            post_history = await get_conversation_usage(conversation_id)
-            cumulative_total = post_history["total_tokens"] + request_token_usage["total_tokens"]
-            budget_status = compute_budget_status(cumulative_total, tier_model)
+            # last_llm_input_tokens = input_tokens of the final LLM call = exact context window size now
+            budget_status = compute_budget_status(last_llm_input_tokens, tier_model)
 
             yield {
                 "type": "context_window_status",
@@ -928,6 +942,7 @@ async def resume_agent(
     # Token usage tracking
     request_token_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     llm_call_count = 0
+    last_llm_input_tokens = 0  # input_tokens of the most recent LLM call = current context window size
 
     # Heartbeat configuration
     last_heartbeat_time = time.time()
@@ -997,6 +1012,7 @@ async def resume_agent(
                             request_token_usage["output_tokens"] += usage.get("output_tokens", 0)
                             request_token_usage["total_tokens"] += usage.get("total_tokens", 0)
                             llm_call_count += 1
+                            last_llm_input_tokens = usage.get("input_tokens", 0)
 
                         if hasattr(msg, "tool_calls") and msg.tool_calls:
                             has_seen_tool_result = False
@@ -1076,9 +1092,7 @@ async def resume_agent(
             }
 
             # Emit Context Window Status
-            post_history = await get_conversation_usage(conversation_id)
-            cumulative_total = post_history["total_tokens"] + request_token_usage["total_tokens"]
-            budget_status = compute_budget_status(cumulative_total, resume_model)
+            budget_status = compute_budget_status(last_llm_input_tokens, resume_model)
 
             yield {
                 "type": "context_window_status",

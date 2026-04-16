@@ -122,7 +122,11 @@ class GraphQLClient:
             )
             return result
         except Exception as e:
-            logger.error(f"GraphQL query failed: {e}")
+            errors = getattr(e, "errors", None)
+            if errors:
+                logger.error(f"GraphQL query failed: {errors}")
+            else:
+                logger.error(f"GraphQL query failed: {repr(e)}")
             raise
 
     async def execute_silent(
@@ -300,6 +304,43 @@ class GraphQLClient:
         except Exception as e:
             logger.debug(f"📡 Group custom instructions not available (migration pending?): {e}")
             return None
+
+
+    async def save_ally_message(
+        self,
+        conversation_id: str,
+        content: str,
+        tool_calls: list[dict] | None = None,
+    ) -> None:
+        """Save an assistant message to the backend.
+
+        Args:
+            conversation_id: The conversation to save the message to
+            content: The assistant's response text
+            tool_calls: List of tool calls made during this message
+        """
+        mutation = """
+        mutation SaveAllyMessage($input: SaveMessageInput!) {
+            saveAllyMessage(input: $input) {
+                id
+            }
+        }
+        """
+        variables: dict[str, Any] = {
+            "input": {
+                "conversationId": conversation_id,
+                "role": "ASSISTANT",
+                "content": content,
+            }
+        }
+        if tool_calls:
+            variables["input"]["toolCalls"] = {"calls": tool_calls}
+
+        try:
+            await self.execute(mutation, variables)
+        except Exception as e:
+            logger.error(f"Failed to save assistant message: {e}")
+            raise
 
 
 def get_graphql_client(auth_token: str, workspace_id: str, session_id: str = "") -> GraphQLClient:
