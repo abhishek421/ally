@@ -147,8 +147,10 @@ def get_create_tools() -> list:
         except GraphInterrupt:
             raise
         except Exception as e:
-            logger.error(f"Error creating company: {e}")
-            return f"Error creating company: {str(e)}"
+            errors = getattr(e, "errors", None)
+            msg = str(errors) if errors else repr(e)
+            logger.error(f"Error creating company: {msg}")
+            return f"Error creating company: {msg}"
         finally:
             await client.close()
 
@@ -276,8 +278,10 @@ def get_create_tools() -> list:
         except GraphInterrupt:
             raise
         except Exception as e:
-            logger.error(f"Error creating person: {e}")
-            return f"Error creating person: {str(e)}"
+            errors = getattr(e, "errors", None)
+            msg = str(errors) if errors else repr(e)
+            logger.error(f"Error creating person: {msg}")
+            return f"Error creating person: {msg}"
         finally:
             await client.close()
 
@@ -596,8 +600,8 @@ def get_create_tools() -> list:
         client = context.get_client()
         
         mutation = """
-        mutation CreateNote($input: CreateNoteInput!, $workspaceId: String!) {
-            createNote(input: $input, workspaceId: $workspaceId) {
+        mutation CreateNote($input: CreateNoteInput!) {
+            createNote(input: $input) {
                 id
                 content
                 entityType
@@ -607,18 +611,17 @@ def get_create_tools() -> list:
             }
         }
         """
-        
+
         input_data = {
             "entityType": entity_type.upper(),
             "entityId": entity_id,
             "content": content,
             "isPrivate": is_private,
         }
-        
+
         try:
             result = await client.mutate(mutation, {
                 "input": input_data,
-                "workspaceId": context.workspace_id,
             })
             
             note = result.get("createNote")
