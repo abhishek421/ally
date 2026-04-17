@@ -156,8 +156,8 @@ def get_note_tools() -> list:
 
             # Step 2: Create the note
             mutation = """
-            mutation CreateNote($input: CreateNoteInput!, $workspaceId: String) {
-                createNote(input: $input, workspaceId: $workspaceId) {
+            mutation CreateNote($input: CreateNoteInput!) {
+                createNote(input: $input) {
                     id
                     content
                     entityType
@@ -184,7 +184,6 @@ def get_note_tools() -> list:
 
             result = await client.mutate(mutation, {
                 "input": input_data,
-                "workspaceId": context.workspace_id,
             })
 
             note = result.get("createNote")
@@ -578,8 +577,8 @@ def get_note_tools() -> list:
 
             # Step 4: Perform the update
             mutation = """
-            mutation UpdateNote($id: String!, $input: UpdateNoteInput!, $workspaceId: String) {
-                updateNote(id: $id, input: $input, workspaceId: $workspaceId) {
+            mutation UpdateNote($id: String!, $input: UpdateNoteInput!) {
+                updateNote(id: $id, input: $input) {
                     id
                     content
                     entityType
@@ -600,7 +599,6 @@ def get_note_tools() -> list:
             result = await client.mutate(mutation, {
                 "id": note_id,
                 "input": input_data,
-                "workspaceId": context.workspace_id,
             })
 
             updated_note = result.get("updateNote")
@@ -734,13 +732,12 @@ def get_note_tools() -> list:
 
             # Step 4: Delete the note
             mutation = """
-            mutation DeleteNote($id: String!, $workspaceId: String) {
-                deleteNote(id: $id, workspaceId: $workspaceId)
+            mutation DeleteNote($id: String!) {
+                deleteNote(id: $id)
             }
             """
             result = await client.mutate(mutation, {
                 "id": note_id,
-                "workspaceId": context.workspace_id,
             })
 
             success = result.get("deleteNote", False)
