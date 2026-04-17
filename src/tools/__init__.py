@@ -124,10 +124,14 @@ def get_tools_for_categories(
     all_categories = set(categories) | ALWAYS_INCLUDE
 
     tools = []
+    seen_names: set[str] = set()
     for category in all_categories:
         getter = TOOL_REGISTRY[category]
         cat_tools = getter()
-        tools.extend(cat_tools)
+        for t in cat_tools:
+            if t.name not in seen_names:
+                seen_names.add(t.name)
+                tools.append(t)
         logger.info(f"   📦 {category.value}: {len(cat_tools)} tools loaded")
 
     logger.info(
@@ -147,8 +151,12 @@ def get_all_tools() -> list:
         List of all tool functions
     """
     tools = []
+    seen_names: set[str] = set()
     for getter in TOOL_REGISTRY.values():
-        tools.extend(getter())
+        for t in getter():
+            if t.name not in seen_names:
+                seen_names.add(t.name)
+                tools.append(t)
     return tools
 
 
